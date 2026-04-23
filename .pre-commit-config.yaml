@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^third_party/
+      - id: end-of-file-fixer
+        exclude: ^third_party/
+      - id: check-yaml
+        exclude: ^(launchers/slurm/|third_party/)
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+      - id: check-toml
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.5.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+        exclude: ^third_party/
+      - id: ruff-format
+        exclude: ^third_party/
+
+  - repo: local
+    hooks:
+      - id: experiment-doc-exists
+        name: Every experiment YAML has a matching docs/experiments/<name>.md
+        entry: python tools/check_experiment_docs.py
+        language: system
+        files: ^configs/experiments/.*\.yaml$
+        pass_filenames: false

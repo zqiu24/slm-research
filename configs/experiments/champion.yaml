@@ -1,0 +1,20 @@
+# @package _global_
+# Current champion baseline. Overwritten at each promotion event
+# (SPEC.md §11). Matching this exactly -> config_diff_from_champion == "champion".
+experiment:
+  name: champion
+  family: optim
+  description: |
+    Baseline: AdamW on all parameters, WSD schedule, standard SwiGLU / GQA /
+    RMSNorm architecture from the active base family. No patches.
+  references:
+    - "Hu et al. 2024 (arXiv:2404.06395) — MiniCPM"
+  patches: []
+  required_capabilities: []
+
+optim:
+  type: adamw
+  lr: 1.0e-3
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.1

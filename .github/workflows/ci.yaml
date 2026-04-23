@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false   # CI doesn't need megatron for lint/unit tests
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Experiment-doc check
+        run: python tools/check_experiment_docs.py
+
+      - name: Unit tests
+        run: pytest tests/unit -q
+
+      - name: Launcher dry-run
+        run: |
+          python -m launchers.submit \
+              base/family=qwen3 base/scale=600m \
+              experiment=champion training_regime=ablation_20x \
+              cluster=h800_cn seed=0 \
+              wandb.project=sandbox-ci \
+              allow_dirty=true \
+              --dry-run

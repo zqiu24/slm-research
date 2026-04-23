@@ -1,0 +1,15 @@
+# @package _global_
+# Daily dev-iteration scale (SPEC.md §1.2).
+base:
+  scale: "600m"
+  non_embedding_params: 600_000_000
+
+  model:
+    num_layers: 40
+    hidden_size: 1280
+    ffn_hidden_size: 3200
+    num_attention_heads: 20
+    num_query_groups: 4          # GQA 5:1
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true

@@ -1,0 +1,15 @@
+# @package _global_
+# Deep-and-thin per MiniCPM-1.2B (Hu et al. 2024). See SPEC.md §5.1.
+base:
+  scale: "1_2b"
+  non_embedding_params: 1_200_000_000
+
+  model:
+    num_layers: 52
+    hidden_size: 1536
+    ffn_hidden_size: 3840        # ~2.5x hidden (SwiGLU convention)
+    num_attention_heads: 24
+    num_query_groups: 8          # GQA 3:1
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true

@@ -1,0 +1,23 @@
+# @package _global_
+# Decay-only regime: resumes from a stable-stage checkpoint and runs only
+# the decay phase. Cuts compute for decay-stage ablations (data mix, decay
+# shape) that don't touch the stable stage (SPEC.md §7.1).
+training:
+  tokens_per_param: null             # derived from resume-from checkpoint
+  global_batch_size_tokens: 4_194_304
+  seq_length: 4096
+  micro_batch_size: null
+  resume_from_stable_stage: true     # required: checkpoint must exist
+
+scheduler:
+  type: wsd_decay_only
+  # Warmup + stable are skipped — we resume at the end of stable.
+  decay_tokens: null                 # set explicitly at launch
+  peak_lr: 0.01
+  min_lr_ratio: 0.1
+  decay_shape: "linear"
+
+checkpointing:
+  save_every_tokens: 2_000_000_000
+  keep_last: 3
+  save_stable_stage_final: false     # already exists; don't overwrite

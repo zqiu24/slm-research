@@ -1,0 +1,15 @@
+# @package _global_
+# MiniCPM-2.4B-shaped (SPEC.md §5.1). Untie embeddings at this scale.
+base:
+  scale: "2_4b"
+  non_embedding_params: 2_400_000_000
+
+  model:
+    num_layers: 40
+    hidden_size: 2304
+    ffn_hidden_size: 5760
+    num_attention_heads: 36
+    num_query_groups: 36         # MHA at this scale (MiniCPM choice)
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: false

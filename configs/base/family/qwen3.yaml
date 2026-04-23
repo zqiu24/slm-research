@@ -1,0 +1,24 @@
+# @package _global_
+# Family-level defaults — architectural choices that do not depend on scale.
+# See SPEC.md §5.1.
+base:
+  family: qwen3
+  family_version: "3.0"
+  reference: "Qwen Team 2025"
+  model:
+    normalization: "RMSNorm"
+    norm_epsilon: 1.0e-6
+    activation: "SwiGLU"
+    positional_encoding: "rope"
+    rotary_base: 1000000
+    rotary_scaling: null
+    qk_norm: true
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    init_method_std: 0.02
+    depth_scaled_init: false
+  tokenizer:
+    # Descriptive only — the actual tokenizer is fixed by the dataset manifest
+    # (SPEC.md §1.3, §5.1.1).
+    nominal_name: "qwen3"
+    nominal_vocab_size: 151936

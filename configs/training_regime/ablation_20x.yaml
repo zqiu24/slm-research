@@ -1,0 +1,22 @@
+# @package _global_
+# Standard ablation budget: 20 tokens/param (SPEC.md §5.1, §7.1).
+training:
+  tokens_per_param: 20
+  # Total tokens computed at launch: tokens_per_param * base.non_embedding_params
+  global_batch_size_tokens: 4_194_304   # 4M, FROZEN across ladder
+  seq_length: 4096                       # FROZEN across ladder
+  micro_batch_size: null                 # derived from cluster
+
+scheduler:
+  type: wsd
+  warmup_tokens: 2_000_000_000
+  stable_fraction: 0.8
+  decay_fraction: 0.2
+  peak_lr: 0.01
+  min_lr_ratio: 0.1
+  decay_shape: "linear"
+
+checkpointing:
+  save_every_tokens: 2_000_000_000
+  keep_last: 3
+  save_stable_stage_final: true          # required for WSD decay-only reuse

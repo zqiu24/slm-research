@@ -1,0 +1,15 @@
+# @package _global_
+# Optional smallest-scale slope anchor / smoke test (SPEC.md §1.2).
+base:
+  scale: "300m"
+  non_embedding_params: 300_000_000
+
+  model:
+    num_layers: 32
+    hidden_size: 1024
+    ffn_hidden_size: 2560        # ~2.5x hidden (SwiGLU)
+    num_attention_heads: 16
+    num_query_groups: 4          # GQA 4:1
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true

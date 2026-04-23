@@ -1,0 +1,20 @@
+# @package _global_
+base:
+  family: minicpm
+  family_version: "1.0"
+  reference: "Hu et al. 2024 (arXiv:2404.06395)"
+  model:
+    normalization: "RMSNorm"
+    norm_epsilon: 1.0e-5
+    activation: "SwiGLU"
+    positional_encoding: "rope"
+    rotary_base: 10000
+    rotary_scaling: null
+    qk_norm: false
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    init_method_std: 0.1          # MiniCPM uses scaled init; see paper §3
+    depth_scaled_init: true
+  tokenizer:
+    nominal_name: "minicpm"
+    nominal_vocab_size: 122753

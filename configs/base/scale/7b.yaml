@@ -1,0 +1,15 @@
+# @package _global_
+# HPC anchor scale; champion-only (SPEC.md §1.2).
+base:
+  scale: "7b"
+  non_embedding_params: 7_000_000_000
+
+  model:
+    num_layers: 32
+    hidden_size: 4096
+    ffn_hidden_size: 10240        # ~2.5x hidden
+    num_attention_heads: 32
+    num_query_groups: 8           # GQA 4:1
+    head_dim: 128
+    seq_length: 4096
+    tie_embeddings: false

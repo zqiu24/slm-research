@@ -1,0 +1,24 @@
+#!/bin/bash
+#SBATCH --job-name={{ cfg._derived.config_hash }}-s{{ cfg.seed }}
+#SBATCH --partition={{ cfg.cluster.slurm_partition }}
+#SBATCH --account={{ cfg.cluster.slurm_account }}
+#SBATCH --nodes={{ cfg.cluster.nodes }}
+#SBATCH --ntasks-per-node={{ cfg.cluster.gpus_per_node }}
+#SBATCH --gpus-per-node={{ cfg.cluster.gpus_per_node }}
+#SBATCH --cpus-per-task=12
+#SBATCH --time=48:00:00
+#SBATCH --output=runs/{{ cfg._derived.config_hash }}/slurm-%j.out
+#SBATCH --requeue
+
+set -euo pipefail
+
+export WANDB_MODE=offline
+export CONFIG_HASH={{ cfg._derived.config_hash }}
+export SEED={{ cfg.seed }}
+
+# Environment pins — verified again inside the training entry point.
+source launchers/env/h800_cn.env
+
+srun python -m launchers.train \
+    --config-hash ${CONFIG_HASH} \
+    --seed ${SEED}

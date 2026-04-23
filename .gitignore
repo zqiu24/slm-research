@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data + checkpoints (NEVER commit)
+data/
+checkpoints/
+*.bin
+*.idx
+*.safetensors
+*.pt
+*.ckpt
+
+# W&B local cache
+wandb/
+*.wandb
+
+# SLURM output
+slurm-*.out
+*.log
+
+# Resolved-config archive is append-only but can get large; track selectively
+runs/**/checkpoints/
+runs/**/wandb/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key

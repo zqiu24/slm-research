@@ -1,0 +1,29 @@
+# @package _global_
+# Primary iteration cluster (SPEC.md §1.5, §5.1).
+cluster:
+  name: h800_cn
+  site: china
+  nodes: 6
+  gpus_per_node: 8
+  interconnect: "nvlink_within_pcie_across"
+  capabilities: [bf16, fp16, fp8]
+  transformer_engine_version: "1.12.0"
+  cuda_version: "12.4"
+  pytorch_version: "2.4.0"
+  wandb_offline: true                  # required; sync via tools/sync_wandb.py
+  slurm_partition: "h800"
+  slurm_account: "research"
+  slurm_template: "launchers/slurm/h800_cn.sbatch.j2"
+
+parallelism:
+  tp_size_rules:
+    - { model_params_lt: 3.0e9,  tp: 1, pp: 1 }
+    - { model_params_lt: 1.0e10, tp: 4, pp: 1 }
+    - { model_params_lt: 3.0e10, tp: 8, pp: 1 }
+  sequence_parallel: true
+  distributed_optimizer: true
+
+precision:
+  default: fp8
+  fp8_recipe: "delayed_scaling"
+  bf16_fallback: true

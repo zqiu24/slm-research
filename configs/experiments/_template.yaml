@@ -1,0 +1,20 @@
+# @package _global_
+# ---------------------------------------------------------------------------
+# Experiment template. See SPEC.md §5.1.2.
+#
+# Copy this file to configs/experiments/<ablation-family>/<name>.yaml and
+# fill in the placeholders. CI refuses PRs where `experiment.description`
+# is missing or empty, or where docs/experiments/<name>.md does not exist.
+# ---------------------------------------------------------------------------
+experiment:
+  name: TEMPLATE_REPLACE_ME          # REQUIRED: filename stem
+  family: TEMPLATE_REPLACE_ME        # one of: optim | attention | mlp | norm | precision | moe | data
+  description: |
+    TEMPLATE_REPLACE_ME — one paragraph hypothesis + mechanism, enough for a
+    teammate to understand the intent without reading the accompanying doc.
+  references: []                     # arXiv / blog links; empty list is OK
+  patches: []                        # names registered under src/patches/
+  required_capabilities: []          # must be subset of cluster.capabilities
+
+# Method-specific overrides go below. Anything omitted inherits from
+# base/family + base/scale + training_regime + cluster.

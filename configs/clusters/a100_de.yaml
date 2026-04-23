@@ -1,0 +1,28 @@
+# @package _global_
+# A100 has no FP8. Experiments requiring fp8/fp4 will refuse to submit here.
+cluster:
+  name: a100_de
+  site: germany
+  nodes: null
+  gpus_per_node: 8
+  interconnect: "nvlink_within_ib_across"
+  capabilities: [bf16, fp16, nvlink, ib_fast]
+  transformer_engine_version: "1.12.0"
+  cuda_version: "12.1"
+  pytorch_version: "2.4.0"
+  wandb_offline: true
+  slurm_partition: "a100"
+  slurm_account: "research"
+  slurm_template: "launchers/slurm/bid_cluster.sbatch.j2"
+
+parallelism:
+  tp_size_rules:
+    - { model_params_lt: 3.0e9,  tp: 1, pp: 1 }
+    - { model_params_lt: 1.0e10, tp: 4, pp: 1 }
+    - { model_params_lt: 3.0e10, tp: 8, pp: 1 }
+  sequence_parallel: true
+  distributed_optimizer: true
+
+precision:
+  default: bf16
+  bf16_fallback: true
