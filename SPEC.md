@@ -61,13 +61,13 @@ When reporting model sizes externally (papers, pitch decks, model cards), be exp
 
 ## 2. Design principles
 
-These are load-bearing. Violating them breaks the invariant that "two runs with the same `config_hash`, `dataset_hash`, and `git_sha` reproduce the same curve up to seed variance."
+These are load-bearing. Violating them breaks the invariant that "two runs with the same resolved config, `dataset_hash`, and `git_sha` reproduce the same curve up to seed variance."
 
 1. **One canonical definition of an experiment, hardware-agnostic.** An ablation is a small diff of *logical* parameters. Cluster-specific realization (parallelism, precision recipe, kernel backend) lives in separate cluster configs and composes in at launch.
 2. **Configs decompose into `{base_family, base_scale, experiment, training_regime, cluster, seed}`.** Each is independently swappable. Base family (e.g., Llama-3, Qwen-3) and base scale (600M, 1.2B, ...) are separate axes so the research direction and the reference-architecture lineage are explicit.
 3. **Tokens-seen is the unit of comparison.** Not wall-clock, not steps, not samples. All primary ablation metrics are evaluated at fixed token budgets.
 4. **Megatron-LM upstream stays untouched.** Architecture and optimizer extensions live in a parallel `src/` tree and integrate through Megatron Core's `ModuleSpec` system and an optimizer factory. For things the spec system cannot reach, a disciplined `patches/` layer applies monkey-patches, hashed into the run metadata.
-5. **Every run is reproducible from `(git_sha, megatron_sha, config_hash, dataset_hash, patch_set_hash, seed)`.** If it isn't, it doesn't get logged to the shared W&B project.
+5. **Every run is reproducible from its archived `resolved_config.yaml` plus `(git_sha, megatron_sha, patch_set_hash, dataset_hash, seed)`.** If it isn't, it doesn't get logged to the shared W&B project. (Config hashing was removed; see §5.3.)
 6. **Capability tagging is enforced at submit time.** An FP4-requiring experiment cannot be launched on a cluster lacking FP4 capability. Prevents silent "wrong numbers" accumulation.
 7. **Seed replication is structural, not optional.** Seeds of the same config share a W&B group, automatically, via the launcher. Manual "I forgot" is not possible.
 8. **Every experiment has human-written notes.** W&B captures metrics; YAMLs capture configs; but the *reasoning* — hypothesis, what worked, why something was promoted or rejected — lives in `docs/experiments/<name>.md`. Without this layer, institutional memory evaporates when people leave.
@@ -505,7 +505,7 @@ precision:
   bf16_fallback: true
 ```
 
-**`seed`** — a single integer. Does not participate in the config hash (Section 5.3).
+**`seed`** — a single integer. Part of the run name (Section 5.3); excluded from the experiment definition so it can vary across replicas.
 
 ### 5.2 Resolution pipeline
 
@@ -519,53 +519,46 @@ On `submit.py` invocation:
 6. **TE/CUDA version check**: verify installed versions match `cluster.*_version` pins. Mismatch aborts.
 7. **Dataset manifest check**: verify dataset SHA256 manifest matches `data.expected_manifest_hash`. Mismatch aborts.
 8. **Patch application**: `apply_patches(experiment.patches)` returns `patch_set_hash`.
-9. **Config hash**: compute `config_hash` from the resolved config (excluding volatile fields, see 5.3).
-10. **Config diff from champion**: compute `config_diff_from_champion` — a compact human-readable string describing what differs from `configs/experiments/champion.yaml` at the same base/family and scale. (See 5.3.1.)
-11. **Metadata injection**: `git_sha`, `megatron_sha`, `patch_set_hash`, `dataset_hash`, `config_hash`, `config_diff_from_champion`, `launch_timestamp_utc` are written into `cfg._derived`.
-12. **Resolved-config archive**: write `runs/<config_hash>/resolved_config.yaml` and `launch_metadata.json`. This is append-only; subsequent launches of the same config just confirm the file matches.
-13. **W&B init**: project, group=`config_hash`, tags, and config snapshot.
+9. **Config diff from champion**: compute `config_diff_from_champion` — a compact human-readable string describing what differs from `configs/experiments/champion.yaml` at the same base/family and scale. (See 5.3.1.)
+10. **Run identity**: compute `run_name` / `run_dir` — a readable, timestamped name (see 5.3).
+11. **Metadata injection**: `git_sha`, `megatron_sha`, `patch_set_hash`, `dataset_hash`, `run_name`, `config_diff_from_champion`, `launch_timestamp_utc` are written into `cfg._derived`.
+12. **Resolved-config archive**: write `runs/<run_name>/resolved_config.yaml` and `launch_metadata.json`. Each launch gets its own fresh directory, so this is a plain write.
+13. **W&B init**: project, tags, and config snapshot. (Grouping by config identity is no longer automatic — see 5.3.)
 14. **SLURM submission**: render the SBATCH template, submit, record job id in W&B config.
 
-### 5.3 Config hashing
+### 5.3 Run identity
 
-```python
-# src/utils/config_hash.py
+Config hashing has been removed — it added complexity without payoff for the
+local-run workflow we actually use. Runs are identified by a readable,
+timestamped name instead of a content hash:
 
-EXCLUDED_FROM_CONFIG_HASH = {
-    # Volatile / allocation-time fields
-    "cluster.nodes",
-    "cluster.slurm_partition",
-    "cluster.slurm_account",
-    # WandB / logging
-    "wandb",
-    "logging",
-    # Checkpoint frequency doesn't affect the model
-    "checkpointing.save_every_tokens",
-    "checkpointing.keep_last",
-    # Seed is intentionally excluded — grouping across seeds depends on this
-    "seed",
-    # Derived fields
-    "_derived",
-    # Parallelism realization: same experiment runs same model across TP/PP configs
-    "parallelism",
-}
-
-def config_hash(resolved_cfg: DictConfig) -> str:
-    """Return 16-char blake2s hex digest of the experiment-relevant config."""
-    container = OmegaConf.to_container(resolved_cfg, resolve=True)
-    for path in EXCLUDED_FROM_CONFIG_HASH:
-        _delete_path(container, path)
-    serialized = json.dumps(container, sort_keys=True, separators=(",", ":"))
-    return hashlib.blake2s(serialized.encode(), digest_size=8).hexdigest()
+```
+<experiment>-<family>-<scale>-s<seed>-<UTC>
+e.g. champion-llama3-1_2b-s42-20260524T200332Z
 ```
 
-**Two runs with the same `config_hash` must produce the same curve up to seed variance.** This is the invariant. Any config field that violates this invariant must either:
-- Be included in the hash (change → different hash → different curve expected), or
-- Be excluded *because we've verified it doesn't affect numerics* (parallelism is the main case).
+It is computed in `resolve_config` and stored as `cfg._derived.run_name` /
+`cfg._derived.run_dir`. Every launch gets its own fresh `runs/<run_name>/`
+directory, so the resolved-config archive is a plain write (no collision check).
 
-Adding fields to `EXCLUDED_FROM_CONFIG_HASH` requires a unit test proving numerical invariance under that field (see `tests/numerics/`).
+Reproducibility no longer rests on a hash: each run archives its full
+`resolved_config.yaml` alongside `git_sha`, `megatron_sha`, `patch_set_hash`,
+`dataset_hash`, and `seed` in `launch_metadata.json`. To reproduce a run, replay
+from its archived `resolved_config.yaml`.
 
-Note: `base.family` and `base.scale` are both included in the hash. Two runs with the same experiment but different families produce different hashes and are expected to produce different curves — correctly, since the base architecture differs. Cross-family comparisons happen by filtering W&B runs by family tag and comparing the relative deltas each method achieves versus its own family's champion.
+**Consequences (these supersede earlier sections).** Removing the hash drops
+three properties the spec previously assumed:
+- No content-addressed deduplication of identical configs.
+- Seeds of one config no longer share a run directory or an automatic W&B group
+  (each launch is its own dir). Principle 7 (§2) and §8.1's `group = config_hash`
+  are not currently provided; if seed-grouping is wanted again it needs an
+  explicit group key (e.g. the run name minus seed+timestamp).
+- No checkpoint resume keyed on config identity (§7.2, §7.3): a restart with the
+  same config produces a *new* `run_dir`, so it will not auto-find a prior
+  checkpoint.
+
+`config_diff_from_champion` (§5.3.1) is unaffected — it is computed directly from
+the resolved config, not from the hash.
 
 ### 5.3.1 Config diff from champion
 

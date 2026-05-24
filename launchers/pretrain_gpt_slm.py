@@ -22,7 +22,7 @@ MEGATRON_ROOT = REPO_ROOT / "third_party" / "Megatron-LM"
 
 def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group = parser.add_argument_group("slm-research")
-    group.add_argument("--slm-config-hash", type=str, required=True)
+    group.add_argument("--slm-config-path", type=str, required=True)
     group.add_argument("--slm-optimizer", choices=["adamw", "muon", "poet"], default="adamw")
     group.add_argument("--poet", action="store_true")
     group.add_argument("--poet-block-size", type=int, default=256)
@@ -49,8 +49,8 @@ def _prepend_paths() -> None:
             sys.path.insert(0, text)
 
 
-def _load_resolved_config(config_hash: str):
-    path = REPO_ROOT / "runs" / config_hash / "resolved_config.yaml"
+def _load_resolved_config(config_path: str):
+    path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"Resolved config not found: {path}")
     return OmegaConf.load(path)
@@ -77,15 +77,15 @@ def _combined_extra_args_provider(existing_provider):
 def main() -> None:
     _prepend_paths()
 
-    config_hash = None
+    config_path = None
     for idx, item in enumerate(sys.argv):
-        if item == "--slm-config-hash" and idx + 1 < len(sys.argv):
-            config_hash = sys.argv[idx + 1]
+        if item == "--slm-config-path" and idx + 1 < len(sys.argv):
+            config_path = sys.argv[idx + 1]
             break
-    if config_hash is None:
-        raise RuntimeError("--slm-config-hash must be present in torchrun args")
+    if config_path is None:
+        raise RuntimeError("--slm-config-path must be present in torchrun args")
 
-    cfg = _load_resolved_config(config_hash)
+    cfg = _load_resolved_config(config_path)
     _apply_runtime_patches(cfg)
 
     import pretrain_gpt as mg

@@ -15,10 +15,24 @@ def test_build_torchrun_command_targets_slm_entrypoint():
     assert cmd[:3] == ["torchrun", "--nproc_per_node", str(cfg.cluster.gpus_per_node)]
     assert "-m" in cmd
     assert "launchers.pretrain_gpt_slm" in cmd
-    assert "--slm-config-hash" in cmd
-    assert str(cfg._derived.config_hash) in cmd
+    assert "--slm-config-path" in cmd
+    config_path = cmd[cmd.index("--slm-config-path") + 1]
+    assert config_path.endswith(f"{cfg._derived.run_dir}/resolved_config.yaml")
     assert "--slm-optimizer" in cmd
     assert "poet" in cmd
+
+
+def test_run_dir_is_readable_name_with_timestamp():
+    """Runs are identified by a readable, timestamped name (no config hash)."""
+    cfg = _parse_overrides(["base/family=llama3", "experiment=champion", "seed=42"])
+    resolve_config(cfg)
+
+    run_name = cfg._derived.run_name
+    assert run_name.startswith(f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}-s42-")
+    assert cfg._derived.run_dir == f"runs/{run_name}"
+    # Trailing compact UTC timestamp: YYYYmmddTHHMMSSZ
+    timestamp = run_name.rsplit("-", 1)[-1]
+    assert timestamp.endswith("Z") and len(timestamp) == len("20260524T200332Z")
 
 
 def test_build_torchrun_command_defaults_to_single_node(monkeypatch):
@@ -30,9 +44,11 @@ def test_build_torchrun_command_defaults_to_single_node(monkeypatch):
     """
     for var in ("NNODES", "SLURM_NNODES", "SLURM_JOB_NUM_NODES"):
         monkeypatch.delenv(var, raising=False)
-    cfg = _parse_overrides(["base/family=llama3", "experiment=champion"])
+    # Force a multi-node experiment scale; the launch must still default to one
+    # node so local runs don't block forever in rendezvous waiting for peers.
+    cfg = _parse_overrides(["base/family=llama3", "experiment=champion", "cluster.nodes=6"])
     resolve_config(cfg)
-    assert int(cfg.cluster.nodes) > 1  # precondition: default cluster is multi-node
+    assert int(cfg.cluster.nodes) == 6  # sanity: override applied
 
     cmd = build_torchrun_command(cfg)
 

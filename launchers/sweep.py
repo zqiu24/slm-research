@@ -1,6 +1,6 @@
 """Ladder sweep orchestration (SPEC.md §9.1, §11.5).
 
-Expands one sweep invocation into N ``submit.py`` calls across scales ×
+Expands one sweep invocation into N ``submit.py`` calls across scales x
 seeds, with small scales submitted first so failures surface early.
 
 Stubbed until the training loop lands; the skeleton exists so sweep specs
@@ -12,8 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-
-from omegaconf import OmegaConf
 
 from launchers.submit import REPO_ROOT, _parse_overrides, submit
 
@@ -39,7 +37,7 @@ def run_sweep(
                 {
                     "scale": scale,
                     "seed": seed,
-                    "config_hash": str(cfg._derived.config_hash),
+                    "run_name": str(cfg._derived.run_name),
                     "job_id": job_id,
                 }
             )

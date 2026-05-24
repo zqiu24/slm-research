@@ -9,6 +9,7 @@ the resolved config and exits, which is what CI uses.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 from datetime import datetime, timezone
@@ -16,14 +17,49 @@ from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
 
+# apply_patches is re-exported here as the patch point tests/launcher wiring
+# monkeypatch; _register_experiment_patches only imports + hashes (does not apply).
+from src.patches import apply_patches, patch_set_hash  # noqa: F401
 from src.precision.capability import assert_compatible
 from src.utils.config_diff import diff_from_champion
-from src.utils.config_hash import config_hash
 from src.utils.git_meta import git_sha, submodule_sha
 from src.utils.ladder_math import total_tokens
 from src.utils.parallelism import resolve as resolve_parallelism
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+AXIS_TO_CONFIG_DIR = {
+    "base/family": "configs/base/family",
+    "base/scale": "configs/base/scale",
+    "experiment": "configs/experiments",
+    "training_regime": "configs/training_regime",
+    "cluster": "configs/clusters",
+    "data": "configs/data",
+}
+
+
+def _axis_config_path(axis: str, value: str) -> Path:
+    if axis not in AXIS_TO_CONFIG_DIR:
+        raise ValueError(f"Unknown config axis {axis!r}")
+    path = REPO_ROOT / AXIS_TO_CONFIG_DIR[axis] / f"{value}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"No such config: {path}")
+    return path
+
+
+def _default_axis_entries(defaults: list) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for item in defaults:
+        if item == "_self_":
+            continue
+        if isinstance(item, DictConfig):
+            item = OmegaConf.to_container(item, resolve=True)
+        if not isinstance(item, dict) or len(item) != 1:
+            raise ValueError(f"Unsupported defaults entry: {item!r}")
+        axis, value = next(iter(item.items()))
+        entries.append((str(axis), str(value)))
+    return entries
 
 
 def _load_champion_for(family: str, scale: str) -> DictConfig:
@@ -40,20 +76,9 @@ def _first_line(s: str | None) -> str:
     return s.strip().splitlines()[0]
 
 
-def _write_if_new(path: Path, content: str) -> None:
-    if path.exists():
-        existing = path.read_text()
-        if existing != content:
-            raise RuntimeError(
-                f"Refusing to overwrite existing archived config at {path}. "
-                f"Two different resolved configs hashed to the same value -> bug."
-            )
-        return
-    path.write_text(content)
-
-
 def _append_launch_metadata(path: Path, cfg: DictConfig, *, seed: int, job_id: str | None) -> None:
     entry = {
+        "run_name": cfg._derived.get("run_name"),
         "seed": seed,
         "git_sha": cfg._derived.get("git_sha"),
         "megatron_sha": cfg._derived.get("megatron_sha"),
@@ -69,6 +94,18 @@ def _append_launch_metadata(path: Path, cfg: DictConfig, *, seed: int, job_id: s
         entries = json.loads(path.read_text())
     entries.append(entry)
     path.write_text(json.dumps(entries, indent=2))
+
+
+def _register_experiment_patches(cfg: DictConfig) -> str:
+    """Import patch modules named by cfg and return their deterministic hash.
+
+    Training ranks apply the patches inside launchers.pretrain_gpt_slm. The
+    parent launcher only records the hash, so dry-runs do not mutate Megatron.
+    """
+    patches = list(cfg.get("experiment", {}).get("patches", []) or [])
+    for name in patches:
+        importlib.import_module(f"src.patches.{name}")
+    return patch_set_hash(patches)
 
 
 def resolve_config(cfg: DictConfig) -> DictConfig:
@@ -117,9 +154,10 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
     # 6. Dataset manifest — stubbed. TODO: verify SHA against cfg.data.path manifest.
     cfg._derived.dataset_hash = cfg.data.get("expected_manifest_hash") or "unverified"
 
-    # 7. Patches — stubbed. TODO: import patches referenced in cfg.experiment.patches
-    # so @register_patch decorators run, then call apply_patches.
-    cfg._derived.patch_set_hash = "noop" + "0" * 12
+    # 7. Patches — import each name listed in cfg.experiment.patches so the
+    # @register_patch decorators run, then capture the deterministic hash.
+    # The training ranks apply the patches inside pretrain_gpt_slm.
+    cfg._derived.patch_set_hash = _register_experiment_patches(cfg)
 
     # 8. Git metadata
     allow_dirty = bool(cfg.get("allow_dirty", False)) or str(cfg.wandb.project).startswith(
@@ -131,24 +169,31 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
     except Exception:
         cfg._derived.megatron_sha = "unpinned"
 
-    # 9. Config hash (seed excluded)
-    cfg._derived.config_hash = config_hash(cfg)
-
-    # 10. Config diff from champion
+    # 9. Config diff from champion
     champion_cfg = _load_champion_for(str(cfg.base.family), str(cfg.base.scale))
     cfg._derived.config_diff_from_champion = diff_from_champion(cfg, champion_cfg)
     cfg._derived.experiment_summary = _first_line(cfg.experiment.description)
 
-    # 11. Launch metadata
-    cfg._derived.launch_timestamp_utc = datetime.now(timezone.utc).isoformat()
+    # 10. Run identity — a readable, timestamped name (one fresh dir per launch).
+    now = datetime.now(timezone.utc)
+    cfg._derived.launch_timestamp_utc = now.isoformat()
+    run_name = (
+        f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}"
+        f"-s{cfg.seed}-{now.strftime('%Y%m%dT%H%M%SZ')}"
+    )
+    cfg._derived.run_name = run_name
+    cfg._derived.run_dir = f"runs/{run_name}"
     return cfg
 
 
 def archive_resolved_config(cfg: DictConfig) -> Path:
-    """Write ``runs/<config_hash>/resolved_config.yaml`` append-only."""
-    archive_dir = REPO_ROOT / "runs" / str(cfg._derived.config_hash)
+    """Write ``runs/<run_name>/resolved_config.yaml`` and launch metadata.
+
+    Each launch gets its own timestamped directory, so this is a plain write.
+    """
+    archive_dir = REPO_ROOT / cfg._derived.run_dir
     archive_dir.mkdir(parents=True, exist_ok=True)
-    _write_if_new(archive_dir / "resolved_config.yaml", OmegaConf.to_yaml(cfg, resolve=True))
+    (archive_dir / "resolved_config.yaml").write_text(OmegaConf.to_yaml(cfg, resolve=True))
     _append_launch_metadata(
         archive_dir / "launch_metadata.json",
         cfg,
@@ -171,24 +216,22 @@ def submit(cfg: DictConfig, *, dry_run: bool) -> int | None:
 
 def _parse_overrides(pairs: list[str]) -> DictConfig:
     base = OmegaConf.load(REPO_ROOT / "configs/launch/config.yaml")
-    # For each override like ``base/family=qwen3``, interpret keys with '/'
-    # as defaults-list selections and load the corresponding file; plain
-    # ``k=v`` pairs become dotlist overrides.
+    defaults = list(base.pop("defaults", []) or [])
+
+    axis_values = dict(_default_axis_entries(defaults))
     dotlist: list[str] = []
-    merges: list[DictConfig] = []
+
     for raw in pairs:
         if "=" not in raw:
             raise ValueError(f"Bad override {raw!r}; expected KEY=VALUE")
         key, value = raw.split("=", 1)
-        if "/" in key:
-            group = key.strip()
-            candidate = REPO_ROOT / "configs" / group / f"{value}.yaml"
-            if not candidate.exists():
-                raise FileNotFoundError(f"No such config: {candidate}")
-            merges.append(OmegaConf.load(candidate))
+        if key in AXIS_TO_CONFIG_DIR or key in {"base/family", "base/scale"}:
+            axis_values[key] = value
         else:
             dotlist.append(raw)
-    resolved = OmegaConf.merge(base, *merges)
+
+    merges = [OmegaConf.load(_axis_config_path(axis, value)) for axis, value in axis_values.items()]
+    resolved = OmegaConf.merge(*merges, base)
     if dotlist:
         resolved = OmegaConf.merge(resolved, OmegaConf.from_dotlist(dotlist))
     return resolved  # type: ignore[return-value]
@@ -208,11 +251,11 @@ def main() -> None:
         cfg.allow_dirty = False
 
     job_id = submit(cfg, dry_run=args.dry_run)
-    archive = REPO_ROOT / "runs" / str(cfg._derived.config_hash)
+    archive = REPO_ROOT / cfg._derived.run_dir
     print(
         json.dumps(
             {
-                "config_hash": str(cfg._derived.config_hash),
+                "run_name": str(cfg._derived.run_name),
                 "config_diff_from_champion": str(cfg._derived.config_diff_from_champion),
                 "total_tokens": int(cfg.training.total_tokens),
                 "parallelism": {

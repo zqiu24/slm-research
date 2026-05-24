@@ -43,8 +43,8 @@ def build_torchrun_command(cfg) -> list[str]:
         str(os.environ.get("MASTER_PORT", "6000")),
         "-m",
         "launchers.pretrain_gpt_slm",
-        "--slm-config-hash",
-        str(cfg._derived.config_hash),
+        "--slm-config-path",
+        os.fspath(Path(REPO_ROOT) / cfg._derived.run_dir / "resolved_config.yaml"),
     ]
     cmd.extend(build_megatron_args(cfg))
     return cmd
@@ -63,7 +63,7 @@ def main() -> None:
     cmd = build_torchrun_command(cfg)
 
     payload = {
-        "config_hash": str(cfg._derived.config_hash),
+        "run_name": str(cfg._derived.run_name),
         "archive": os.fspath(archive),
         "command": cmd,
     }

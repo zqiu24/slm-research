@@ -241,8 +241,7 @@ def _data_args(cfg: DictConfig) -> list[str]:
 
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
-    config_hash = derived.get("config_hash", "pending") if hasattr(derived, "get") else "pending"
-    archive = f"runs/{config_hash}"
+    archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
     return _sequence(
         [
             "--log-interval",
