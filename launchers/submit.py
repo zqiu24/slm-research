@@ -17,9 +17,7 @@ from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
 
-# apply_patches is re-exported here as the patch point tests/launcher wiring
-# monkeypatch; _register_experiment_patches only imports + hashes (does not apply).
-from src.patches import apply_patches, patch_set_hash  # noqa: F401
+from src.patches import patch_set_hash
 from src.precision.capability import assert_compatible
 from src.utils.config_diff import diff_from_champion
 from src.utils.git_meta import git_sha, submodule_sha
