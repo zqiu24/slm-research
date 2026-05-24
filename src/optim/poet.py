@@ -257,30 +257,43 @@ def _flush_poet_caches_for_step() -> None:
 
 
 def _install_poet_step_hook(wrapped_optimizer, cache_mode: str) -> None:
-    """Install a pre-step flush hook on the outer optimizer wrapper.
+    """Install a pre-flush hook on the outer optimizer wrapper's prepare_grads.
 
-    Megatron's Float16OptimizerWithFloat16Params.step() calls
-    prepare_grads() (copies model.main_grad → main_param.grad) BEFORE
-    invoking the inner optimizer. For Mode A to work, our flush must
-    write oft_R.main_grad BEFORE prepare_grads runs.
+    ``get_megatron_poet_optimizer`` returns a ``ChainedOptimizer``.
+    ``ChainedOptimizer.step()`` (Megatron source, line 1317) drives each
+    child by calling ``child.prepare_grads()`` then
+    ``child.step_with_ready_grads()`` — it NEVER calls ``child.step()``.
+    ``prepare_grads()`` is what invokes ``_copy_model_grads_to_main_grads``,
+    which copies ``param.main_grad → main_param.grad``.
 
-    Wrapping `wrapped_optimizer.step` at the instance level achieves
-    that: our hook runs first, populates main_grad, syncs across DP,
-    then the original step() does its normal work.
+    For Mode A to work, the flush must write ``oft_R.main_grad`` (and
+    all-reduce across DP) BEFORE ``_copy_model_grads_to_main_grads`` runs.
+    Wrapping ``wrapped_optimizer.prepare_grads`` at the instance level
+    achieves this: the hook runs first, then the original ``prepare_grads``
+    does its normal work — including copying main_grad into main_param.grad.
 
-    Only Mode A needs this hook. Mode B's per-microbatch backward fills
-    oft_R.grad via autograd through CachedCayleyFn, and the normal grad
-    reducer + prepare_grads path handles it.
+    ``prepare_grads`` returns a ``found_inf_flag`` bool that
+    ``ChainedOptimizer.prepare_grads`` ORs across all children; we MUST
+    return the original's return value unchanged.
+
+    Only Mode A (``cache_mode == "cached_fwd_bwd"``) needs this hook.
+    Mode B's per-microbatch backward fills ``oft_R.grad`` via autograd
+    through CachedCayleyFn, and the normal grad-reducer + prepare_grads
+    path handles it without intervention.
     """
     if cache_mode != "cached_fwd_bwd":
         return
-    orig_step = wrapped_optimizer.step
+    orig_prepare_grads = wrapped_optimizer.prepare_grads
 
-    def _wrapped_step(*a, **kw):
+    def _wrapped_prepare_grads(*a, **kw):
+        # Mode A's per-microbatch backward writes only to detached R-leaves,
+        # so oft_R.main_grad is still zero here. Flush our manual VJP into
+        # oft_R.main_grad (+ DP all-reduce) BEFORE the original prepare_grads
+        # copies main_grad -> main_param.grad via _copy_model_grads_to_main_grads.
         _flush_poet_caches_for_step()
-        return orig_step(*a, **kw)
+        return orig_prepare_grads(*a, **kw)
 
-    wrapped_optimizer.step = _wrapped_step
+    wrapped_optimizer.prepare_grads = _wrapped_prepare_grads
 
 
 def get_megatron_poet_optimizer(

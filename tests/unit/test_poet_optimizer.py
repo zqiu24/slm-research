@@ -131,9 +131,9 @@ def test_poetadam_load_state_dict_bumps_version_and_invalidates():
     assert layer._R_cache_version == -1
 
 
-def test_install_poet_step_hook_runs_flush_before_orig_step():
-    """The hook must call _flush_poet_caches_for_step before the original
-    optimizer.step()."""
+def test_install_poet_step_hook_runs_flush_before_prepare_grads():
+    """The hook must call _flush_poet_caches_for_step before the wrapped
+    optimizer's prepare_grads() (which copies main_grad -> main_param.grad)."""
     import torch
 
     from src.optim import poet_cache as pc
@@ -155,14 +155,14 @@ def test_install_poet_step_hook_runs_flush_before_orig_step():
     pc.register_poet_layer(layer)
 
     class FakeWrappedOpt:
-        def step(self, *a, **kw):
-            order.append("orig_step")
-            return "result"
+        def prepare_grads(self, *a, **kw):
+            order.append("prepare_grads")
+            return False  # found_inf_flag
 
     fake = FakeWrappedOpt()
     _install_poet_step_hook(fake, cache_mode="cached_fwd_bwd")
-    assert fake.step() == "result"
-    assert order == ["flush", "orig_step"]
+    assert fake.prepare_grads() is False  # return value preserved
+    assert order == ["flush", "prepare_grads"]
 
 
 def test_install_poet_step_hook_noop_when_cache_mode_not_a():
@@ -170,12 +170,63 @@ def test_install_poet_step_hook_noop_when_cache_mode_not_a():
     from src.optim.poet import _install_poet_step_hook
 
     class FakeWrappedOpt:
-        def step(self, *a, **kw):
-            return "orig"
+        def prepare_grads(self, *a, **kw):
+            return False
 
     fake = FakeWrappedOpt()
-    orig_step = fake.step
+    orig = fake.prepare_grads
     _install_poet_step_hook(fake, cache_mode="none")
-    assert fake.step == orig_step  # bound-method equality; `is` fails in Python 3
+    assert fake.prepare_grads == orig
     _install_poet_step_hook(fake, cache_mode="cached_fwd")
-    assert fake.step == orig_step  # bound-method equality; `is` fails in Python 3
+    assert fake.prepare_grads == orig
+
+
+def test_flush_fires_under_chained_optimizer_dispatch():
+    """Regression: ChainedOptimizer.step() invokes each child's
+    prepare_grads() + step_with_ready_grads() directly and NEVER the child's
+    .step(). The flush must therefore fire via prepare_grads. A hook on .step
+    would be dead code here."""
+    import torch
+
+    from src.optim import poet_cache as pc
+    from src.optim.poet import _install_poet_step_hook
+
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+
+    order: list[str] = []
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    layer._flush_R_grads_to_oft_R = lambda: order.append("flush")
+    pc.register_poet_layer(layer)
+
+    # Minimal stand-in for a Megatron child optimizer.
+    class FakeChild:
+        def prepare_grads(self, *a, **kw):
+            order.append("child.prepare_grads")
+            return False
+
+        def step_with_ready_grads(self, *a, **kw):
+            order.append("child.step_with_ready_grads")
+            return True
+
+        def step(self, *a, **kw):  # ChainedOptimizer never calls this on the child
+            order.append("child.step")
+
+    child = FakeChild()
+    _install_poet_step_hook(child, cache_mode="cached_fwd_bwd")
+
+    # Mimic ChainedOptimizer.step(): prepare_grads() then step_with_ready_grads().
+    child.prepare_grads()
+    child.step_with_ready_grads()
+
+    # Flush must have fired, and BEFORE the grad copy in prepare_grads.
+    assert order[0] == "flush"
+    assert order[1] == "child.prepare_grads"
+    assert "child.step" not in order
