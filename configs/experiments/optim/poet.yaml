@@ -1,0 +1,41 @@
+# @package _global_
+# POET: Parameter-Efficient Orthogonal Training.
+#
+# Replaces 2D linear params with POETLinear (frozen base weight + block-
+# orthogonal delta), trains only the orthogonal piece via POETAdam, and
+# periodically merges deltas + resets Adam momentum.
+#
+# Triggers patches: poet_unfuse_te_impl, poet_apply_to_model, poet_merge_step.
+experiment:
+  name: poet
+  family: optim
+  description: |
+    POET (Parameter-Efficient Orthogonal Training). Block-orthogonal
+    parameterisation of 2D linear weights — POETLinear holds a frozen base
+    weight and a low-rank orthogonal delta (``oft_R``). Only ``oft_R`` is
+    trained, via POETAdam. Every ``poet_merge_period`` steps the delta is
+    merged into the base weight, the permutations re-randomised, and Adam's
+    first/second-moment buffers reset. Hypothesis: matches dense Adam on
+    perplexity while leaving rotational symmetry exact under SGD.
+  references:
+    - "POET / GaLore (Zhao et al. 2024)"
+  patches:
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 3.0e-4              # base LR for nonlinear params (Adam side)
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_size: 256
+    cache_mode: none        # "none" | "cached_fwd" | "cached_fwd_bwd"
+    init_type: normalized   # "none" | "normalized" | "mup_normalized"
+    mup_alpha: 1.0
+    merge_period: 200       # 0 disables periodic merge
+    scale: 1.0              # LR multiplier for the POET linear group
