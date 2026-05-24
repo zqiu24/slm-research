@@ -78,7 +78,10 @@ def reset_for_testing() -> None:
 
 import torch  # noqa: E402
 from poet_torch import POETLinear  # noqa: E402
-from poet_torch.poet_layer import pytorch_skew_symmetric  # noqa: E402
+from poet_torch.poet_layer import (  # noqa: E402
+    chain_layer_x_checkpoint_mem_o2,
+    pytorch_skew_symmetric,
+)
 from torch import Tensor  # noqa: E402
 
 
@@ -137,8 +140,70 @@ class CachedPOETLinear(POETLinear):
         mode = get_cache_mode()
         if mode == "none":
             return super().forward(x)
-        # Mode-specific paths added in Tasks 4 and 5.
-        raise NotImplementedError(f"cache mode {mode!r} not yet implemented")
+        if mode == "cached_fwd":
+            R_out, R_in = CachedCayleyFn.apply(self, self.oft_R)  # noqa: N806
+        elif mode == "cached_fwd_bwd":
+            R_out, R_in = self._get_R_blocks_mode_a()  # noqa: N806  # added in Task 5
+        else:
+            raise ValueError(f"unknown poet_cache_mode: {mode!r}")
+        return chain_layer_x_checkpoint_mem_o2(
+            x,
+            R_in,
+            self.weight,
+            self.bias,
+            R_out,
+            self.perm_in_inv,
+            self.perm_in,
+            self.perm_out,
+            self.perm_out_inv,
+            self.block_size,
+        )
+
+
+class CachedCayleyFn(torch.autograd.Function):
+    """Mode B: cache (R_out, R_in) between forwards, recompute on backward.
+
+    Forward: O(1) when version matches the cached one; rebuild otherwise.
+    Backward: always rebuild the cayley graph and run autograd.grad. Per
+    cycle of K micro-batches this is `K` backwards vs `K` for the
+    no-cache path — Mode B's saving is forward-only.
+    """
+
+    @staticmethod
+    def forward(ctx, layer: CachedPOETLinear, oft_R: Tensor):  # noqa: N803
+        if layer._R_cache_version != get_poet_version():
+            with torch.no_grad():
+                R_out, R_in = _compute_cayley(  # noqa: N806
+                    oft_R,
+                    layer.block_size,
+                    layer.rows,
+                    layer.cols,
+                    layer.r_in,
+                    layer.r_out,
+                )
+            layer._R_out_leaf = R_out
+            layer._R_in_leaf = R_in
+            layer._R_cache_version = get_poet_version()
+        ctx.layer = layer
+        ctx.save_for_backward(oft_R)
+        return layer._R_out_leaf, layer._R_in_leaf
+
+    @staticmethod
+    def backward(ctx, gR_out: Tensor, gR_in: Tensor):  # noqa: N803
+        (oft_R,) = ctx.saved_tensors  # noqa: N806
+        layer = ctx.layer
+        with torch.enable_grad():
+            x = oft_R.detach().requires_grad_(True)
+            R_out, R_in = _compute_cayley(  # noqa: N806
+                x,
+                layer.block_size,
+                layer.rows,
+                layer.cols,
+                layer.r_in,
+                layer.r_out,
+            )
+            (g,) = torch.autograd.grad((R_out, R_in), x, (gR_out, gR_in))
+        return None, g
 
 
 def invalidate_all_poet_caches() -> None:
