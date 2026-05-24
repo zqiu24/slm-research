@@ -74,3 +74,47 @@ def reset_for_testing() -> None:
     _POET_CACHE_MODE = "none"
     _POET_VERSION = 0
     _POET_LAYER_REGISTRY.clear()
+
+
+from poet_torch import POETLinear  # noqa: E402
+from torch import Tensor  # noqa: E402
+
+
+class CachedPOETLinear(POETLinear):
+    """POETLinear subclass that supports Cayley-Neumann caching.
+
+    Cache slots are mutable Python attributes that live OUTSIDE any
+    torch.compile region. The mode-specific forward dispatch reads
+    `_POET_CACHE_MODE` once per call.
+
+    `_R_cache_version` is compared against `_POET_VERSION`: a mismatch
+    means the cached R blocks were built under a stale oft_R and must
+    be recomputed before reuse.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._R_cache_version: int = -1
+        self._R_out_leaf: Tensor | None = None  # detached leaf, requires_grad=True
+        self._R_in_leaf: Tensor | None = None
+        self._R_out_full: Tensor | None = None  # mode A only: tensor in cayley graph
+        self._R_in_full: Tensor | None = None  # mode A only
+
+    def _invalidate_R_cache(self) -> None:  # noqa: N802
+        """Drop all cached R blocks. Next forward will recompute."""
+        self._R_cache_version = -1
+        self._R_out_leaf = None
+        self._R_in_leaf = None
+        self._R_out_full = None
+        self._R_in_full = None
+
+
+def invalidate_all_poet_caches() -> None:
+    """Force every live POET layer to recompute on next forward.
+
+    Use from checkpoint-load paths and as a manual debug knob. The
+    optimizer step uses `bump_poet_version()` instead — lazy invalidation
+    via version mismatch is cheaper than walking the registry.
+    """
+    for layer in iter_live_layers():
+        layer._invalidate_R_cache()

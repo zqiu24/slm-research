@@ -9,6 +9,7 @@ guarded by skipif and run on the cluster.
 import gc
 
 import pytest
+import torch
 
 from src.optim import poet_cache as pc
 
@@ -68,3 +69,52 @@ def test_iter_live_layers_skips_dead_refs():
     del dead
     gc.collect()
     assert list(pc.iter_live_layers()) == [alive]
+
+
+def test_cached_layer_starts_invalidated():
+    pc.reset_for_testing()
+    layer = pc.CachedPOETLinear(
+        in_features=8, out_features=16, bsz=8, bias=False, dtype=torch.float32
+    )
+    assert layer._R_cache_version == -1
+    assert layer._R_out_leaf is None
+    assert layer._R_in_leaf is None
+    assert layer._R_out_full is None
+    assert layer._R_in_full is None
+
+
+def test_invalidate_clears_all_cache_slots():
+    pc.reset_for_testing()
+    layer = pc.CachedPOETLinear(
+        in_features=8, out_features=16, bsz=8, bias=False, dtype=torch.float32
+    )
+    layer._R_cache_version = 5
+    layer._R_out_leaf = torch.zeros(2, 8, 8)
+    layer._R_in_leaf = torch.zeros(1, 8, 8)
+    layer._R_out_full = torch.zeros(2, 8, 8)
+    layer._R_in_full = torch.zeros(1, 8, 8)
+    layer._invalidate_R_cache()
+    assert layer._R_cache_version == -1
+    assert layer._R_out_leaf is None
+    assert layer._R_in_leaf is None
+    assert layer._R_out_full is None
+    assert layer._R_in_full is None
+
+
+def test_cached_layer_is_poet_linear_subclass():
+    from poet_torch import POETLinear
+
+    assert issubclass(pc.CachedPOETLinear, POETLinear)
+
+
+def test_invalidate_all_poet_caches_walks_registry():
+    pc.reset_for_testing()
+    a = pc.CachedPOETLinear(in_features=8, out_features=16, bsz=8, bias=False, dtype=torch.float32)
+    b = pc.CachedPOETLinear(in_features=8, out_features=16, bsz=8, bias=False, dtype=torch.float32)
+    pc.register_poet_layer(a)
+    pc.register_poet_layer(b)
+    a._R_cache_version = 3
+    b._R_cache_version = 7
+    pc.invalidate_all_poet_caches()
+    assert a._R_cache_version == -1
+    assert b._R_cache_version == -1
