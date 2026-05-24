@@ -76,8 +76,33 @@ def reset_for_testing() -> None:
     _POET_LAYER_REGISTRY.clear()
 
 
+import torch  # noqa: E402
 from poet_torch import POETLinear  # noqa: E402
+from poet_torch.poet_layer import pytorch_skew_symmetric  # noqa: E402
 from torch import Tensor  # noqa: E402
+
+
+def _compute_cayley(
+    oft_R: Tensor,  # noqa: N803
+    block_size: int,
+    rows: Tensor,
+    cols: Tensor,
+    r_in: int,
+    r_out: int,
+) -> tuple[Tensor, Tensor]:
+    """Build (R_out, R_in) block-orthogonal matrices from oft_R.
+
+    Mirrors get_weight_poet in third_party/poet_torch/poet_layer.py.
+    `torch.ops.poet.cayley` is a GPU Triton kernel; this function is
+    GPU-only at runtime.
+
+    Spec §5 lists this as a "compiled region"; v1 ships it as plain
+    Python — see Task 3 design note for the rationale.
+    """
+    Q_skew = pytorch_skew_symmetric(oft_R, block_size, rows, cols)  # noqa: N806
+    R_cat = torch.ops.poet.cayley(Q_skew)[0]  # noqa: N806
+    R_out, R_in = R_cat.split([r_out, r_in], dim=0)  # noqa: N806
+    return R_out, R_in
 
 
 class CachedPOETLinear(POETLinear):
@@ -107,6 +132,13 @@ class CachedPOETLinear(POETLinear):
         self._R_in_leaf = None
         self._R_out_full = None
         self._R_in_full = None
+
+    def forward(self, x: Tensor) -> Tensor:
+        mode = get_cache_mode()
+        if mode == "none":
+            return super().forward(x)
+        # Mode-specific paths added in Tasks 4 and 5.
+        raise NotImplementedError(f"cache mode {mode!r} not yet implemented")
 
 
 def invalidate_all_poet_caches() -> None:
