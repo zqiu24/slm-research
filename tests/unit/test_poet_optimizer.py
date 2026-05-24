@@ -129,3 +129,53 @@ def test_poetadam_load_state_dict_bumps_version_and_invalidates():
     opt.load_state_dict(sd)
     assert pc.get_poet_version() == v0 + 1
     assert layer._R_cache_version == -1
+
+
+def test_install_poet_step_hook_runs_flush_before_orig_step():
+    """The hook must call _flush_poet_caches_for_step before the original
+    optimizer.step()."""
+    import torch
+
+    from src.optim import poet_cache as pc
+    from src.optim.poet import _install_poet_step_hook
+
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+
+    order: list[str] = []
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    layer._flush_R_grads_to_oft_R = lambda: order.append("flush")
+    pc.register_poet_layer(layer)
+
+    class FakeWrappedOpt:
+        def step(self, *a, **kw):
+            order.append("orig_step")
+            return "result"
+
+    fake = FakeWrappedOpt()
+    _install_poet_step_hook(fake, cache_mode="cached_fwd_bwd")
+    assert fake.step() == "result"
+    assert order == ["flush", "orig_step"]
+
+
+def test_install_poet_step_hook_noop_when_cache_mode_not_a():
+    """Hook installation is skipped for cache_mode != 'cached_fwd_bwd'."""
+    from src.optim.poet import _install_poet_step_hook
+
+    class FakeWrappedOpt:
+        def step(self, *a, **kw):
+            return "orig"
+
+    fake = FakeWrappedOpt()
+    orig_step = fake.step
+    _install_poet_step_hook(fake, cache_mode="none")
+    assert fake.step == orig_step  # bound-method equality; `is` fails in Python 3
+    _install_poet_step_hook(fake, cache_mode="cached_fwd")
+    assert fake.step == orig_step  # bound-method equality; `is` fails in Python 3

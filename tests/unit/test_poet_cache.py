@@ -539,3 +539,37 @@ def test_mode_a_K_microbatch_parity_with_none():  # noqa: N802
     # magnitude-aware relative error instead (a real logic bug would be >>1e-4).
     rel_err = (g_n - g_a).norm() / g_n.norm().clamp_min(1e-12)
     assert rel_err < 1e-4, f"mode A vs none relative grad error {rel_err:.2e} >= 1e-4"
+
+
+def test_sync_helper_is_safe_noop_on_cpu():
+    """The DP sync helper must be safe to call on a CPU dev box (no
+    Megatron, no torch.distributed init)."""
+    from src.optim.poet import _sync_oft_R_grads_across_dp
+
+    pc.reset_for_testing()
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    layer.oft_R.main_grad = torch.ones_like(layer.oft_R, dtype=torch.float32)
+    snapshot = layer.oft_R.main_grad.clone()
+
+    _sync_oft_R_grads_across_dp([layer])
+    # Single process → no op.
+    assert torch.equal(layer.oft_R.main_grad, snapshot)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.cuda.device_count() < 2,
+    reason="2-rank DDP smoke requires 2 GPUs",
+)
+def test_mode_a_ddp_smoke_placeholder():
+    """The full 2-rank DDP smoke must be driven via torchrun — see
+    docs/superpowers/runbooks/2026-05-24-poet-cayley-cache-smoke.md.
+    This placeholder exists to keep the test surface aware of it.
+    """
+    pytest.skip("Run via torchrun; see Task 11 runbook.")

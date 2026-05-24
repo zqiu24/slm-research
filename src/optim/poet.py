@@ -196,6 +196,93 @@ def _resolve_megatron_handles() -> None:
     _USING_PYTORCH_OPTIMIZER = _UPO
 
 
+def _is_distributed_dp() -> bool:
+    """True when a DP process group of size > 1 is initialized."""
+    try:
+        import torch.distributed as dist
+        from megatron.core import parallel_state as mpu
+    except Exception:
+        return False
+    if not (dist.is_available() and dist.is_initialized()):
+        return False
+    try:
+        return mpu.get_data_parallel_world_size() > 1
+    except Exception:
+        return False
+
+
+def _sync_oft_R_grads_across_dp(layers) -> None:  # noqa: N802
+    """All-reduce oft_R.main_grad across the DP group.
+
+    Mode A populates oft_R.main_grad via _flush_R_grads_to_oft_R, AFTER
+    Megatron's DDP grad reducer has already finished its work for this
+    backward. The reducer never saw our update, so we sync explicitly.
+
+    Packs every layer's main_grad into one flat buffer for a single
+    allreduce rather than one per layer.
+
+    Safe no-op outside a real DP world (CPU dev box, single-rank GPU).
+    """
+    if not _is_distributed_dp():
+        return
+    import torch
+    import torch.distributed as dist
+    from megatron.core import parallel_state as mpu
+
+    grads = []
+    for layer in layers:
+        if hasattr(layer.oft_R, "main_grad") and layer.oft_R.main_grad is not None:
+            grads.append(layer.oft_R.main_grad)
+        elif layer.oft_R.grad is not None:
+            grads.append(layer.oft_R.grad)
+    if not grads:
+        return
+    dp_group = mpu.get_data_parallel_group()
+    ws = mpu.get_data_parallel_world_size()
+    flat = torch._utils._flatten_dense_tensors(grads)
+    dist.all_reduce(flat, group=dp_group)
+    flat.div_(ws)
+    for g, synced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads), strict=False):
+        g.copy_(synced)
+
+
+def _flush_poet_caches_for_step() -> None:
+    """Walk live POET layers, flush each one's R-leaf grads into
+    oft_R.main_grad (or .grad fallback), then all-reduce across DP."""
+    with torch.enable_grad():
+        layers = list(_pc.iter_live_layers())
+        for layer in layers:
+            layer._flush_R_grads_to_oft_R()
+    _sync_oft_R_grads_across_dp(layers)
+
+
+def _install_poet_step_hook(wrapped_optimizer, cache_mode: str) -> None:
+    """Install a pre-step flush hook on the outer optimizer wrapper.
+
+    Megatron's Float16OptimizerWithFloat16Params.step() calls
+    prepare_grads() (copies model.main_grad → main_param.grad) BEFORE
+    invoking the inner optimizer. For Mode A to work, our flush must
+    write oft_R.main_grad BEFORE prepare_grads runs.
+
+    Wrapping `wrapped_optimizer.step` at the instance level achieves
+    that: our hook runs first, populates main_grad, syncs across DP,
+    then the original step() does its normal work.
+
+    Only Mode A needs this hook. Mode B's per-microbatch backward fills
+    oft_R.grad via autograd through CachedCayleyFn, and the normal grad
+    reducer + prepare_grads path handles it.
+    """
+    if cache_mode != "cached_fwd_bwd":
+        return
+    orig_step = wrapped_optimizer.step
+
+    def _wrapped_step(*a, **kw):
+        _flush_poet_caches_for_step()
+        return orig_step(*a, **kw)
+
+    wrapped_optimizer.step = _wrapped_step
+
+
 def get_megatron_poet_optimizer(
     config: Any,
     model_chunks: list,
@@ -291,6 +378,7 @@ def get_megatron_poet_optimizer(
         poet_wrapped = Float16OptimizerWithFloat16Params(poet_opt, config, None, poet_init_state_fn)
     else:
         poet_wrapped = FP32Optimizer(poet_opt, config, poet_init_state_fn)
+    _install_poet_step_hook(poet_wrapped, cache_mode=poet_cache_mode)
 
     # Now build the chained-Adam path for the nonlinear remainder.
     for p in nonlinear_params:
