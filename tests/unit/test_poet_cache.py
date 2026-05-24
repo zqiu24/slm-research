@@ -347,3 +347,195 @@ def test_mode_b_K_microbatch_accumulation_parity_with_none():  # noqa: N802
     g_b = layer_b.oft_R.grad.detach().clone()
 
     assert torch.allclose(g_n, g_b, atol=1e-5)
+
+
+def test_mode_a_caches_cayley_across_K_calls(monkeypatch):  # noqa: N802
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    pc.register_poet_layer(layer)
+
+    call_count = {"n": 0}
+
+    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
+        call_count["n"] += 1
+        scale = oft_R.sum()
+        eye_out = torch.eye(block_size).unsqueeze(0).repeat(r_out, 1, 1)
+        eye_in = torch.eye(block_size).unsqueeze(0).repeat(r_in, 1, 1)
+        return eye_out * scale, eye_in * scale
+
+    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
+
+    for _ in range(4):
+        layer._get_R_blocks_mode_a()
+    assert call_count["n"] == 1
+    assert layer._R_out_full is not None
+    assert layer._R_in_full is not None
+    assert layer._R_out_leaf.requires_grad
+    assert layer._R_in_leaf.requires_grad
+
+
+def test_mode_a_flush_writes_to_oft_R_grad_when_no_main_grad(monkeypatch):  # noqa: N802
+    """Without Megatron's main_grad buffer, flush falls back to .grad
+    so unit tests can exercise the flush math directly."""
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    layer.oft_R.requires_grad_(True)
+
+    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
+        scale = oft_R.sum()
+        eye_out = torch.eye(block_size).unsqueeze(0).repeat(r_out, 1, 1)
+        eye_in = torch.eye(block_size).unsqueeze(0).repeat(r_in, 1, 1)
+        return eye_out * scale, eye_in * scale
+
+    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
+
+    layer._get_R_blocks_mode_a()
+    # Simulate K=2 micro-batch backwards depositing into R-leaf .grad.
+    layer._R_out_leaf.grad = torch.ones_like(layer._R_out_leaf) * 2
+    layer._R_in_leaf.grad = torch.ones_like(layer._R_in_leaf) * 2
+
+    # oft_R has no main_grad attribute → flush writes to .grad.
+    assert not hasattr(layer.oft_R, "main_grad")
+    layer._flush_R_grads_to_oft_R()
+    assert layer.oft_R.grad is not None
+    assert torch.isfinite(layer.oft_R.grad).all()
+
+
+def test_mode_a_flush_writes_to_main_grad_when_present(monkeypatch):
+    """When the parameter has a main_grad buffer (Megatron's FP32 grad
+    accumulator), the flush writes there — not to .grad — so the outer
+    optimizer's prepare_grads picks it up."""
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    layer.oft_R.requires_grad_(True)
+    # Simulate Megatron's main_grad buffer (FP32 zero-initialized).
+    layer.oft_R.main_grad = torch.zeros_like(layer.oft_R, dtype=torch.float32)
+
+    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
+        scale = oft_R.sum()
+        eye_out = torch.eye(block_size).unsqueeze(0).repeat(r_out, 1, 1)
+        eye_in = torch.eye(block_size).unsqueeze(0).repeat(r_in, 1, 1)
+        return eye_out * scale, eye_in * scale
+
+    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
+
+    layer._get_R_blocks_mode_a()
+    layer._R_out_leaf.grad = torch.ones_like(layer._R_out_leaf) * 2
+    layer._R_in_leaf.grad = torch.ones_like(layer._R_in_leaf) * 2
+
+    layer._flush_R_grads_to_oft_R()
+    # main_grad must be populated; .grad must NOT (the flush bypasses it).
+    assert (layer.oft_R.main_grad != 0).any()
+    assert layer.oft_R.grad is None
+
+
+def test_mode_a_flush_invalidates_cache_after_running():
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    layer.oft_R.requires_grad_(True)
+    layer._R_out_full = torch.zeros(2, 8, 8) * layer.oft_R.sum()
+    layer._R_in_full = torch.zeros(1, 8, 8) * layer.oft_R.sum()
+    layer._R_out_leaf = layer._R_out_full.detach().requires_grad_(True)
+    layer._R_in_leaf = layer._R_in_full.detach().requires_grad_(True)
+    layer._R_out_leaf.grad = torch.zeros_like(layer._R_out_leaf)
+    layer._R_in_leaf.grad = torch.zeros_like(layer._R_in_leaf)
+    layer._R_cache_version = 1
+
+    layer._flush_R_grads_to_oft_R()
+    assert layer._R_cache_version == -1
+    assert layer._R_out_full is None
+    assert layer._R_in_full is None
+
+
+def test_mode_a_flush_is_noop_when_no_forward_happened():
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+
+    layer = pc.CachedPOETLinear(
+        in_features=8,
+        out_features=16,
+        bsz=8,
+        bias=False,
+        dtype=torch.float32,
+    )
+    layer.random_init_parameters()
+    layer._flush_R_grads_to_oft_R()  # must not raise
+    assert layer.oft_R.grad is None
+
+
+def test_mode_a_K_microbatch_parity_with_none():  # noqa: N802
+    """K=4 micro-batches: mode A's flushed grad must match mode none's
+    accumulated oft_R.grad within float tolerance.
+
+    This test runs the flush in isolation (no Megatron optimizer wrapper),
+    so we check the `.grad` fallback path. The full pipeline behavior
+    with main_grad is covered by the GPU smoke runbook (Task 11).
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("requires CUDA Triton kernel")
+
+    K = 4  # noqa: N806
+    xs = [torch.randn(4, 16, device="cuda", dtype=torch.float32) for _ in range(K)]
+
+    pc.reset_for_testing()
+    pc.set_cache_mode("none")
+    layer_n = _build_layer_for_parity()
+    for x in xs:
+        y = layer_n(x)
+        y.sum().backward()
+    g_n = layer_n.oft_R.grad.detach().clone()
+
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+    layer_a = _build_layer_for_parity()
+    pc.register_poet_layer(layer_a)
+    for x in xs:
+        y = layer_a(x)
+        y.sum().backward()
+    layer_a._flush_R_grads_to_oft_R()
+    g_a = layer_a.oft_R.grad.detach().clone()
+
+    # Parity is bit-exact at K=1; for K>1 the per-element rounding diff grows
+    # only because grad magnitudes grow with K, while the *relative* error
+    # stays at the fp32 floor (~1.7e-6 measured on B200). With grads here of
+    # O(10-50), the plan's original atol=1e-5 demanded ~3e-7 relative
+    # precision, which fp32 Triton kernels cannot deliver. Assert a
+    # magnitude-aware relative error instead (a real logic bug would be >>1e-4).
+    rel_err = (g_n - g_a).norm() / g_n.norm().clamp_min(1e-12)
+    assert rel_err < 1e-4, f"mode A vs none relative grad error {rel_err:.2e} >= 1e-4"

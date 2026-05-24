@@ -136,6 +136,68 @@ class CachedPOETLinear(POETLinear):
         self._R_out_full = None
         self._R_in_full = None
 
+    def _get_R_blocks_mode_a(self) -> tuple[Tensor, Tensor]:  # noqa: N802
+        """Mode A: cache (R_out_full, R_in_full) WITH the cayley autograd
+        graph, plus detached leaves that micro-batch backwards write into.
+
+        The leaves' `.grad` accumulates naturally across micro-batches.
+        At end-of-cycle, `_flush_R_grads_to_oft_R` runs one manual VJP
+        through `_R_*_full` to push the summed gradient back to `oft_R`.
+        """
+        if self._R_cache_version != get_poet_version():
+            with torch.enable_grad():
+                R_out_full, R_in_full = _compute_cayley(  # noqa: N806
+                    self.oft_R,
+                    self.block_size,
+                    self.rows,
+                    self.cols,
+                    self.r_in,
+                    self.r_out,
+                )
+            self._R_out_full = R_out_full
+            self._R_in_full = R_in_full
+            self._R_out_leaf = R_out_full.detach().requires_grad_(True)
+            self._R_in_leaf = R_in_full.detach().requires_grad_(True)
+            self._R_cache_version = get_poet_version()
+        return self._R_out_leaf, self._R_in_leaf
+
+    def _flush_R_grads_to_oft_R(self) -> None:  # noqa: N802
+        """Push accumulated R-leaf gradients back to oft_R (mode A only).
+
+        Writes to `oft_R.main_grad` when Megatron's grad buffer exists
+        (production training); falls back to `oft_R.grad` otherwise (unit
+        tests). The outer optimizer's `prepare_grads` reads `main_grad`,
+        not `.grad`, so writing there is what makes the update actually
+        reach base_adam — see plan "Optimizer integration timing".
+
+        No-op when no forward happened this cycle.
+        """
+        if self._R_out_full is None or self._R_in_full is None:
+            return
+        gR_out = self._R_out_leaf.grad  # noqa: N806
+        gR_in = self._R_in_leaf.grad  # noqa: N806
+        if gR_out is None and gR_in is None:
+            return
+        if gR_out is None:
+            gR_out = torch.zeros_like(self._R_out_full)  # noqa: N806
+        if gR_in is None:
+            gR_in = torch.zeros_like(self._R_in_full)  # noqa: N806
+        (g,) = torch.autograd.grad(
+            outputs=[self._R_out_full, self._R_in_full],
+            inputs=self.oft_R,
+            grad_outputs=[gR_out, gR_in],
+        )
+        if hasattr(self.oft_R, "main_grad") and self.oft_R.main_grad is not None:
+            # Megatron path: zero-initialized FP32 buffer; copy our VJP in.
+            self.oft_R.main_grad.copy_(g.to(self.oft_R.main_grad.dtype))
+        else:
+            # Test / non-Megatron path.
+            if self.oft_R.grad is None:
+                self.oft_R.grad = g
+            else:
+                self.oft_R.grad.copy_(g)
+        self._invalidate_R_cache()
+
     def forward(self, x: Tensor) -> Tensor:
         mode = get_cache_mode()
         if mode == "none":
