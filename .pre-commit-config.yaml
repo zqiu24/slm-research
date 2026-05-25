@@ -3,11 +3,11 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^third_party/
+        exclude: ^(third_party/|tests/_fixtures/)
       - id: end-of-file-fixer
-        exclude: ^third_party/
+        exclude: ^(third_party/|tests/_fixtures/)
       - id: check-yaml
-        exclude: ^(launchers/slurm/|third_party/)
+        exclude: ^(launchers/slurm/|third_party/|tests/_fixtures/)
       - id: check-added-large-files
         args: ["--maxkb=500"]
       - id: check-merge-conflict
@@ -18,9 +18,9 @@ repos:
     hooks:
       - id: ruff
         args: [--fix]
-        exclude: ^third_party/
+        exclude: ^(third_party/|tests/_fixtures/)
       - id: ruff-format
-        exclude: ^third_party/
+        exclude: ^(third_party/|tests/_fixtures/)
 
   - repo: local
     hooks:
