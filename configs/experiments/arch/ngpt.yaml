@@ -1,0 +1,43 @@
+# @package _global_
+# nGPT (Normalized Transformer on the Hypersphere). See arXiv:2410.01131.
+#
+# Triggers patches: ngpt_apply_spec, ngpt_normalize_step, ngpt_optimizer_setup.
+experiment:
+  name: ngpt
+  family: arch
+  kind: ngpt
+  description: |
+    nGPT — every attention/MLP/embedding matrix lives on the unit
+    hypersphere; per-step L2 projection enforces that geometrically.
+    Residual blocks use a learnable eigen-LR blend instead of additive
+    residuals. Q/K are L2-normalized per head; softmax_scale is
+    sqrt(head_dim) (not 1/sqrt(head_dim)). Output logits are
+    multiplied by a learnable per-vocab scale `sz`.
+  references:
+    - "Loshchilov et al. 2024 (arXiv:2410.01131)"
+    - "Reference: https://github.com/NVIDIA/ngpt"
+  patches:
+    - ngpt_apply_spec
+    - ngpt_normalize_step
+    - ngpt_optimizer_setup
+  required_capabilities: []
+
+optim:
+  type: ngpt_adamw
+  lr: 15.0e-4                # reference train.py:98
+  weight_decay: 0.0          # scaling params are also zero-WD by patch
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  ngpt:
+    alpha_init: 0.05         # attn_alpha / mlp_alpha init_value
+    sqk_init: 1.0
+    suv_init: 1.0
+    sz_init: 1.0
+    no_warmup: true          # reference train.py:114
+
+# Disable QK layernorm and dropout — they conflict with nGPT.
+base:
+  model:
+    qk_norm: false
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
