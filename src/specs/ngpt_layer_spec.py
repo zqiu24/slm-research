@@ -15,7 +15,6 @@ config-agnostic.
 
 from __future__ import annotations
 
-import torch
 from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
 from megatron.core.transformer.dot_product_attention import DotProductAttention
@@ -26,7 +25,7 @@ from megatron.core.transformer.transformer_layer import TransformerLayerSubmodul
 
 from src.model.ngpt.attention import QKHyperNorm
 from src.model.ngpt.layer import NGPTTransformerLayer
-from src.model.ngpt.mlp import NGPTMLPBody
+from src.model.ngpt.mlp import NGPTMLP
 
 
 def _qk_hyper_norm_builder(num_heads: int, head_dim: int, sqk_init: float, base_scale: float):
@@ -38,22 +37,6 @@ def _qk_hyper_norm_builder(num_heads: int, head_dim: int, sqk_init: float, base_
             head_dim=head_dim,
             sqk_init_value=sqk_init,
             base_scale=base_scale,
-        )
-
-    return _build
-
-
-def _ngpt_mlp_module_builder(
-    hidden_size: int, ffn_hidden_size: int, base_scale: float, suv_init: float, dtype
-):
-    def _build(config=None, **_kwargs):
-        return NGPTMLPBody(
-            hidden_size=hidden_size,
-            ffn_hidden_size=ffn_hidden_size,
-            base_scale=base_scale,
-            suv_init_value=suv_init,
-            suv_init_scaling=1.0,
-            dtype=dtype,
         )
 
     return _build
@@ -72,9 +55,6 @@ def build_ngpt_layer_spec(config) -> ModuleSpec:
     head_dim = int(config.hidden_size) // num_heads
     base_scale = float(getattr(config, "ngpt_base_scale", 1.0 / (config.hidden_size**0.5)))
     sqk_init = float(getattr(config, "ngpt_sqk_init", 1.0))
-    suv_init = float(getattr(config, "ngpt_suv_init", 1.0))
-
-    param_dtype = torch.bfloat16 if getattr(config, "bf16", True) else torch.float32
 
     submodules = TransformerLayerSubmodules(
         input_layernorm=IdentityOp,
@@ -91,15 +71,7 @@ def build_ngpt_layer_spec(config) -> ModuleSpec:
         ),
         self_attn_bda=IdentityFuncOp,
         pre_mlp_layernorm=IdentityOp,
-        mlp=ModuleSpec(
-            module=_ngpt_mlp_module_builder(
-                hidden_size=int(config.hidden_size),
-                ffn_hidden_size=int(config.ffn_hidden_size),
-                base_scale=base_scale,
-                suv_init=suv_init,
-                dtype=param_dtype,
-            ),
-        ),
+        mlp=ModuleSpec(module=NGPTMLP),
         mlp_bda=IdentityFuncOp,
     )
     return ModuleSpec(module=NGPTTransformerLayer, submodules=submodules)

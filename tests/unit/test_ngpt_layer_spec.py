@@ -31,6 +31,17 @@ def test_build_ngpt_layer_spec_returns_module_spec():
     assert sub.self_attn_bda is IdentityFuncOp
     assert sub.mlp_bda is IdentityFuncOp
 
+    # Regression guard: mlp.module MUST be a class so Megatron's build_module
+    # instantiates it. A builder *function* is a types.FunctionType, which
+    # build_module returns uninstantiated — leaving the layer's mlp a bare
+    # function with no parameters (no mlp.linear_fc1/linear_fc2 weights).
+    import types
+
+    from src.model.ngpt.mlp import NGPTMLP
+
+    assert sub.mlp.module is NGPTMLP
+    assert not isinstance(sub.mlp.module, types.FunctionType)
+
 
 def test_build_ngpt_layer_spec_asserts_tp1():
     from src.specs.ngpt_layer_spec import build_ngpt_layer_spec

@@ -60,3 +60,35 @@ class NGPTMLPBody(nn.Module):
         uv = suv * uv
         u, v = uv.chunk(2, dim=-1)
         return self.linear_fc2(u * functional.silu(v))
+
+
+class NGPTMLP(NGPTMLPBody):
+    """Megatron-instantiable nGPT MLP (the class the layer spec wires).
+
+    Megatron's ``build_module`` instantiates ``submodules.mlp.module`` only
+    when it is a *class*; a plain builder *closure* is a ``types.FunctionType``
+    and ``build_module`` returns it uninstantiated, leaving ``layer.mlp`` a
+    bare function with no parameters (no ``mlp.linear_fc1/linear_fc2`` weights,
+    broken forward). So the spec wires a class, not a closure. Geometry +
+    nGPT scaling are read from the (patched) ``TransformerConfig`` — the
+    ``ngpt_*`` fields are stamped on by ``ngpt_apply_spec``. Returns
+    ``(output, None)`` to match Megatron's MLP ``(output, bias)`` contract;
+    ``NGPTTransformerLayer.forward`` unpacks the tuple.
+    """
+
+    def __init__(self, config, submodules=None, **kwargs) -> None:
+        hidden = int(config.hidden_size)
+        dtype = getattr(config, "params_dtype", None)
+        if dtype is None:
+            dtype = torch.bfloat16 if getattr(config, "bf16", True) else torch.float32
+        super().__init__(
+            hidden_size=hidden,
+            ffn_hidden_size=int(config.ffn_hidden_size),
+            base_scale=float(getattr(config, "ngpt_base_scale", 1.0 / (hidden**0.5))),
+            suv_init_value=float(getattr(config, "ngpt_suv_init", 1.0)),
+            suv_init_scaling=1.0,
+            dtype=dtype,
+        )
+
+    def forward(self, hidden_states: torch.Tensor):
+        return super().forward(hidden_states), None
