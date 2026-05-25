@@ -51,7 +51,13 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--normalization", model.normalization)
     _add(args, "--norm-epsilon", model.norm_epsilon)
     _add(args, "--init-method-std", model.init_method_std)
-    _add(args, "--attention-backend", model.get("attention_backend", "fused"))
+    # Default `flash` (not `fused`): TE's `fused` backend dispatches to cuDNN's
+    # fused attention, which on this cluster's cu13 stack silently falls back
+    # to an O(seq²) path for head_dim=64 + GQA + seq=4096 — it OOMs a 4xB200
+    # (178 GiB/GPU) at first forward step even at mbs=32. Flash-attn 2.8.3 is
+    # installed and is O(seq) memory, so we force it as the default. Override
+    # per-experiment with base.model.attention_backend=auto|fused|local.
+    _add(args, "--attention-backend", model.get("attention_backend", "flash"))
     _add(args, "--swiglu")
     _add(args, "--disable-bias-linear")
     if not bool(model.tie_embeddings):
@@ -124,7 +130,12 @@ def _training_args(cfg: DictConfig) -> list[str]:
     _add(args, "--global-batch-size", global_batch_size)
     _add(args, "--train-samples", total_tokens // seq_length)
     _add(args, "--lr-decay-samples", total_tokens // seq_length)
-    _add(args, "--lr-warmup-samples", max(1, (total_tokens // seq_length) // 500))
+    warmup_samples = (
+        0
+        if bool(cfg.optim.get("ngpt", {}).get("no_warmup", False))
+        else max(1, (total_tokens // seq_length) // 500)
+    )
+    _add(args, "--lr-warmup-samples", warmup_samples)
     _add(args, "--lr", optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3)))
     _add(args, "--min-lr", training.get("min_lr", 1.0e-5))
     _add(args, "--lr-decay-style", training.get("lr_decay_style", "cosine"))
@@ -203,6 +214,33 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 "--adam-eps",
                 optim.eps,
             ]
+        )
+
+    if kind == "ngpt_adamw":
+        ng = optim.get("ngpt", {})
+        return _sequence(
+            [
+                "--optimizer",
+                "adam",
+                "--slm-optimizer",
+                "ngpt_adamw",
+                "--ngpt",
+                "--ngpt-alpha-init",
+                float(ng.get("alpha_init", 0.05)),
+                "--ngpt-sqk-init",
+                float(ng.get("sqk_init", 1.0)),
+                "--ngpt-suv-init",
+                float(ng.get("suv_init", 1.0)),
+                "--ngpt-sz-init",
+                float(ng.get("sz_init", 1.0)),
+                "--adam-beta1",
+                optim.betas[0],
+                "--adam-beta2",
+                optim.betas[1],
+                "--adam-eps",
+                optim.eps,
+            ]
+            + (["--ngpt-no-warmup"] if bool(ng.get("no_warmup", True)) else [])
         )
 
     raise ValueError(f"Unsupported optimizer type {kind!r}")

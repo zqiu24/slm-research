@@ -23,7 +23,9 @@ MEGATRON_ROOT = REPO_ROOT / "third_party" / "Megatron-LM"
 def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group = parser.add_argument_group("slm-research")
     group.add_argument("--slm-config-path", type=str, required=True)
-    group.add_argument("--slm-optimizer", choices=["adamw", "muon", "poet"], default="adamw")
+    group.add_argument(
+        "--slm-optimizer", choices=["adamw", "muon", "poet", "ngpt_adamw"], default="adamw"
+    )
     group.add_argument("--poet", action="store_true")
     group.add_argument("--poet-block-size", type=int, default=256)
     group.add_argument(
@@ -38,6 +40,19 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "--poet-cache-mode",
         choices=["none", "cached_fwd", "cached_fwd_bwd"],
         default="none",
+    )
+    group.add_argument("--ngpt", action="store_true")
+    group.add_argument(
+        "--ngpt-base-scale", type=float, default=None, help="1/sqrt(hidden_size) by default"
+    )
+    group.add_argument("--ngpt-alpha-init", type=float, default=0.05)
+    group.add_argument("--ngpt-sqk-init", type=float, default=1.0)
+    group.add_argument("--ngpt-suv-init", type=float, default=1.0)
+    group.add_argument("--ngpt-sz-init", type=float, default=1.0)
+    group.add_argument(
+        "--ngpt-no-warmup",
+        action="store_true",
+        help="Force LR warmup steps to 0 (matches reference train.py:114)",
     )
     return parser
 
