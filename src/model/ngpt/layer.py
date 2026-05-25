@@ -203,13 +203,21 @@ class NGPTTransformerLayer(TransformerLayer):
         rotary_pos_emb: torch.Tensor | None = None,
         rotary_pos_cos: torch.Tensor | None = None,
         rotary_pos_sin: torch.Tensor | None = None,
+        rotary_pos_cos_sin: torch.Tensor | None = None,
         attention_bias: torch.Tensor | None = None,
         inference_context=None,
         packed_seq_params=None,
         sequence_len_offset=None,
+        padding_mask: torch.Tensor | None = None,
         inference_params=None,
+        **kwargs,
     ):
         # ---- Attention branch ----
+        # input_layernorm is wired to IdentityOp, so `hidden_states` is already
+        # the attention input. We mirror Megatron's _forward_attention call into
+        # self.self_attention (kwargs incl. rotary_pos_cos_sin vary by Megatron
+        # version; **kwargs keeps the override forward-compatible) but replace
+        # the bias-dropout-add residual with the nGPT hypersphere blend.
         attn_out_with_bias = self.self_attention(
             hidden_states,
             attention_mask=attention_mask,
@@ -217,13 +225,16 @@ class NGPTTransformerLayer(TransformerLayer):
             rotary_pos_emb=rotary_pos_emb,
             rotary_pos_cos=rotary_pos_cos,
             rotary_pos_sin=rotary_pos_sin,
+            rotary_pos_cos_sin=rotary_pos_cos_sin,
             attention_bias=attention_bias,
             packed_seq_params=packed_seq_params,
             sequence_len_offset=sequence_len_offset,
         )
         # attn_out_with_bias is (output, bias). We use only output; bias is None
         # under --disable-bias-linear which nGPT requires.
-        attn_out = attn_out_with_bias[0]
+        attn_out = (
+            attn_out_with_bias[0] if isinstance(attn_out_with_bias, tuple) else attn_out_with_bias
+        )
         hidden_states = _residual_blend(hidden_states, attn_out, self.attn_alpha)
 
         # ---- MLP branch ----
