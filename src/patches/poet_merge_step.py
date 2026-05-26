@@ -77,7 +77,8 @@ def _run_merge(model, dist, iteration: int) -> None:
                     pl.merge_then_reinitialize()
                 if is_dist:
                     for buf in (
-                        pl.oft_R.data,
+                        pl.oft_R_in.data,
+                        pl.oft_R_out.data,
                         pl.weight.data,
                         pl.perm_in,
                         pl.perm_in_inv,

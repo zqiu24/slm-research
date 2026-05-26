@@ -518,3 +518,102 @@ def test_poetlinear_decoupled_forward_matches_reference():
     assert torch.allclose(
         y_layer, y_ref, atol=1e-4
     ), f"max abs diff {(y_layer - y_ref).abs().max().item():.2e}"
+
+
+# ---------------------------------------------------------------------------
+# merge_then_reinitialize (decoupled): block_diag_lr_matmul_decoupled + parity.
+# ---------------------------------------------------------------------------
+
+
+def test_block_diag_lr_matmul_decoupled_matches_coupled_equal_blocks():
+    """The decoupled block-diag L/R matmul reduces to the coupled one when
+    a == b (CPU; pure PyTorch)."""
+    from poet_torch.poet_layer import block_diag_lr_matmul, block_diag_lr_matmul_decoupled
+
+    torch.manual_seed(0)
+    r_m, r_n, b = 3, 4, 5
+    A = torch.randn(r_m, b, b, dtype=torch.float64)  # noqa: N806
+    B = torch.randn(r_n, b, b, dtype=torch.float64)  # noqa: N806
+    M = torch.randn(r_m * b, r_n * b, dtype=torch.float64)  # noqa: N806
+    out_coupled = block_diag_lr_matmul(A, M, B)
+    out_decoupled = block_diag_lr_matmul_decoupled(A, M, B)
+    assert torch.allclose(out_coupled, out_decoupled, atol=1e-12)
+
+
+def test_block_diag_lr_matmul_decoupled_unequal_matches_dense():
+    """Unequal block sizes match an explicit dense block_diag(A) @ M @ block_diag(B)."""
+    from poet_torch.poet_layer import block_diag_lr_matmul_decoupled
+
+    torch.manual_seed(1)
+    r_m, a, r_n, b = 2, 8, 3, 16
+    A = torch.randn(r_m, a, a, dtype=torch.float64)  # noqa: N806
+    B = torch.randn(r_n, b, b, dtype=torch.float64)  # noqa: N806
+    M = torch.randn(r_m * a, r_n * b, dtype=torch.float64)  # noqa: N806
+    out = block_diag_lr_matmul_decoupled(A, M, B)
+    dense = torch.block_diag(*A) @ M @ torch.block_diag(*B)
+    assert out.shape == (r_m * a, r_n * b)
+    assert torch.allclose(out, dense, atol=1e-10)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
+def test_merge_equivalence_bsz_vs_block_count_equal():
+    """Task 5.3: with equal block sizes, the bsz and block_count merge paths
+    produce identical weight + permutation state across several merge cycles
+    (given identical params and identical RNG seeding at merge time)."""
+    from poet_torch import POETLinear
+
+    torch.manual_seed(0)
+    a = POETLinear(in_features=32, out_features=32, bsz=8, device="cuda", dtype=torch.float32)
+    a.random_init_parameters()
+    b = POETLinear(
+        in_features=32, out_features=32, block_count=4, device="cuda", dtype=torch.float32
+    )
+    with torch.no_grad():
+        b.weight.copy_(a.weight)
+        for buf in ("perm_in", "perm_in_inv", "perm_out", "perm_out_inv"):
+            getattr(b, buf).copy_(getattr(a, buf))
+
+    for cycle in range(3):
+        torch.manual_seed(cycle)
+        new_in = torch.randn_like(a.oft_R_in) * 1e-2
+        new_out = torch.randn_like(a.oft_R_out) * 1e-2
+        with torch.no_grad():
+            a.oft_R_in.copy_(new_in)
+            a.oft_R_out.copy_(new_out)
+            b.oft_R_in.copy_(new_in)
+            b.oft_R_out.copy_(new_out)
+        torch.manual_seed(1000 + cycle)
+        a.merge_then_reinitialize()
+        torch.manual_seed(1000 + cycle)
+        b.merge_then_reinitialize()
+        assert torch.allclose(a.weight, b.weight, atol=1e-5), f"cycle {cycle} weight mismatch"
+        assert torch.equal(a.perm_in, b.perm_in)
+        assert torch.equal(a.perm_out, b.perm_out)
+        # oft_R is zeroed after merge.
+        assert torch.count_nonzero(a.oft_R_in) == 0 and torch.count_nonzero(a.oft_R_out) == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
+def test_merge_preserves_effective_weight():
+    """A merge folds the orthogonal delta into the base weight, so the layer's
+    forward output is (approximately) unchanged immediately after merging."""
+    from poet_torch import POETLinear
+
+    torch.manual_seed(2)
+    layer = POETLinear(
+        in_features=32, out_features=64, block_count=4, device="cuda", dtype=torch.float32
+    )
+    layer.random_init_parameters()
+    with torch.no_grad():
+        layer.oft_R_in.normal_(std=1e-2)
+        layer.oft_R_out.normal_(std=1e-2)
+
+    x = torch.randn(4, 32, device="cuda", dtype=torch.float32)
+    y_before = layer(x).detach()
+    layer.merge_then_reinitialize()
+    y_after = layer(x).detach()
+    # After merge oft_R==0, so R blocks are identity → forward is pure permuted
+    # base weight, which equals the pre-merge effective weight.
+    assert torch.allclose(
+        y_before, y_after, atol=1e-3
+    ), f"max abs diff {(y_before - y_after).abs().max().item():.2e}"
