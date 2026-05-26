@@ -14,6 +14,12 @@ experiment:
 
 optim:
   type: muon_hybrid
+  muon_momentum: 0.95
+  muon_scale_mode: spectral
+  muon_tp_mode: blockwise
+  muon_extra_scale_factor: 1.0
+  muon_coefficient_type: quintic
+  muon_scalar_optimizer: adam
   muon:
     apply_to: linear_weights
     ns_steps: 5

@@ -1,0 +1,35 @@
+# @package _global_
+# DeepSeek-V3-shaped small proxy scale. num_layers=14 matches the family's
+# moe.layer_freq pattern "([0]*3+[1]*11)" which evaluates to 14 elements.
+# Megatron asserts len(layer_freq) == num_layers; pair this scale only
+# with configs/base/family/deepseek_v3.yaml.
+#
+# Dimensions are scaled down from the upstream proxy test config
+# (third_party/Megatron-LM/tests/functional_tests/test_cases/mixtral/
+# deepseekv3_proxy_flex_tp1pp4emp16etp1cp1_release/model_config.yaml)
+# by ~5x on hidden / FFN / heads to fit slm-research's ablation budget.
+#
+# non_embedding_params reports the ACTIVATED count (3 dense layers + 11
+# MoE layers × topk-8 / num_experts-64), not the total. Parallelism rules
+# in src/utils/parallelism.py are based on activation cost.
+base:
+  scale: "deepseek_v3_proxy_small"
+  non_embedding_params: 1_500_000_000
+
+  model:
+    num_layers: 14
+    hidden_size: 1536
+    ffn_hidden_size: 3840
+    num_attention_heads: 12
+    num_query_groups: 12
+    head_dim: 128
+    kv_channels: 128
+    seq_length: 4096
+    max_position_embeddings: 4096
+    tie_embeddings: false
+
+    # Optional per-scale narrowing of family-level MoE so single-node EP
+    # is feasible during ablations. Keep layer_freq's element count at 14;
+    # shrinking the routed-expert count is the only safe override.
+    moe:
+      num_experts: 16

@@ -98,3 +98,19 @@ def test_hash_independent_of_input_order():
     # The source SHA depends on the module source text, which is identical
     # across both registrations -> hash is order-invariant.
     assert h1 == h2
+
+
+def test_patch_set_hash_does_not_apply_registered_patch():
+    from src.patches._registry import _REGISTRY, patch_set_hash, register_patch
+
+    calls = []
+
+    @register_patch(name="hash_only_example", targets=("pkg.fn",))
+    def apply():
+        calls.append("applied")
+
+    h = patch_set_hash(["hash_only_example"])
+
+    assert len(h) == 16
+    assert calls == []
+    assert _REGISTRY["hash_only_example"].applied is False

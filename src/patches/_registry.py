@@ -30,11 +30,11 @@ _REGISTRY: dict[str, _PatchEntry] = {}
 _TARGET_OWNERS: dict[str, str] = {}
 
 
-class PatchConflict(RuntimeError):
+class PatchConflict(RuntimeError):  # noqa: N818
     pass
 
 
-class UnknownPatch(KeyError):
+class UnknownPatch(KeyError):  # noqa: N818
     pass
 
 
@@ -60,9 +60,7 @@ def register_patch(*, name: str, targets: tuple[str, ...] = ()) -> Callable:
         for target in targets:
             owner = _TARGET_OWNERS.get(target)
             if owner is not None and owner != name:
-                raise PatchConflict(
-                    f"Patch {name!r} and {owner!r} both target {target!r}"
-                )
+                raise PatchConflict(f"Patch {name!r} and {owner!r} both target {target!r}")
             _TARGET_OWNERS[target] = name
         _REGISTRY[name] = _PatchEntry(
             name=name,
@@ -73,6 +71,18 @@ def register_patch(*, name: str, targets: tuple[str, ...] = ()) -> Callable:
         return apply_fn
 
     return decorator
+
+
+def patch_set_hash(names: list[str] | tuple[str, ...]) -> str:
+    """Return the deterministic hash for registered patches without applying them."""
+    names = sorted(set(names))
+    unknown = [n for n in names if n not in _REGISTRY]
+    if unknown:
+        raise UnknownPatch(f"Unknown patches: {unknown}. Registered: {sorted(_REGISTRY)}")
+    if not names:
+        return "noop" + "0" * 12
+    payload = "\n".join(f"{n}:{_REGISTRY[n].source_sha}" for n in names)
+    return hashlib.blake2s(payload.encode("utf-8"), digest_size=8).hexdigest()
 
 
 def apply_patches(names: list[str] | tuple[str, ...]) -> str:
@@ -93,11 +103,7 @@ def apply_patches(names: list[str] | tuple[str, ...]) -> str:
         entry.apply_fn()
         entry.applied = True
 
-    if not names:
-        return "noop" + "0" * 12  # 16 chars so it lines up with blake2s(8) hex
-
-    payload = "\n".join(f"{n}:{_REGISTRY[n].source_sha}" for n in names)
-    return hashlib.blake2s(payload.encode("utf-8"), digest_size=8).hexdigest()
+    return patch_set_hash(names)
 
 
 def registered_patches() -> dict[str, _PatchEntry]:
@@ -106,6 +112,20 @@ def registered_patches() -> dict[str, _PatchEntry]:
 
 
 def _reset_for_tests() -> None:
-    """Clear registry state; only use from tests."""
+    """Clear registry state; only use from tests.
+
+    Also pops cached `src.patches.*` modules from `sys.modules` so a
+    subsequent `importlib.import_module(...)` re-executes the file and
+    re-runs the `@register_patch` decorators. Without this, the registry
+    and the module cache fall out of sync across tests.
+    """
+    import sys as _sys
+
+    for mod_name in list(_sys.modules):
+        if mod_name.startswith("src.patches.") and mod_name not in (
+            "src.patches._registry",
+            "src.patches",
+        ):
+            _sys.modules.pop(mod_name, None)
     _REGISTRY.clear()
     _TARGET_OWNERS.clear()

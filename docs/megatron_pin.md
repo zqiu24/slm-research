@@ -6,15 +6,17 @@ break FP8 numerics and ModuleSpec layouts.
 
 ## Current pin
 
-- Branch / SHA: `core_r0.16.0` tip → `ddc0d6774783b032ddceacc5714e653651daecb9`
-- Pinned on: 2026-04-23
-- Reason: initial import. Upstream stopped cutting release *tags* after
-  `core_r0.11.0` (Feb 2025); stable versions now live on release *branches*.
-  `core_r0.16.0` is the branch NVIDIA is currently backporting fixes to
-  (last commit 2026-04-17). `core_r0.17.0` was branched three days before
-  this pin (2026-04-20) and is still churning, so we stay one minor back
-  for stability. We pin to the specific SHA, not the moving branch ref,
-  to preserve reproducibility.
+- Tag / SHA: `core_v0.17.0` → `9539a12e1b04a68423f57b3eb41d6125161dca24`
+- Pinned on: 2026-05-13
+- Reason: NVIDIA resumed cutting annotated release tags with `core_v0.15.0`
+  (2025-12-17), so we're back on the "pin to a tag" contract. `core_v0.17.0`
+  is the latest stable release tag (commit dated 2026-04-14, identical SHA
+  to `core_v0.17.0rc0` — the rc was promoted to release without changes).
+  The `core_r0.17.0` release branch has 24 backport commits past the tag as
+  of 2026-05-11 (async ckpt fixes, SafeUnpickler, `transformers<=5.3.0`
+  cap relaxation, hybrid-EP permute fusion); none are needed by the current
+  pretraining path, so we stay on the tagged SHA rather than the moving
+  branch tip.
 
 To initialise the submodule on a fresh clone:
 
@@ -42,3 +44,4 @@ git submodule update --init --recursive
 | Date | New SHA | Prior SHA | Reason | Patch changes |
 |---|---|---|---|---|
 | 2026-04-23 | `core_r0.16.0` tip (`ddc0d6774`) | — | first import | none |
+| 2026-05-13 | `core_v0.17.0` (`9539a12e1`) | `ddc0d6774` | move to first tagged 0.17 release; align with newly-resumed annotated-tag cadence | none — `src/patches/` not yet populated; numerics gate deferred until `tests/numerics/` lands (SPEC.md §12) |

@@ -56,3 +56,5 @@ runs/**/wandb/
 !.env.example
 *.pem
 *.key
+
+runs

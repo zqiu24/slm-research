@@ -9,6 +9,7 @@ from src.patches._registry import (
     PatchConflict,
     UnknownPatch,
     apply_patches,
+    patch_set_hash,
     register_patch,
     registered_patches,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "PatchConflict",
     "UnknownPatch",
     "apply_patches",
+    "patch_set_hash",
     "register_patch",
     "registered_patches",
 ]

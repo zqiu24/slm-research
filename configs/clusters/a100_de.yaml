@@ -3,7 +3,7 @@
 cluster:
   name: a100_de
   site: germany
-  nodes: null
+  nodes: 1
   gpus_per_node: 8
   interconnect: "nvlink_within_ib_across"
   capabilities: [bf16, fp16, nvlink, ib_fast]

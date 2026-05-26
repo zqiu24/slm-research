@@ -1,0 +1,17 @@
+# third_party/poet_torch/pyproject.toml
+[project]
+name = "poet-torch"
+version = "0.0.1+research"
+description = "POET orthogonal linear layer (vendored from GaLore)"
+requires-python = ">=3.12"
+dependencies = ["torch>=2.6"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["poet_torch"]
+
+[tool.setuptools.package-dir]
+"poet_torch" = "."

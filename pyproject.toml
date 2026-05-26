@@ -3,7 +3,7 @@ name = "slm-research"
 version = "0.0.1"
 description = "Research infrastructure for SLM pretraining with novel training algorithms."
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.12,<3.13"
 authors = [{ name = "NeckariumAI" }]
 license = { text = "Proprietary" }
 
@@ -29,10 +29,19 @@ dev = [
     "pre-commit>=3.7",
 ]
 # Heavy deps that break on systems without a compatible NVIDIA stack.
-# Installed only on cluster login / compute nodes.
+# Installed only on cluster login / compute nodes. Lower bound tracks
+# Megatron-LM's own constraint (see third_party/Megatron-LM/pyproject.toml).
+# Transformer-Engine is intentionally NOT pinned here — install_slm_env.sh
+# builds it from the git SHA mcore 0.17.0 lists in [tool.uv.sources]
+# (currently 71bbefbf...), which produces version 2.14.0+71bbefbf and
+# would conflict with Megatron's PyPI range pin <2.12.0 if both were
+# declared. The script is the source of truth for the TE version.
 gpu = [
-    "torch>=2.4,<3.0",
-    "transformer-engine[pytorch]>=1.12",
+    "torch>=2.6,<3.0",
+]
+data = [
+    "pyarrow>=15.0",
+    "tqdm>=4.66",
 ]
 
 [build-system]
@@ -46,7 +55,7 @@ exclude = ["tests*", "third_party*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 extend-exclude = ["third_party"]
 
 [tool.ruff.lint]
@@ -67,6 +76,6 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 ignore_missing_imports = true
 exclude = ["third_party/"]
