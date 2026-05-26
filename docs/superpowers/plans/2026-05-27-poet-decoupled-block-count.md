@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Scope:** this plan is **single-GPU only**. Multi-GPU validation (full
+> training smoke, 2-rank DP smoke) is deferred to a follow-up plan once
+> the single-GPU work is complete and shipped.
+
 ## Goal
 
 Add a `block_count` parameterization to POET layers. Today, POET uses a single
@@ -54,16 +58,10 @@ constructs a layer where they may differ. Single code path, two constructor entr
 
 **Decision 2: New Triton op alongside existing.** Don't break the existing
 `torch.ops.poet.chain_layer_checkpoint_mem_o2` signature. Add a new op
-`chain_layer_checkpoint_mem_o2_decoupled` that takes two block sizes. The
-new layer dispatches to the new op; the existing kernel is untouched and
-still used by any code that calls `POETLinear(bsz=256)` and routes through
-the legacy path.
-
-Actually — since "Decision 1" says single code path, we always need the new
-op regardless. We'll route through the new op for both equal- and unequal-
-block-size cases. The old op can be retired once the new one is shipped and
-tested. For correctness validation we compare new-op-with-equal-blocks vs
-old-op.
+`chain_layer_checkpoint_mem_o2_decoupled` that takes two block sizes. We'll
+route through the new op for both equal- and unequal-block-size cases. The
+old op can be retired once the new one is shipped and validated. For
+correctness validation we compare new-op-with-equal-blocks vs old-op.
 
 **Decision 3: Mode A cache extends naturally.** `CachedPOETLinear` already
 holds `_R_in_*`, `_R_out_*` separately; the cache mechanism doesn't care
@@ -78,14 +76,14 @@ about block sizes. Two changes:
 |------|---------|--------|
 | `third_party/poet_torch/poet_layer.py` | `POETLinear.__init__` accepts `block_count`. Storage uses `block_size_in`, `block_size_out`, `oft_R_in`, `oft_R_out`. `get_weight_poet` runs Cayley twice. `forward` dispatches to new op. `merge_then_reinitialize` handles both sides. | MODIFY |
 | `third_party/poet_torch/poet_ops.py` | Add new `chain_layer_checkpoint_mem_o2_decoupled` op (Triton kernel) with two block-size args. Keep the existing op. | MODIFY |
-| `third_party/poet_torch/poet_layer.py` | `chain_layer_x_checkpoint_mem_o2_decoupled` Python wrapper. | MODIFY |
 | `src/optim/poet_cache.py` | `_compute_cayley` returns from two calls. `_get_R_blocks_mode_a` builds independent in/out caches. `_flush_R_grads_to_oft_R` runs two VJPs. | MODIFY |
+| `src/optim/poet.py` | `_sync_oft_R_grads_across_dp` iterates over both `oft_R_in` and `oft_R_out`. | MODIFY |
 | `src/optim/poet_layers.py` | `replace_linears_with_poet` accepts `block_count` (mutually exclusive with `block_size`). | MODIFY |
 | `src/patches/poet_apply_to_model.py` | Thread `block_count` from `args.poet_block_count`. | MODIFY |
 | `src/utils/megatron_args.py` | Emit `--poet-block-count` when `optim.poet.block_count` is set. | MODIFY |
 | `launchers/pretrain_gpt_slm.py` | Add `--poet-block-count` argparse arg. | MODIFY |
 | `configs/experiments/optim/poet.yaml` | Document `block_count` as alternative to `block_size`. | MODIFY |
-| `tests/unit/test_poet_decoupled.py` | All tests for decoupled mode (CPU + GPU). | **NEW** |
+| `tests/unit/test_poet_decoupled.py` | All tests for decoupled mode (CPU + single-GPU). | **NEW** |
 | `tests/unit/test_poet_layers.py` | Add tests for `block_count` plumbing. | MODIFY |
 | `tests/unit/test_poet_cache.py` | Add parity test: cache works with decoupled block sizes. | MODIFY |
 | `tools/poet_cache_bench.py` | Add `--block-count` flag and sweep it. | MODIFY |
@@ -93,9 +91,53 @@ about block sizes. Two changes:
 ## Testing reality
 
 - Triton kernels are GPU-only. CPU tests use Python-only reference paths.
-- The user runs all tests on the cluster and reports back.
-- New tests are split into CPU-runnable (state, plumbing, dispatch, mathematical
-  equivalence on a tiny pure-PyTorch reference) and GPU-required (full kernel parity).
+- The user runs all tests on the cluster (single GPU is sufficient for every
+  task in this plan) and reports back.
+- Tests are split into CPU-runnable (state, plumbing, dispatch, mathematical
+  equivalence on a tiny pure-PyTorch reference) and single-GPU-required
+  (full kernel parity).
+- **Multi-GPU work is out of scope** for this plan. The DP sync code change
+  in Task 8 has a CPU no-op test only — the 2-rank DDP smoke is a follow-up.
+
+---
+
+## Task 0: Set up branch
+
+**Goal:** All work lands on an isolated branch off `main`. Don't touch the
+shipped Mode A baseline until the decoupled-block-count work is validated.
+
+- [ ] **Step 0.1: Create and switch to a new branch**
+
+From the repo root:
+
+```bash
+cd /lustre/fast/fast/zqiu/slm-research
+git checkout main
+git pull --ff-only origin main           # match latest main
+git checkout -b poet-decoupled-block-count
+```
+
+- [ ] **Step 0.2: Verify branch is clean and based on the latest Mode A commit**
+
+```bash
+git status                                # working tree clean
+git log --oneline -5                      # confirms d68172d (or later) is on this branch
+```
+
+- [ ] **Step 0.3: Set push target (do not push yet)**
+
+```bash
+git push --set-upstream origin poet-decoupled-block-count
+```
+
+(Only initial branch push to register it on the remote; subsequent task
+commits stay local until the user requests a push.)
+
+- [ ] **Step 0.4: First-task validation**
+
+Confirm that `train_poet.sh --help` (or its equivalent) still runs unchanged —
+the branch is functionally identical to `main` at this point. We have a
+clean baseline to compare against as we develop.
 
 ---
 
@@ -172,12 +214,12 @@ def get_weight_poet_decoupled(oft_R_in, oft_R_out,
 Two separate Cayley kernel calls. Each consumes a `(r, bs, bs)` tensor with
 its own `bs`. Existing Cayley op signature is fine — it handles any `B`.
 
-- [ ] **Step 2.2: Add parity test (GPU)**
+- [ ] **Step 2.2: Add parity test (single GPU)**
 
 Verify `get_weight_poet_decoupled` with equal block sizes produces same
 result as `get_weight_poet`.
 
-- [ ] **Step 2.3: Run, verify PASS on GPU**
+- [ ] **Step 2.3: Run, verify PASS on single GPU**
 
 - [ ] **Step 2.4: Commit**
 
@@ -212,7 +254,10 @@ y = ...                                      # collapse blocks
 
 The `block_size` only appears as a reshape dimension. So conceptually, splitting
 into `block_size_in` and `block_size_out` is mechanical — just use the right
-one for each reshape.
+one for each reshape. Confirm this assumption by reading the actual kernel
+before proceeding to Step 3.2. If the kernel hardcodes `BLOCK_SIZE: tl.constexpr`
+in dot shapes or tile sizes, the implementation may be more involved and the
+estimated effort grows.
 
 - [ ] **Step 3.2: Implement `chain_layer_checkpoint_mem_o2_decoupled` op**
 
@@ -226,12 +271,12 @@ on the two sides. Register fake meta + backward (parallel to existing).
 perm_in_inv, perm_in, perm_out, perm_out_inv, block_size_in, block_size_out)`
 in `poet_layer.py`.
 
-- [ ] **Step 3.4: GPU parity test (equal block sizes)**
+- [ ] **Step 3.4: Single-GPU parity test (equal block sizes)**
 
 Compare new op output to existing op output when `block_size_in == block_size_out`.
 Must be bit-identical within Triton kernel ULP.
 
-- [ ] **Step 3.5: GPU parity test (unequal block sizes)**
+- [ ] **Step 3.5: Single-GPU parity test (unequal block sizes)**
 
 Compare new op output to the pure-PyTorch reference from Task 1, with
 unequal block sizes.
@@ -313,13 +358,13 @@ def forward(self, x):
 
 Always use the decoupled ops, regardless of whether the two block sizes are equal.
 
-- [ ] **Step 4.5: Backward-compat test**
+- [ ] **Step 4.5: Backward-compat test (single GPU)**
 
 Construct `POETLinear(in_features=32, out_features=32, bsz=8)` and
 `POETLinear(in_features=32, out_features=32, block_count=4)` — they should
 produce identical results given identical `oft_R_in`, `oft_R_out`, `W`, `perms`.
 
-- [ ] **Step 4.6: Decoupled test**
+- [ ] **Step 4.6: Decoupled test (single GPU)**
 
 Construct `POETLinear(in_features=32, out_features=64, block_count=4)` —
 `block_size_in=8`, `block_size_out=16` — and verify against the pure-PyTorch
@@ -348,9 +393,9 @@ into `W`. Adapt for two separate `oft_R_in`, `oft_R_out` and two block sizes.
 The perm-updates are already per-side (in_features, out_features) and so
 don't need to change. The `perform_permutation` index_select is unchanged.
 
-- [ ] **Step 5.3: Equivalence test (equal block sizes)**
+- [ ] **Step 5.3: Equivalence test (equal block sizes, single GPU)**
 
-Run 200 cycles of training on a small toy model with `bsz=8` and with
+Run a small toy model through several merge cycles with `bsz=8` and with
 `block_count=4` (both yield block_size_in==block_size_out==8). After each
 merge, the model state should match.
 
@@ -427,26 +472,33 @@ def _flush_R_grads_to_oft_R(self):
 Verify that the cache state machine still works with decoupled layers. Verify
 flush invalidates both caches.
 
-- [ ] **Step 6.5: GPU parity tests**
+- [ ] **Step 6.5: Single-GPU parity test**
 
 For a decoupled layer (in≠out, block_count=4, so block_size_in≠block_size_out),
 verify Mode A's K-microbatch accumulated gradient matches `none`-mode's within
 expected bf16 floor.
 
-- [ ] **Step 6.6: Commit**
+- [ ] **Step 6.6: Single-GPU flush overhead check**
+
+Run the bench's `--profile` mode on a decoupled layer and confirm
+`t_flush_only` hasn't ballooned (two VJPs instead of one — expected to roughly
+double from ~0.66 ms to ~1.3 ms; that's the cost we accept for decoupling).
+
+- [ ] **Step 6.7: Commit**
 
 ```
 feat(poet): Mode A cache supports decoupled block sizes (two oft_R, two VJPs)
 ```
 
-## Task 7: DP sync helper handles two oft_R buffers
+## Task 7: DP sync helper handles two oft_R buffers (code only — no multi-rank validation)
 
 **Files:**
 - Modify: `src/optim/poet.py`
 
 `_sync_oft_R_grads_across_dp` currently iterates over each layer's `oft_R`
 and all_reduces `main_grad`. With two `oft_R` params per layer, it must
-iterate over both.
+iterate over both. We update the code in this plan but leave multi-rank
+validation to a follow-up plan.
 
 - [ ] **Step 7.1: Update sync to iterate over both params**
 
@@ -467,6 +519,14 @@ def _sync_oft_R_grads_across_dp(layers):
 to `oft_R` for legacy layers if anything still uses it.)
 
 - [ ] **Step 7.2: Update test for CPU no-op behavior**
+
+The existing `test_sync_helper_is_safe_noop_on_cpu` test still passes — extend
+it to set both `oft_R_in.main_grad` and `oft_R_out.main_grad` on a layer,
+and confirm both are no-op'd in single-process mode.
+
+> **Note (out of scope):** A real 2-rank DDP smoke verifies the sync actually
+> all-reduces correctly. That requires multi-GPU and lives in the follow-up
+> plan.
 
 - [ ] **Step 7.3: Commit**
 
@@ -511,13 +571,18 @@ else emit `--poet-block-size N`.
 Add `block_count` as a kwarg. Pass it through to `POETLinear(block_count=...)`
 instead of `bsz=...` when set.
 
-- [ ] **Step 8.5: Tests**
+- [ ] **Step 8.5: Tests (CPU)**
 
 `test_megatron_args.py`: verify the right argv is emitted for both configs.
 `test_poet_layers.py`: verify `replace_linears_with_poet` builds the right
 layers in both modes.
 
-- [ ] **Step 8.6: Commit**
+- [ ] **Step 8.6: Validation runtime — config rejects `block_count` that doesn't divide layer dims**
+
+Add a `test_block_count_validation` test: a `block_count=7` on a 1536-dim
+layer should raise a clear `ValueError` at layer construction time.
+
+- [ ] **Step 8.7: Commit**
 
 ```
 feat(poet): plumb block_count through Hydra config and CLI
@@ -541,9 +606,9 @@ the existing shapes. Some combos will be invalid; skip.
 
 - [ ] **Step 9.3: Document expected Cayley fraction shifts**
 
-Block_count=8 on a 4096×11008 layer gives `bs_in=512, bs_out=1376`. The
+`block_count=8` on a 4096×11008 layer gives `bs_in=512, bs_out=1376`. The
 out-side Cayley fraction should be ~2× the equal-block-size case. Confirm
-empirically.
+empirically by running the sweep on single GPU.
 
 - [ ] **Step 9.4: Commit**
 
@@ -551,75 +616,59 @@ empirically.
 feat(poet-bench): sweep across block_count configurations
 ```
 
-## Task 10: Integration smoke — full training run with decoupled blocks
-
-**Files:**
-- Modify: `scripts/train_poet.sh` (optional — only if you want to flip
-  the default to `block_count`)
-
-- [ ] **Step 10.1: Validation run, equal blocks via block_count**
-
-Run `train_poet.sh optim.poet.block_count=6` (i.e. block_size_in=block_size_out=256
-for a 1536-dim model). Compare ~100-step loss curve to a `block_size=256` baseline.
-Should match within bf16 noise.
-
-- [ ] **Step 10.2: Validation run, true decoupled**
-
-Run with a different `block_count` that yields unequal block sizes on FFN layers.
-Verify training loss is reasonable (not NaN, monotonically decreasing).
-
-- [ ] **Step 10.3: Speed comparison**
-
-Same recipe, run with `block_size=256` and with `block_count` chosen to give
-`block_size_out` higher on FFN-up layers. Measure step time and report speedup
-or regression.
-
-- [ ] **Step 10.4: Commit + CHANGELOG**
-
-```
-feat(poet): decoupled block_count parameterization, end-to-end validated
-```
-
-Update `CHANGELOG.md` with the realized speedup numbers.
-
 ---
 
 ## Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| The Triton kernel modification is more invasive than expected | Task 3 has multiple substeps. If kernel proves intractable, fall back to a pure-PyTorch chain_layer for decoupled paths (slow but works). Profile reveals whether this matters. |
+| The Triton kernel modification is more invasive than expected | Task 3.1 calls out the verification step — read the kernel first. If kernel proves intractable, fall back to a pure-PyTorch chain_layer for decoupled paths (slow but works). |
 | Bit-equivalence with old POETLinear when block sizes are equal | Tests in Task 4.5 are gating. If we can't match, the refactor isn't shippable as a drop-in. |
-| Mode A flush math (two VJPs instead of one) introduces precision drift | Mode A already accepts bf16-floor drift. Two VJPs are still better than 2K VJPs (baseline). |
-| Decoupled DP sync incompatible with existing checkpoint format | `oft_R_in` and `oft_R_out` are new parameter names; existing checkpoints don't have them. Old checkpoints need a migration script (load `oft_R`, split into `oft_R_in`/`oft_R_out` based on r_in/r_out). |
+| Mode A flush math (two VJPs instead of one) introduces precision drift | Mode A already accepts bf16-floor drift. The bench overhead check in Task 6.6 catches significant regressions. |
+| Decoupled DP sync incompatible with existing checkpoint format | `oft_R_in` and `oft_R_out` are new parameter names; existing checkpoints don't have them. See migration section below. |
 | `update_permutation` and merge: the perm-update logic for unequal block counts | Perm tensors are per-side and don't depend on the block size of the other side. Already correct. |
+| Multi-GPU regression not caught by this plan | Out of scope. Follow-up plan must validate 2-rank DDP smoke + full 8-GPU training run before merging to main. |
 
-## Out of scope for v1
+## Out of scope for this plan
 
-- Quantized (Q8/4-bit) layer variants. `POETQuantizedLinear` and `QPOETLinear`
+- **Multi-GPU validation.** 2-rank DDP smoke + full 8-GPU training smoke
+  are deferred to a follow-up plan. The single-GPU work shipped from this
+  plan is correct at the layer level but unverified under DDP.
+- **Quantized (Q8/4-bit) layer variants.** `POETQuantizedLinear` and `QPOETLinear`
   use the same fused Cayley path; extending them to decoupled is deferred.
-- `POETLinearNeurips` and `POETCayleyLinear` — alternate kernel variants in
-  `poet_cayley_layer.py`. Not currently used by the slm-research training
-  pipeline.
-- Per-layer `block_count` (different values per layer). v1 uses one global
+- **`POETLinearNeurips` and `POETCayleyLinear`** — alternate kernel variants in
+  `poet_cayley_layer.py`. Not currently used by the slm-research training pipeline.
+- **Per-layer `block_count`** (different values per layer). v1 uses one global
   value; per-layer overrides via a config map are a v2 feature.
 
 ## Migration path for existing checkpoints
 
 When loading a checkpoint trained with the legacy `bsz=N` POETLinear into a
-new `block_count`-aware layer:
-- The new layer has `oft_R_in` and `oft_R_out` parameters; the checkpoint has
-  a single `oft_R`. Split it: `oft_R_in = oft_R[:r_in]`, `oft_R_out = oft_R[r_in:]`.
-- Provide a small migration utility in `src/optim/poet_decoupled_migration.py`
-  that runs at checkpoint load time when the old layout is detected.
+new `block_count`-aware layer, the old `oft_R` parameter needs to be split:
 
-## Estimated effort
+- For the legacy-equivalent case (target layer has `block_size_in == block_size_out == N`):
+  - `oft_R_in = oft_R[:r_in]`, `oft_R_out = oft_R[r_in:]`. Identical math.
+- For the true-decoupled case (target layer has unequal block sizes):
+  - **Cannot be migrated** — the per-block parameter count differs.
+  - Layer must be **re-initialized** to use the new shape. Provide a clear
+    error message rather than silently corrupting.
 
+Provide a migration utility in `src/optim/poet_decoupled_migration.py` that
+runs at checkpoint load time, detects the old layout, and either splits cleanly
+(equivalent case) or raises a clear error (decoupled case).
+
+## Estimated effort (single-GPU scope only)
+
+- Task 0: 0.25 day (branch setup)
 - Task 1–2: 1 day (pure PyTorch reference, validate Cayley split)
-- Task 3: 2–3 days (new Triton op + tests)
-- Task 4–5: 1 day (refactor `POETLinear`, merge logic)
-- Task 6–7: 1 day (Mode A + DP sync)
-- Task 8–9: 0.5 day (plumbing + bench)
-- Task 10: 0.5 day (validation)
+- Task 3: 2–3 days (new Triton op + tests; verify with kernel-read spike)
+- Task 4–5: 1–2 days (refactor `POETLinear`, merge logic, bit-equivalence test)
+- Task 6: 1 day (Mode A + flush overhead check)
+- Task 7: 0.25 day (DP sync code change; no multi-rank validation)
+- Task 8: 0.5 day (plumbing + CPU tests)
+- Task 9: 0.5 day (bench sweep)
 
-**Total: ~6–7 days of focused work.**
+**Total: ~6.5–8.5 days of focused work** on a single-GPU dev machine.
+
+After this plan ships, a follow-up plan handles the multi-GPU validation
+(2-rank DDP smoke + full 8-GPU training smoke) before merging to `main`.
