@@ -231,10 +231,9 @@ def test_reference_matches_poet_linear_when_block_sizes_equal():
         dtype=torch.float32,
     )
     layer.random_init_parameters()
-    # Upstream get_weight_poet splits R_cat as [r_out, r_in]: the first r_out
-    # rows of oft_R drive R_out, the remaining r_in rows drive R_in.
-    oft_out = layer.oft_R[: layer.r_out].detach().cpu()
-    oft_in = layer.oft_R[layer.r_out :].detach().cpu()
+    # POETLinear now stores the two skew params directly (decoupled storage).
+    oft_out = layer.oft_R_out.detach().cpu()
+    oft_in = layer.oft_R_in.detach().cpu()
     W = layer.weight.detach().cpu()  # noqa: N806
     perm_in = layer.perm_in.detach().cpu()
     perm_in_inv = layer.perm_in_inv.detach().cpu()
