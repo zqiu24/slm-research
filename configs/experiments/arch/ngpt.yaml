@@ -36,8 +36,14 @@ optim:
     no_warmup: true          # reference train.py:114
 
 # Disable QK layernorm and dropout — they conflict with nGPT.
+# Force MHA (num_query_groups == num_attention_heads): the reference nGPT
+# (NVIDIA/ngpt model.py:119-129) is MHA-only — sqk has shape (n_head*d)
+# and is applied identically to Q and K. GQA would need a per-KV-group
+# sqk_k vector, which the paper does not specify; staying MHA preserves
+# parity with the published recipe.
 base:
   model:
     qk_norm: false
     attention_dropout: 0.0
     hidden_dropout: 0.0
+    num_query_groups: ${base.model.num_attention_heads}
