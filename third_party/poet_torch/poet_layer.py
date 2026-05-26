@@ -193,6 +193,26 @@ def get_weight_poet(R, block_size, rows, cols, r_out, r_in):
 
     return R_out, R_in
 
+
+def get_weight_poet_decoupled(oft_R_in, oft_R_out,
+                              block_size_in, block_size_out,
+                              rows_in, cols_in, rows_out, cols_out):
+    """Decoupled Cayley: build (R_out, R_in) from two independent oft_R tensors.
+
+    Unlike ``get_weight_poet`` (one Cayley call on a concatenated ``oft_R``),
+    the in/out sides may use different block sizes, so their skew matrices have
+    different tile shapes and cannot share a single batched kernel launch. We
+    therefore run two Cayley calls. The kernel handles any block size ``B``, so
+    each side just supplies its own ``(r, bs, bs)`` skew batch.
+
+    Returns ``(R_out, R_in)`` to match ``get_weight_poet``'s ordering.
+    """
+    Q_in = pytorch_skew_symmetric(oft_R_in, block_size_in, rows_in, cols_in)
+    Q_out = pytorch_skew_symmetric(oft_R_out, block_size_out, rows_out, cols_out)
+    R_in = torch.ops.poet.cayley(Q_in)[0]
+    R_out = torch.ops.poet.cayley(Q_out)[0]
+    return R_out, R_in
+
 def torch_bmm(x, R, block_size):
     Bdims = x.shape[:-1]
     xr = x.view(*Bdims, -1, block_size)

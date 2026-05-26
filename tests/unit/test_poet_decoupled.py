@@ -249,3 +249,66 @@ def test_reference_matches_poet_linear_when_block_sizes_equal():
     assert torch.allclose(
         y_layer, y_ref, atol=1e-4
     ), f"max abs diff {(y_layer - y_ref).abs().max().item():.2e}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
+def test_get_weight_poet_decoupled_matches_fused_when_blocks_equal():
+    """get_weight_poet_decoupled (two Cayley calls) must reproduce the fused
+    get_weight_poet (one concatenated call) when block sizes are equal.
+
+    The Cayley kernel acts per-block independently, so splitting the batch into
+    two launches cannot change the per-block result beyond autotuner-config ULP.
+    """
+    from poet_torch.poet_layer import get_weight_poet, get_weight_poet_decoupled
+
+    torch.manual_seed(0)
+    bs = 16
+    r_in, r_out = 1, 2  # in=16, out=32
+    n_elems = bs * (bs - 1) // 2
+    oft_R = torch.randn(r_out + r_in, n_elems, device="cuda", dtype=torch.float32) * 1e-2  # noqa: N806
+    rows, cols = torch.triu_indices(bs, bs, 1, device="cuda")
+    rows, cols = rows.to(torch.int32), cols.to(torch.int32)
+
+    R_out_ref, R_in_ref = get_weight_poet(oft_R, bs, rows, cols, r_out, r_in)  # noqa: N806
+    # Fused split order is [r_out, r_in]: first r_out rows → R_out.
+    oft_out = oft_R[:r_out].contiguous()
+    oft_in = oft_R[r_out:].contiguous()
+    R_out, R_in = get_weight_poet_decoupled(  # noqa: N806
+        oft_in, oft_out, bs, bs, rows, cols, rows, cols
+    )
+    assert torch.allclose(R_out, R_out_ref, atol=1e-6)
+    assert torch.allclose(R_in, R_in_ref, atol=1e-6)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
+def test_get_weight_poet_decoupled_unequal_blocks_matches_reference():
+    """Decoupled Cayley with unequal block sizes matches the pure-PyTorch
+    cayley_pytorch oracle per side."""
+    from poet_torch.poet_layer import get_weight_poet_decoupled
+
+    torch.manual_seed(1)
+    bs_in, bs_out = 8, 16
+    r_in, r_out = 4, 4  # in=32, out=64, block_count=4
+    n_in = bs_in * (bs_in - 1) // 2
+    n_out = bs_out * (bs_out - 1) // 2
+    oft_in = torch.randn(r_in, n_in, device="cuda", dtype=torch.float32) * 1e-2
+    oft_out = torch.randn(r_out, n_out, device="cuda", dtype=torch.float32) * 1e-2
+    rows_in, cols_in = torch.triu_indices(bs_in, bs_in, 1, device="cuda")
+    rows_out, cols_out = torch.triu_indices(bs_out, bs_out, 1, device="cuda")
+
+    R_out, R_in = get_weight_poet_decoupled(  # noqa: N806
+        oft_in,
+        oft_out,
+        bs_in,
+        bs_out,
+        rows_in.to(torch.int32),
+        cols_in.to(torch.int32),
+        rows_out.to(torch.int32),
+        cols_out.to(torch.int32),
+    )
+    R_in_ref = cayley_pytorch(oft_in.cpu(), bs_in)  # noqa: N806
+    R_out_ref = cayley_pytorch(oft_out.cpu(), bs_out)  # noqa: N806
+    assert R_in.shape == (r_in, bs_in, bs_in)
+    assert R_out.shape == (r_out, bs_out, bs_out)
+    assert torch.allclose(R_in.cpu(), R_in_ref, atol=1e-5)
+    assert torch.allclose(R_out.cpu(), R_out_ref, atol=1e-5)
