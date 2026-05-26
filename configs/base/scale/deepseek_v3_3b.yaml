@@ -1,0 +1,74 @@
+# @package _global_
+# DeepSeek-V3-style 3B-total / ~520M-activated scale.
+#
+# Mirrors the model definition in
+# /lustre/fast/fast/zqiu/tmp/Megatron-poet/training_scripts/model_args/DeepSeek-3B.yaml
+# (12L, hidden 1280, ffn 7168, 16-head MLA, 64 routed experts + 1 shared).
+# The Megatron-poet config is named "3B" because input embedding + LM head +
+# the 64×routed-expert TOTAL params reach ~3.1B. slm-research counts in
+# non-embedding ACTIVATED params (topk-6/64), which lands near 520M and drives
+# the ladder-budget math in src/utils/parallelism.py.
+#
+# Pair only with configs/base/family/deepseek_v3.yaml. This scale overrides
+# several family-level MoE knobs to match the upstream DeepSeek-V3 recipe
+# (no n-group routing, alltoall dispatcher, mtp scaling 0.3) — same backbone,
+# tuned defaults.
+#
+# Off-ladder: this is a research / proxy scale alongside
+# deepseek_v3_proxy_small. The frozen ladder (SPEC §1.2) is 300M / 600M /
+# 1.2B / 2.4B / 7B; do not promote runs at this scale as ladder rungs.
+base:
+  scale: "deepseek_v3_3b"
+  # Activated non-embedding params (excluding MTP, matching the
+  # proxy_small convention): MLA ≈ 12.14M / layer; dense layer 0 adds
+  # 27.5M for SwiGLU(1280→7168); each MoE layer adds 20.64M (topk-6 of
+  # 64 routed experts at 1280→896) + 6.88M (shared expert 1280→1792) +
+  # 0.08M (router). 1 dense + 11 MoE ⇒ ~477M activated.
+  non_embedding_params: 480_000_000
+
+  model:
+    num_layers: 12
+    hidden_size: 1280
+    ffn_hidden_size: 7168
+    num_attention_heads: 16
+    # Megatron treats MLA as a separate path; num_query_groups equal to
+    # num_attention_heads keeps the GQA branch in megatron_args.py from
+    # emitting --group-query-attention, which is the right behavior for MLA.
+    num_query_groups: 16
+    head_dim: 128
+    kv_channels: 128
+    seq_length: 4096
+    max_position_embeddings: 4096
+    tie_embeddings: false
+
+    # MLA params (override only the ones that differ from the family).
+    # The family already sets q_lora_rank=1536, kv_lora_rank=512,
+    # qk_head_dim=128, qk_pos_emb_head_dim=64, v_head_dim=128. The
+    # DeepSeek-3B recipe runs without rotary scaling (factor 1, mscale 1.0,
+    # mscale_all_dim 0.0) and ties MTP loss heavier than the family default.
+    rotary_scaling_factor: 1.0
+    mscale: 1.0
+    mscale_all_dim: 0.0
+    mtp_loss_scaling_factor: 0.3
+
+    moe:
+      # DeepSeek-V3 publication uses 64 routed experts at this size. Same as
+      # the family default but re-stated for clarity given that the
+      # proxy_small scale narrows to 16.
+      num_experts: 64
+      # 1 dense layer + 11 MoE layers. Must have len == num_layers.
+      layer_freq: "([0]*1+[1]*11)"
+      # Per-expert FFN width and shared-expert width come from the recipe.
+      ffn_hidden_size: 896
+      shared_expert_intermediate_size: 1792
+      # Plain alltoall dispatcher: the upstream recipe predates flex/DeepEP
+      # and we don't want DeepEP capability requirements on this scale.
+      token_dispatcher_type: "alltoall"
+      enable_deepep: false
+      # DeepSeek-V3-style aux-loss-free routing: sigmoid score + expert bias.
+      # The grouped-routing knobs (group_topk / num_groups) are *off* here;
+      # megatron_args.py skips the flag when these are null.
+      router_topk: 6
+      router_pre_softmax: false
+      router_group_topk: null
+      router_num_groups: null

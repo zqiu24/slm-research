@@ -1,0 +1,35 @@
+# @package _global_
+# AdamW baseline with the piecewise-constant step-decay LR schedule from
+# the Megatron-poet DeepSeek-3B reference recipe.
+#
+# Schedule shape after warmup (progress = step / lr_decay_steps):
+#   progress <  0.8       -> coeff = 1.000
+#   0.8 <= progress < 0.9 -> coeff = 0.316  (peak * 0.316)
+#   0.9 <= progress       -> coeff = 0.100  (peak * 0.1)
+#
+# Triggers patch: lr_decay_style_step (adds the "step" branch to
+# megatron.core.optimizer_param_scheduler.OptimizerParamScheduler.get_lr).
+experiment:
+  name: adamw_step_decay
+  family: optim
+  description: |
+    AdamW with Megatron-poet's piecewise-constant step decay (peak ->
+    0.316x -> 0.1x at 80% / 90% of decay budget). Same optimizer family
+    as champion; only the LR schedule differs.
+  references:
+    - "Megatron-poet/training_scripts/train_DeepSeek_3b.sh (--lr-decay-style step)"
+  patches:
+    - lr_decay_style_step
+  required_capabilities: []
+
+optim:
+  type: adamw
+  lr: 9.0e-4
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.1
+
+training:
+  lr_decay_style: step
+  lr_decay_step_ratio: [0.8, 0.9]
+  lr_decay_step_coeff: [0.316, 0.1]
