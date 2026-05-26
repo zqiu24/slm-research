@@ -276,10 +276,7 @@ def _install_poet_step_hook(wrapped_optimizer, cache_mode: str) -> None:
     ``ChainedOptimizer.prepare_grads`` ORs across all children; we MUST
     return the original's return value unchanged.
 
-    Only Mode A (``cache_mode == "cached_fwd_bwd"``) needs this hook.
-    Mode B's per-microbatch backward fills ``oft_R.grad`` via autograd
-    through CachedCayleyFn, and the normal grad-reducer + prepare_grads
-    path handles it without intervention.
+    Only ``cache_mode == "cached_fwd_bwd"`` needs this hook.
     """
     if cache_mode != "cached_fwd_bwd":
         return

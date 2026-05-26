@@ -20,8 +20,6 @@ def test_default_cache_mode_is_none():
 
 
 def test_set_cache_mode_valid():
-    pc.set_cache_mode("cached_fwd")
-    assert pc.get_cache_mode() == "cached_fwd"
     pc.set_cache_mode("cached_fwd_bwd")
     assert pc.get_cache_mode() == "cached_fwd_bwd"
     pc.set_cache_mode("none")
@@ -207,75 +205,6 @@ def test_forward_none_mode_matches_upstream_poet_linear():
     assert torch.allclose(y_cached, y_ref, atol=1e-5)
 
 
-def test_mode_b_caches_cayley_across_K_calls(monkeypatch):  # noqa: N802
-    """In cached_fwd mode, _compute_cayley runs once per cache version,
-    not K times across K forward calls in the same accumulation cycle."""
-    pc.reset_for_testing()
-    pc.set_cache_mode("cached_fwd")
-
-    layer = pc.CachedPOETLinear(
-        in_features=8,
-        out_features=16,
-        bsz=8,
-        bias=False,
-        dtype=torch.float32,
-    )
-    layer.random_init_parameters()
-    pc.register_poet_layer(layer)
-
-    call_count = {"n": 0}
-
-    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
-        call_count["n"] += 1
-        R_out = torch.eye(block_size).unsqueeze(0).repeat(r_out, 1, 1)  # noqa: N806
-        R_in = torch.eye(block_size).unsqueeze(0).repeat(r_in, 1, 1)  # noqa: N806
-        return R_out, R_in
-
-    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
-
-    for _ in range(4):
-        _R_out, _R_in = pc.CachedCayleyFn.apply(layer, layer.oft_R)  # noqa: N806
-    assert call_count["n"] == 1
-
-    pc.bump_poet_version()
-    _R_out, _R_in = pc.CachedCayleyFn.apply(layer, layer.oft_R)  # noqa: N806
-    assert call_count["n"] == 2
-
-
-def test_mode_b_backward_runs_cayley_K_times(monkeypatch):  # noqa: N802
-    """Mode B's backward rebuilds the cayley graph on every call —
-    confirms the K→1 saving is on the forward only."""
-    pc.reset_for_testing()
-    pc.set_cache_mode("cached_fwd")
-
-    layer = pc.CachedPOETLinear(
-        in_features=8,
-        out_features=16,
-        bsz=8,
-        bias=False,
-        dtype=torch.float32,
-    )
-    layer.random_init_parameters()
-    layer.oft_R.requires_grad_(True)
-
-    call_count = {"n": 0}
-
-    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
-        call_count["n"] += 1
-        scale = oft_R.sum()
-        eye_out = torch.eye(block_size).unsqueeze(0).repeat(2, 1, 1)
-        eye_in = torch.eye(block_size).unsqueeze(0).repeat(1, 1, 1)
-        return eye_out * scale, eye_in * scale
-
-    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
-
-    for _ in range(3):
-        R_out, R_in = pc.CachedCayleyFn.apply(layer, layer.oft_R)  # noqa: N806
-        (R_out.sum() + R_in.sum()).backward()
-    # 1 forward (first call only) + 3 backwards = 4 calls.
-    assert call_count["n"] == 4
-
-
 def _build_layer_for_parity(seed=0, dtype=torch.float32, device="cuda"):
     torch.manual_seed(seed)
     layer = pc.CachedPOETLinear(
@@ -289,64 +218,6 @@ def _build_layer_for_parity(seed=0, dtype=torch.float32, device="cuda"):
     layer.random_init_parameters()
     layer.oft_R.requires_grad_(True)
     return layer
-
-
-def test_mode_b_single_microbatch_parity_with_none():
-    """Mode B's forward output and oft_R.grad must match mode none
-    within float tolerance for a single forward+backward.
-
-    GPU-only.
-    """
-    if not torch.cuda.is_available():
-        pytest.skip("requires CUDA Triton kernel")
-
-    pc.reset_for_testing()
-    x = torch.randn(4, 16, device="cuda", dtype=torch.float32)
-
-    pc.set_cache_mode("none")
-    layer_n = _build_layer_for_parity()
-    y_n = layer_n(x)
-    y_n.sum().backward()
-    g_n = layer_n.oft_R.grad.detach().clone()
-
-    pc.set_cache_mode("cached_fwd")
-    layer_b = _build_layer_for_parity()
-    y_b = layer_b(x)
-    y_b.sum().backward()
-    g_b = layer_b.oft_R.grad.detach().clone()
-
-    assert torch.allclose(y_n, y_b, atol=1e-5)
-    assert torch.allclose(g_n, g_b, atol=1e-5)
-
-
-def test_mode_b_K_microbatch_accumulation_parity_with_none():  # noqa: N802
-    """K=4 micro-batches: mode B's accumulated oft_R.grad must match
-    mode none within float tolerance. Spec §13.2.
-
-    GPU-only.
-    """
-    if not torch.cuda.is_available():
-        pytest.skip("requires CUDA Triton kernel")
-    K = 4  # noqa: N806
-    xs = [torch.randn(4, 16, device="cuda", dtype=torch.float32) for _ in range(K)]
-
-    pc.reset_for_testing()
-    pc.set_cache_mode("none")
-    layer_n = _build_layer_for_parity()
-    for x in xs:
-        y = layer_n(x)
-        y.sum().backward()
-    g_n = layer_n.oft_R.grad.detach().clone()
-
-    pc.reset_for_testing()
-    pc.set_cache_mode("cached_fwd")
-    layer_b = _build_layer_for_parity()
-    for x in xs:
-        y = layer_b(x)
-        y.sum().backward()
-    g_b = layer_b.oft_R.grad.detach().clone()
-
-    assert torch.allclose(g_n, g_b, atol=1e-5)
 
 
 def test_mode_a_caches_cayley_across_K_calls(monkeypatch):  # noqa: N802

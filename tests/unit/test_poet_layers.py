@@ -71,7 +71,7 @@ def test_replace_uses_cached_poet_linear_when_cache_mode_set():
         block_size=8,
         init_type="none",
         extra_linear_types=(nn.Linear,),
-        cache_mode="cached_fwd",
+        cache_mode="cached_fwd_bwd",
     )
     assert n == 1
     assert isinstance(m.fc1.poet_linear, pc.CachedPOETLinear)

@@ -24,8 +24,8 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-CacheMode = Literal["none", "cached_fwd", "cached_fwd_bwd"]
-_VALID_MODES: tuple[CacheMode, ...] = ("none", "cached_fwd", "cached_fwd_bwd")
+CacheMode = Literal["none", "cached_fwd_bwd"]
+_VALID_MODES: tuple[CacheMode, ...] = ("none", "cached_fwd_bwd")
 
 _POET_CACHE_MODE: CacheMode = "none"
 _POET_VERSION: int = 0
@@ -143,6 +143,13 @@ class CachedPOETLinear(POETLinear):
         The leaves' `.grad` accumulates naturally across micro-batches.
         At end-of-cycle, `_flush_R_grads_to_oft_R` runs one manual VJP
         through `_R_*_full` to push the summed gradient back to `oft_R`.
+
+        We pre-allocate the leaves' `.grad` as fp32 even when the leaves
+        themselves are bf16, so autograd's in-place accumulation casts
+        each bf16 contribution up to fp32 on the way in. This mirrors
+        Megatron's `param.main_grad` pattern: bf16 per-element gradients
+        accumulated K times in a bf16 buffer lose precision rapidly,
+        but accumulated in an fp32 buffer they stay at the fp32 floor.
         """
         if self._R_cache_version != get_poet_version():
             with torch.enable_grad():
@@ -202,13 +209,10 @@ class CachedPOETLinear(POETLinear):
         mode = get_cache_mode()
         if mode == "none":
             return super().forward(x)
-        if mode == "cached_fwd":
-            R_out, R_in = CachedCayleyFn.apply(self, self.oft_R)  # noqa: N806
-        elif mode == "cached_fwd_bwd":
-            R_out, R_in = self._get_R_blocks_mode_a()  # noqa: N806  # added in Task 5
-        else:
+        if mode != "cached_fwd_bwd":
             raise ValueError(f"unknown poet_cache_mode: {mode!r}")
-        return chain_layer_x_checkpoint_mem_o2(
+        R_out, R_in = self._get_R_blocks_mode_a()  # noqa: N806
+        return _cached_chain_layer_core(
             x,
             R_in,
             self.weight,
@@ -222,50 +226,40 @@ class CachedPOETLinear(POETLinear):
         )
 
 
-class CachedCayleyFn(torch.autograd.Function):
-    """Mode B: cache (R_out, R_in) between forwards, recompute on backward.
+@torch.compile(fullgraph=True)
+def _cached_chain_layer_core(
+    x: Tensor,
+    R_in: Tensor,  # noqa: N803
+    weight: Tensor,
+    bias: Tensor,
+    R_out: Tensor,  # noqa: N803
+    perm_in_inv: Tensor,
+    perm_in: Tensor,
+    perm_out: Tensor,
+    perm_out_inv: Tensor,
+    block_size: int,
+) -> Tensor:
+    """Mode A hot path mirror of upstream `forward_core`.
 
-    Forward: O(1) when version matches the cached one; rebuild otherwise.
-    Backward: always rebuild the cayley graph and run autograd.grad. Per
-    cycle of K micro-batches this is `K` backwards vs `K` for the
-    no-cache path — Mode B's saving is forward-only.
+    Upstream's `forward_core` is wrapped in `@torch.compile(fullgraph=True)`
+    and fuses Cayley + chain_layer in one compiled region. Mode A skips
+    the Cayley step (it's cached and supplied via R_in/R_out), so we wrap
+    only the chain_layer call here with the same decorator. Without this,
+    every microbatch's linear call runs uncompiled and the per-call
+    overhead drowns the (K-1) Cayley savings for large shapes.
     """
-
-    @staticmethod
-    def forward(ctx, layer: CachedPOETLinear, oft_R: Tensor):  # noqa: N803
-        if layer._R_cache_version != get_poet_version():
-            with torch.no_grad():
-                R_out, R_in = _compute_cayley(  # noqa: N806
-                    oft_R,
-                    layer.block_size,
-                    layer.rows,
-                    layer.cols,
-                    layer.r_in,
-                    layer.r_out,
-                )
-            layer._R_out_leaf = R_out
-            layer._R_in_leaf = R_in
-            layer._R_cache_version = get_poet_version()
-        ctx.layer = layer
-        ctx.save_for_backward(oft_R)
-        return layer._R_out_leaf, layer._R_in_leaf
-
-    @staticmethod
-    def backward(ctx, gR_out: Tensor, gR_in: Tensor):  # noqa: N803
-        (oft_R,) = ctx.saved_tensors  # noqa: N806
-        layer = ctx.layer
-        with torch.enable_grad():
-            x = oft_R.detach().requires_grad_(True)
-            R_out, R_in = _compute_cayley(  # noqa: N806
-                x,
-                layer.block_size,
-                layer.rows,
-                layer.cols,
-                layer.r_in,
-                layer.r_out,
-            )
-            (g,) = torch.autograd.grad((R_out, R_in), x, (gR_out, gR_in))
-        return None, g
+    return chain_layer_x_checkpoint_mem_o2(
+        x,
+        R_in,
+        weight,
+        bias,
+        R_out,
+        perm_in_inv,
+        perm_in,
+        perm_out,
+        perm_out_inv,
+        block_size,
+    )
 
 
 def invalidate_all_poet_caches() -> None:

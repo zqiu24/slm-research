@@ -36,7 +36,7 @@ def test_run_merge_invalidates_cache_on_cached_poet_linear():
     from src.patches.poet_merge_step import _run_merge
 
     pc.reset_for_testing()
-    pc.set_cache_mode("cached_fwd")
+    pc.set_cache_mode("cached_fwd_bwd")
 
     layer = pc.CachedPOETLinear(
         in_features=8,

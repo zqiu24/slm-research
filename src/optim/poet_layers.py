@@ -161,12 +161,13 @@ def replace_linears_with_poet(
                     skipped += 1
                     continue
 
+                has_bias = child.bias is not None and child.bias.numel() > 0
                 if cache_mode == "none":
                     pl = POETLinear(
                         in_features=in_f,
                         out_features=out_f,
                         bsz=block_size,
-                        bias=child.bias is not None,
+                        bias=has_bias,
                         device=child.weight.device,
                         dtype=child.weight.dtype,
                     )
@@ -175,7 +176,7 @@ def replace_linears_with_poet(
                         in_features=in_f,
                         out_features=out_f,
                         bsz=block_size,
-                        bias=child.bias is not None,
+                        bias=has_bias,
                         device=child.weight.device,
                         dtype=child.weight.dtype,
                     )
@@ -193,7 +194,7 @@ def replace_linears_with_poet(
                         w = w * (target / current).to(dtype=w.dtype, device=w.device)
                     # init_type == "none": leave w unchanged.
                     pl.weight.copy_(w.to(pl.weight.dtype))
-                    if child.bias is not None:
+                    if has_bias:
                         pl.bias.copy_(child.bias.data.to(pl.bias.dtype))
 
                 wrapper = POETMegatronLinear(

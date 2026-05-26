@@ -34,7 +34,7 @@ optim:
   eps: 1.0e-8
   poet:
     block_size: 256
-    cache_mode: none        # "none" | "cached_fwd" | "cached_fwd_bwd"
+    cache_mode: cached_fwd_bwd  # "none" | "cached_fwd_bwd" — caches the Cayley fwd+bwd across the K microbatches of a gradient-accumulation cycle. Override with optim.poet.cache_mode=none.
     init_type: normalized   # "none" | "normalized" | "mup_normalized"
     mup_alpha: 1.0
     merge_period: 200       # 0 disables periodic merge

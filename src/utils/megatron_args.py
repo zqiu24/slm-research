@@ -33,6 +33,19 @@ def _model_args(cfg: DictConfig) -> list[str]:
     args: list[str] = []
 
     _add(args, "--use-mcore-models")
+    if model.get("transformer_impl", None) is not None:
+        _add(args, "--transformer-impl", model.transformer_impl)
+        if str(model.transformer_impl) == "local":
+            # Local impl uses torch.nn.LayerNorm via WrappedTorchNorm, which
+            # asserts `not config.persist_layer_norm`. The TE-backed fused
+            # persistent layernorm kernel isn't reachable from this path.
+            _add(args, "--no-persist-layer-norm")
+            # Megatron's local DotProductAttention dispatches into
+            # FusedScaleMaskSoftmax, whose CUDA kernel on this cluster ships
+            # PTX newer than the installed driver supports (raises
+            # cudaErrorUnsupportedPtxVersion at the first forward step). Fall
+            # back to the plain torch softmax path.
+            _add(args, "--no-masked-softmax-fusion")
     _add(args, "--num-layers", model.num_layers)
     _add(args, "--hidden-size", model.hidden_size)
     _add(args, "--ffn-hidden-size", model.ffn_hidden_size)

@@ -50,4 +50,5 @@ python -m launchers.train_megatron \
   "experiment=optim/poet" \
   "base.model.seq_length=256" \
   "training.seq_length=256" \
+  "base.model.transformer_impl=local" \
   "$@"
