@@ -531,6 +531,147 @@ torch.library.register_autograd(
     setup_context=chain_layer_checkpoint_mem_o2_setup_context
 )
 
+
+######################## Chain Layer Checkpoint Slow (Decoupled block sizes) ########################
+# Identical math to chain_layer_checkpoint_mem_o2, but the input side uses
+# ``bsz_in`` and the output side uses ``bsz_out``. The block size only ever
+# appears as a reshape dimension (rin*bsz_in == in_features,
+# rout*bsz_out == out_features), so decoupling is purely mechanical: use the
+# right block size on each side. When bsz_in == bsz_out this is bit-identical
+# to the coupled op (same op sequence).
+
+@torch.library.custom_op("poet::chain_layer_checkpoint_mem_o2_decoupled", mutates_args=())
+def chain_layer_checkpoint_mem_o2_decoupled(
+    x: torch.Tensor,
+    Rin: torch.Tensor,
+    W: torch.Tensor,
+    b: Optional[torch.Tensor],
+    Rout: torch.Tensor,
+    perm_in_inv: torch.Tensor,
+    perm_in: torch.Tensor,
+    perm_out: torch.Tensor,
+    perm_out_inv: torch.Tensor,
+    bsz_in: int,
+    bsz_out: int,
+) -> torch.Tensor:
+    leading_shape = x.shape[:-1]  # everything except hidden dim
+    Din = x.shape[-1]
+    N = x.numel() // Din          # flatten all leading dims
+
+    x = x[..., perm_in_inv]
+
+    rin = Rin.size(0)
+    rout = Rout.size(0)
+
+    # x @ Rin  (input side: bsz_in)
+    xb = x.reshape(N, rin, bsz_in)           # [N, rin, b_in]
+    xb_r = xb.transpose(0, 1)                # [rin, N, b_in]
+    xR_r = torch.bmm(xb_r, Rin)              # [rin, N, b_in]
+    xR = xR_r.transpose(0, 1).reshape(N, rin * bsz_in)
+
+    # xR @ W^T (+b)
+    yb_flat = xR @ W.t()                     # [N, rout*b_out]
+    if b is not None:
+        yb_flat = yb_flat + b
+
+    # yb_flat @ Rout  (output side: bsz_out)
+    yb = yb_flat.view(N, rout, bsz_out)      # [N, rout, b_out]
+    yb_r = yb.transpose(0, 1)                # [rout, N, b_out]
+    y = torch.bmm(yb_r, Rout)                # [rout, N, b_out]
+    y = y.transpose(0, 1).reshape(*leading_shape, rout * bsz_out)
+
+    y = y[..., perm_out]
+
+    return y
+
+
+def chain_layer_checkpoint_mem_o2_decoupled_setup_context(ctx, inputs, output):
+    x, Rin, W, b, Rout, perm_in_inv, perm_in, perm_out, perm_out_inv, bsz_in, bsz_out = inputs
+    ctx.save_for_backward(x, Rin, Rout, perm_in_inv, perm_in, perm_out, perm_out_inv)
+    ctx.W = W
+    ctx.b = b
+    ctx.bsz_in = bsz_in
+    ctx.bsz_out = bsz_out
+
+
+def chain_layer_checkpoint_mem_o2_decoupled_backward(ctx, g_orig):
+    x_orig, Rin, Rout, perm_in_inv, perm_in, perm_out, perm_out_inv = ctx.saved_tensors
+    W = ctx.W
+    b = ctx.b
+    bsz_in = ctx.bsz_in
+    bsz_out = ctx.bsz_out
+
+    leading_shape = g_orig.shape[:-1]
+    Dout = g_orig.shape[-1]
+    N = g_orig.numel() // Dout
+
+    rin = Rin.size(0)
+    rout = Rout.size(0)
+
+    # Recompute the permuted x from saved original
+    g = g_orig[..., perm_out_inv]
+    del g_orig
+
+    x = x_orig[..., perm_in_inv]
+    del x_orig
+
+    # --- Phase 1: grad_Rout (compute and free yb early) ---
+    xb_r = x.reshape(N, rin, bsz_in).transpose(0, 1)
+    xR_r = torch.bmm(xb_r, Rin)
+    xR = xR_r.transpose(0, 1).reshape(N, rin * bsz_in)
+    del xR_r
+
+    if b is not None:
+        yb = (xR @ W.t() + b).view(N, rout, bsz_out)
+    else:
+        yb = (xR @ W.t()).view(N, rout, bsz_out)
+    del xR
+
+    g_t = g.reshape(N, rout, bsz_out).transpose(0, 1)
+    grad_Rout = torch.bmm(yb.transpose(0, 1).transpose(1, 2), g_t)
+    del yb
+
+    # --- Phase 2: g_xR (compute and free g_yb early) ---
+    g_yb_t = torch.bmm(g_t, Rout.transpose(1, 2))
+    del g_t, g
+    g_yb = g_yb_t.transpose(0, 1).reshape(N, rout * bsz_out)
+    del g_yb_t
+    g_xR = g_yb @ W
+    del g_yb
+
+    # --- Phase 3: grad_Rin ---
+    g_xR_3 = g_xR.view(N, rin, bsz_in).transpose(0, 1)
+    grad_Rin = torch.bmm(xb_r.transpose(1, 2), g_xR_3)
+
+    # Free the permuted x copy — no longer needed
+    del xb_r, x
+
+    # --- Phase 4: grad_x ---
+    g_xb_r = torch.bmm(g_xR_3, Rin.transpose(1, 2))
+    del g_xR, g_xR_3
+    grad_x = g_xb_r.transpose(0, 1).reshape(*leading_shape, rin * bsz_in)
+    del g_xb_r
+
+    # Un-permute gradient back to original x's coordinate system
+    grad_x = grad_x[..., perm_in]
+
+    # inputs: x, Rin, W, b, Rout, perm_in_inv, perm_in, perm_out, perm_out_inv, bsz_in, bsz_out
+    return grad_x, grad_Rin, None, None, grad_Rout, None, None, None, None, None, None
+
+
+@chain_layer_checkpoint_mem_o2_decoupled.register_fake
+def _(x, Rin, W, b, Rout, perm_in_inv, perm_in, perm_out, perm_out_inv, bsz_in, bsz_out):
+    Dout = W.shape[0]
+    y = x.new_empty(*x.shape[:-1], Dout, device=x.device, dtype=x.dtype)
+    return y
+
+
+torch.library.register_autograd(
+    "poet::chain_layer_checkpoint_mem_o2_decoupled",
+    chain_layer_checkpoint_mem_o2_decoupled_backward,
+    setup_context=chain_layer_checkpoint_mem_o2_decoupled_setup_context
+)
+
 ################################# Cayley #################################
 def cayley_get_configs(pre_hook=None):
     return [

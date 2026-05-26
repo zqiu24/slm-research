@@ -312,3 +312,118 @@ def test_get_weight_poet_decoupled_unequal_blocks_matches_reference():
     assert R_out.shape == (r_out, bs_out, bs_out)
     assert torch.allclose(R_in.cpu(), R_in_ref, atol=1e-5)
     assert torch.allclose(R_out.cpu(), R_out_ref, atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# Decoupled chain_layer op (poet::chain_layer_checkpoint_mem_o2_decoupled).
+# The op is pure-PyTorch (no Triton), so it runs on CPU too; we exercise it on
+# CUDA when available (the plan's single-GPU scope) but fall back to CPU.
+# ---------------------------------------------------------------------------
+
+_OP_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _chain_pytorch_decoupled(x, Rin, W, bias, Rout, perm_in_inv, perm_out, bs_in, bs_out):  # noqa: N803
+    """Op-level pure-PyTorch oracle: R blocks supplied directly (no Cayley)."""
+    x = x.index_select(-1, perm_in_inv.long())
+    x = apply_block_diag(x, Rin, bs_in)
+    y = x @ W.t()
+    if bias is not None:
+        y = y + bias
+    y = apply_block_diag(y, Rout, bs_out)
+    return y.index_select(-1, perm_out.long())
+
+
+def _make_op_inputs(in_f, out_f, bs_in, bs_out, device, dtype=torch.float32, seed=0, batch=4):
+    import poet_torch.poet_ops  # noqa: F401  (registers torch.ops.poet.* custom ops)
+
+    torch.manual_seed(seed)
+    r_in, r_out = in_f // bs_in, out_f // bs_out
+    R_in = cayley_pytorch(  # noqa: N806
+        torch.randn(r_in, bs_in * (bs_in - 1) // 2, dtype=dtype) * 1e-2, bs_in
+    ).to(device)
+    R_out = cayley_pytorch(  # noqa: N806
+        torch.randn(r_out, bs_out * (bs_out - 1) // 2, dtype=dtype) * 1e-2, bs_out
+    ).to(device)
+    W = torch.randn(out_f, in_f, device=device, dtype=dtype)  # noqa: N806
+    perm_in = torch.randperm(in_f, device=device)
+    perm_out = torch.randperm(out_f, device=device)
+    perm_in_inv = torch.argsort(perm_in).to(torch.int32)
+    perm_out_inv = torch.argsort(perm_out).to(torch.int32)
+    perm_in = perm_in.to(torch.int32)
+    perm_out = perm_out.to(torch.int32)
+    x = torch.randn(batch, in_f, device=device, dtype=dtype)
+    return x, R_in, R_out, W, perm_in, perm_in_inv, perm_out, perm_out_inv
+
+
+def test_decoupled_op_matches_coupled_op_when_blocks_equal():
+    """Hard constraint #1: with bsz_in == bsz_out the decoupled op must be
+    bit-equivalent to the existing coupled op (same operation sequence)."""
+    x, R_in, R_out, W, p_in, p_in_inv, p_out, p_out_inv = _make_op_inputs(  # noqa: N806
+        32, 64, 8, 8, _OP_DEVICE, seed=1
+    )
+    y_old = torch.ops.poet.chain_layer_checkpoint_mem_o2(
+        x, R_in, W, None, R_out, p_in_inv, p_in, p_out, p_out_inv, 8
+    )
+    y_new = torch.ops.poet.chain_layer_checkpoint_mem_o2_decoupled(
+        x, R_in, W, None, R_out, p_in_inv, p_in, p_out, p_out_inv, 8, 8
+    )
+    assert torch.equal(y_old, y_new), f"max abs diff {(y_old - y_new).abs().max().item():.2e}"
+
+
+def test_decoupled_op_unequal_blocks_matches_reference():
+    """Forward parity (unequal block sizes) vs the pure-PyTorch op-level oracle."""
+    x, R_in, R_out, W, p_in, p_in_inv, p_out, p_out_inv = _make_op_inputs(  # noqa: N806
+        32, 64, 8, 16, _OP_DEVICE, seed=2
+    )
+    y_op = torch.ops.poet.chain_layer_checkpoint_mem_o2_decoupled(
+        x, R_in, W, None, R_out, p_in_inv, p_in, p_out, p_out_inv, 8, 16
+    )
+    y_ref = _chain_pytorch_decoupled(x, R_in, W, None, R_out, p_in_inv, p_out, 8, 16)
+    assert torch.allclose(
+        y_op, y_ref, atol=1e-4
+    ), f"max abs diff {(y_op - y_ref).abs().max().item():.2e}"
+
+
+def test_decoupled_op_with_bias_matches_reference():
+    """Forward parity with a bias term."""
+    x, R_in, R_out, W, p_in, p_in_inv, p_out, p_out_inv = _make_op_inputs(  # noqa: N806
+        32, 64, 8, 16, _OP_DEVICE, seed=3
+    )
+    bias = torch.randn(64, device=_OP_DEVICE)
+    y_op = torch.ops.poet.chain_layer_checkpoint_mem_o2_decoupled(
+        x, R_in, W, bias, R_out, p_in_inv, p_in, p_out, p_out_inv, 8, 16
+    )
+    y_ref = _chain_pytorch_decoupled(x, R_in, W, bias, R_out, p_in_inv, p_out, 8, 16)
+    assert torch.allclose(y_op, y_ref, atol=1e-4)
+
+
+def test_decoupled_op_backward_matches_reference():
+    """Backward parity (unequal blocks): grads wrt x, R_in, R_out from the op's
+    hand-written backward match autograd through the pure-PyTorch oracle."""
+    x, R_in, R_out, W, p_in, p_in_inv, p_out, p_out_inv = _make_op_inputs(  # noqa: N806
+        32, 64, 8, 16, _OP_DEVICE, seed=4
+    )
+
+    def run(fn):
+        xx = x.clone().requires_grad_(True)
+        ri = R_in.clone().requires_grad_(True)
+        ro = R_out.clone().requires_grad_(True)
+        y = fn(xx, ri, ro)
+        loss = (
+            y * torch.arange(1, y.numel() + 1, device=y.device, dtype=y.dtype).reshape_as(y)
+        ).sum()
+        loss.backward()
+        return xx.grad, ri.grad, ro.grad
+
+    gx_op, gri_op, gro_op = run(
+        lambda xx, ri, ro: torch.ops.poet.chain_layer_checkpoint_mem_o2_decoupled(
+            xx, ri, W, None, ro, p_in_inv, p_in, p_out, p_out_inv, 8, 16
+        )
+    )
+    gx_ref, gri_ref, gro_ref = run(
+        lambda xx, ri, ro: _chain_pytorch_decoupled(xx, ri, W, None, ro, p_in_inv, p_out, 8, 16)
+    )
+    assert torch.allclose(gx_op, gx_ref, atol=1e-3, rtol=1e-3)
+    assert torch.allclose(gri_op, gri_ref, atol=1e-3, rtol=1e-3)
+    assert torch.allclose(gro_op, gro_ref, atol=1e-3, rtol=1e-3)

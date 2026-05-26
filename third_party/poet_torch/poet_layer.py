@@ -22,7 +22,12 @@ def permute_x(x, perm, inv_perm):
 def chain_layer_x_checkpoint_mem_o2(x: torch.Tensor, Rin: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor], Rout: torch.Tensor,
                                     perm_in_inv: torch.Tensor, perm_in: torch.Tensor, perm_out: torch.Tensor, perm_out_inv: torch.Tensor, block_size: int) -> torch.Tensor:
     return torch.ops.poet.chain_layer_checkpoint_mem_o2(x, Rin, weight, bias, Rout, perm_in_inv, perm_in, perm_out, perm_out_inv, block_size)
-    
+
+def chain_layer_x_checkpoint_mem_o2_decoupled(x: torch.Tensor, Rin: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor], Rout: torch.Tensor,
+                                              perm_in_inv: torch.Tensor, perm_in: torch.Tensor, perm_out: torch.Tensor, perm_out_inv: torch.Tensor,
+                                              block_size_in: int, block_size_out: int) -> torch.Tensor:
+    return torch.ops.poet.chain_layer_checkpoint_mem_o2_decoupled(x, Rin, weight, bias, Rout, perm_in_inv, perm_in, perm_out, perm_out_inv, block_size_in, block_size_out)
+
 def chain_layer_x_checkpoint(x: torch.Tensor, Rin: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor], Rout: torch.Tensor, block_size: int) -> torch.Tensor:
     return torch.ops.poet.chain_layer_checkpoint(x, Rin, weight, bias, Rout, block_size)
 
