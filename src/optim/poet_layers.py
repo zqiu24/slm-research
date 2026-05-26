@@ -104,6 +104,7 @@ def replace_linears_with_poet(
     model: nn.Module,
     *,
     block_size: int = 256,
+    block_count: int | None = None,
     init_type: str = "normalized",
     mup_alpha: float = 1.0,
     skip_lm_head: bool = True,
@@ -150,35 +151,44 @@ def replace_linears_with_poet(
                     skipped += 1
                     continue
                 out_f, in_f = child.weight.shape
-                if in_f % block_size != 0 or out_f % block_size != 0:
+                # block_count (when set) takes precedence over block_size.
+                divisor = block_count if block_count is not None else block_size
+                if in_f % divisor != 0 or out_f % divisor != 0:
                     logger.info(
-                        "[POET] skip %s: dims (%d, %d) not divisible by %d",
+                        "[POET] skip %s: dims (%d, %d) not divisible by %s=%d",
                         full,
                         in_f,
                         out_f,
-                        block_size,
+                        "block_count" if block_count is not None else "block_size",
+                        divisor,
                     )
                     skipped += 1
                     continue
+
+                # Exactly one of bsz / block_count is forwarded to POETLinear.
+                if block_count is not None:
+                    block_kwargs = {"block_count": block_count}
+                else:
+                    block_kwargs = {"bsz": block_size}
 
                 has_bias = child.bias is not None and child.bias.numel() > 0
                 if cache_mode == "none":
                     pl = POETLinear(
                         in_features=in_f,
                         out_features=out_f,
-                        bsz=block_size,
                         bias=has_bias,
                         device=child.weight.device,
                         dtype=child.weight.dtype,
+                        **block_kwargs,
                     )
                 else:
                     pl = _poet_cache.CachedPOETLinear(
                         in_features=in_f,
                         out_features=out_f,
-                        bsz=block_size,
                         bias=has_bias,
                         device=child.weight.device,
                         dtype=child.weight.dtype,
+                        **block_kwargs,
                     )
                     _poet_cache.register_poet_layer(pl)
                 with torch.no_grad():

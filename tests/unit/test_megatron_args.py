@@ -120,3 +120,43 @@ def test_poet_argv_includes_cache_mode():
     args = _optimizer_args(cfg)
     assert "--poet-cache-mode" in args
     assert "cached_fwd_bwd" in args
+
+
+def _poet_cfg(poet_overrides):
+    return OmegaConf.create(
+        {
+            "optim": {
+                "type": "poet",
+                "lr": 3e-4,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.95],
+                "eps": 1e-8,
+                "poet": {
+                    "init_type": "normalized",
+                    "mup_alpha": 1.0,
+                    "merge_period": 200,
+                    "scale": 1.0,
+                    **poet_overrides,
+                },
+            }
+        }
+    )
+
+
+def test_poet_argv_emits_block_size_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-block-size" in args
+    assert "--poet-block-count" not in args
+    assert args[args.index("--poet-block-size") + 1] == "256"
+
+
+def test_poet_argv_emits_block_count_when_set():
+    from src.utils.megatron_args import _optimizer_args
+
+    # block_count takes precedence; block_size must NOT be emitted alongside it.
+    args = _optimizer_args(_poet_cfg({"block_size": 256, "block_count": 8}))
+    assert "--poet-block-count" in args
+    assert "--poet-block-size" not in args
+    assert args[args.index("--poet-block-count") + 1] == "8"

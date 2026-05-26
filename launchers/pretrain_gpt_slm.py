@@ -27,7 +27,13 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         "--slm-optimizer", choices=["adamw", "muon", "poet", "ngpt_adamw"], default="adamw"
     )
     group.add_argument("--poet", action="store_true")
-    group.add_argument("--poet-block-size", type=int, default=256)
+    # block_size and block_count are mutually exclusive: block_size uses one
+    # shared block size on both sides; block_count gives each side `n` blocks
+    # with potentially different block sizes (in/n, out/n). Defaults don't count
+    # as "provided", so block_count=None + block_size=256 is the legacy default.
+    poet_block_group = group.add_mutually_exclusive_group()
+    poet_block_group.add_argument("--poet-block-size", type=int, default=256)
+    poet_block_group.add_argument("--poet-block-count", type=int, default=None)
     group.add_argument(
         "--poet-init-type",
         choices=["none", "normalized", "mup_normalized"],

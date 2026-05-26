@@ -30,6 +30,7 @@ def apply() -> None:
         if not getattr(args, "poet", False):
             return model
         block = getattr(args, "poet_block_size", 256)
+        block_count = getattr(args, "poet_block_count", None)
         init = getattr(args, "poet_init_type", "normalized")
         mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
         cache_mode = getattr(args, "poet_cache_mode", "none")
@@ -39,6 +40,7 @@ def apply() -> None:
             total += replace_linears_with_poet(
                 m,
                 block_size=block,
+                block_count=block_count,
                 init_type=init,
                 mup_alpha=mup_alpha,
                 cache_mode=cache_mode,

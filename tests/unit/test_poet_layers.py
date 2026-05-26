@@ -19,6 +19,15 @@ class ToyModel(nn.Module):
         self.output_layer = nn.Linear(16, 16, bias=False)  # name-skipped
 
 
+class DecoupledToyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # in=8, out=16 → block_count=4 ⇒ bs_in=2, bs_out=4 (decoupled).
+        self.fc1 = nn.Linear(8, 16, bias=False)
+        # in=8, out=12 → block_count=4 divides both; bs_in=2, bs_out=3.
+        self.fc2 = nn.Linear(8, 12, bias=False)
+
+
 def test_replace_skips_indivisible_dims():
     m = ToyModel()
     n_replaced = replace_linears_with_poet(
@@ -98,3 +107,45 @@ def test_replace_uses_upstream_poet_linear_when_cache_mode_none():
     # In `none` mode we use upstream POETLinear and do NOT register.
     assert type(m.fc1.poet_linear) is POETLinear
     assert list(pc.iter_live_layers()) == []
+
+
+def test_replace_with_block_count_builds_decoupled_layers():
+    """block_count plumbs through to POETLinear(block_count=...), giving each
+    side `n` blocks with potentially different block sizes."""
+    m = DecoupledToyModel()
+    n = replace_linears_with_poet(
+        m,
+        block_count=4,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+    )
+    assert n == 2
+    fc1 = m.fc1.poet_linear  # in=8, out=16
+    assert fc1.block_size_in == 2 and fc1.block_size_out == 4
+    assert fc1.r_in == 4 and fc1.r_out == 4
+    fc2 = m.fc2.poet_linear  # in=8, out=12
+    assert fc2.block_size_in == 2 and fc2.block_size_out == 3
+
+
+def test_replace_with_block_count_skips_indivisible():
+    """A layer whose dims aren't divisible by block_count is skipped, not raised."""
+    m = ToyModel()  # fc1 8x16 ok for bc=4; fc2 16x13 (13%4!=0) skipped; output skipped
+    n = replace_linears_with_poet(
+        m,
+        block_count=4,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+    )
+    assert n == 1
+    assert isinstance(m.fc1, POETMegatronLinear)
+    assert isinstance(m.fc2, nn.Linear)  # skipped (13 not divisible by 4)
+
+
+def test_block_count_validation_raises_at_layer_construction():
+    """Task 8.6: a block_count that doesn't divide the layer dims raises a
+    clear ValueError when the POETLinear is constructed directly."""
+    import pytest
+    from poet_torch import POETLinear
+
+    with pytest.raises(ValueError, match="block_count 7 doesn't divide"):
+        POETLinear(in_features=1536, out_features=1536, block_count=7, dtype=torch.float32)

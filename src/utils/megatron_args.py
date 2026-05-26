@@ -218,6 +218,12 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
 
     if kind == "poet":
         poet = optim.poet
+        # block_count (decoupled block sizes) takes precedence over block_size.
+        block_count = poet.get("block_count", None)
+        if block_count is not None:
+            block_args = ["--poet-block-count", block_count]
+        else:
+            block_args = ["--poet-block-size", poet.block_size]
         return _sequence(
             [
                 "--optimizer",
@@ -225,8 +231,7 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 "--slm-optimizer",
                 "poet",
                 "--poet",
-                "--poet-block-size",
-                poet.block_size,
+                *block_args,
                 "--poet-init-type",
                 poet.init_type,
                 "--poet-mup-alpha",
