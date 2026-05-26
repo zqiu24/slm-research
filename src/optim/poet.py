@@ -231,10 +231,16 @@ def _sync_oft_R_grads_across_dp(layers) -> None:  # noqa: N802
 
     grads = []
     for layer in layers:
-        if hasattr(layer.oft_R, "main_grad") and layer.oft_R.main_grad is not None:
-            grads.append(layer.oft_R.main_grad)
-        elif layer.oft_R.grad is not None:
-            grads.append(layer.oft_R.grad)
+        # Decoupled layers expose oft_R_in / oft_R_out; legacy callers may
+        # still expose a single oft_R. Sync whichever exist.
+        for name in ("oft_R_in", "oft_R_out", "oft_R"):
+            p = getattr(layer, name, None)
+            if p is None:
+                continue
+            if hasattr(p, "main_grad") and p.main_grad is not None:
+                grads.append(p.main_grad)
+            elif p.grad is not None:
+                grads.append(p.grad)
     if not grads:
         return
     dp_group = mpu.get_data_parallel_group()
