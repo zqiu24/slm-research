@@ -96,8 +96,12 @@ def _model_args(cfg: DictConfig) -> list[str]:
         _maybe_bool(args, "--moe-router-pre-softmax", moe.router_pre_softmax)
         _maybe_bool(args, "--moe-grouped-gemm", moe.grouped_gemm)
         _add(args, "--moe-aux-loss-coeff", moe.aux_loss_coeff)
-        _add(args, "--moe-router-group-topk", moe.router_group_topk)
-        _add(args, "--moe-router-num-groups", moe.router_num_groups)
+        # DeepSeek-V3 n-group routing is optional; scales that disable it (e.g.
+        # the DeepSeek-3B recipe) set these to null and we omit the flags.
+        if moe.get("router_group_topk", None) is not None:
+            _add(args, "--moe-router-group-topk", moe.router_group_topk)
+        if moe.get("router_num_groups", None) is not None:
+            _add(args, "--moe-router-num-groups", moe.router_num_groups)
         _add(args, "--moe-router-topk-scaling-factor", moe.router_topk_scaling_factor)
         _add(args, "--moe-router-score-function", moe.router_score_function)
         _maybe_bool(args, "--moe-router-enable-expert-bias", moe.router_enable_expert_bias)
@@ -138,7 +142,20 @@ def _training_args(cfg: DictConfig) -> list[str]:
     _add(args, "--lr-warmup-samples", warmup_samples)
     _add(args, "--lr", optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3)))
     _add(args, "--min-lr", training.get("min_lr", 1.0e-5))
-    _add(args, "--lr-decay-style", training.get("lr_decay_style", "cosine"))
+    lr_decay_style = str(training.get("lr_decay_style", "cosine"))
+    _add(args, "--lr-decay-style", lr_decay_style)
+    if lr_decay_style == "step":
+        ratio = training.get("lr_decay_step_ratio", None)
+        coeff = training.get("lr_decay_step_coeff", None)
+        if ratio is None or coeff is None:
+            raise ValueError(
+                "training.lr_decay_style=step requires training.lr_decay_step_ratio "
+                "and training.lr_decay_step_coeff"
+            )
+        args.append("--lr-decay-step-ratio")
+        args.extend(str(float(r)) for r in ratio)
+        args.append("--lr-decay-step-coeff")
+        args.extend(str(float(c)) for c in coeff)
     _add(args, "--clip-grad", training.get("clip_grad", 1.0))
     _add(args, "--weight-decay", optim.get("weight_decay", 0.1))
     _add(args, "--bf16")
