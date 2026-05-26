@@ -168,6 +168,42 @@ def block_diag_lr_matmul(A_blocks: torch.Tensor, W: torch.Tensor, B_blocks: torc
     out = out_blocks.permute(0, 2, 1, 3).contiguous().view(M, N)
     return out
 
+
+def block_diag_lr_matmul_decoupled(A_blocks: torch.Tensor, M: torch.Tensor, B_blocks: torch.Tensor) -> torch.Tensor:
+    """Compute ``block_diag(A_blocks) @ M @ block_diag(B_blocks)`` allowing the
+    left and right blocks to have *different* (square) sizes.
+
+    Args:
+      A_blocks: (r_m, a, a) left block-diagonal factors  (rows  M = r_m * a)
+      M:        (r_m*a, r_n*b) dense matrix
+      B_blocks: (r_n, b, b) right block-diagonal factors (cols  N = r_n * b)
+
+    Generalises ``block_diag_lr_matmul`` (which requires a == b). Used by the
+    decoupled merge where R_in has block size ``bs_in`` and R_out ``bs_out``.
+    """
+    if A_blocks.ndim != 3 or B_blocks.ndim != 3:
+        raise ValueError("A_blocks and B_blocks must be 3D: (r, b, b)")
+    r_m, a, a2 = A_blocks.shape
+    r_n, b, b2 = B_blocks.shape
+    if a != a2 or b != b2:
+        raise ValueError("each block must be square")
+    rows_M = r_m * a
+    cols_N = r_n * b
+    if M.shape != (rows_M, cols_N):
+        raise ValueError(f"M must have shape {(rows_M, cols_N)}, got {tuple(M.shape)}")
+    if A_blocks.device != M.device or A_blocks.dtype != M.dtype:
+        A_blocks = A_blocks.to(device=M.device, dtype=M.dtype)
+    if B_blocks.device != M.device or B_blocks.dtype != M.dtype:
+        B_blocks = B_blocks.to(device=M.device, dtype=M.dtype)
+
+    # left = block_diag(A) @ M : per left-block, A[i] @ M[i*a:(i+1)*a, :]
+    left = torch.bmm(A_blocks, M.view(r_m, a, cols_N)).reshape(rows_M, cols_N)
+    # out = left @ block_diag(B) : per right-block, left[:, j*b:(j+1)*b] @ B[j]
+    right = left.view(rows_M, r_n, b).transpose(0, 1)  # (r_n, rows_M, b)
+    out = torch.bmm(right, B_blocks).transpose(0, 1).reshape(rows_M, cols_N)
+    return out
+
+
 def pytorch_skew_symmetric(vec, block_size, rows, cols):
     batch_size = vec.shape[0]
     matrix = vec.new_zeros(batch_size, block_size, block_size)  # Inherits requires_grad
@@ -267,6 +303,37 @@ def forward_core(
 
 
 @torch.compile(fullgraph=True)
+def forward_core_decoupled(
+    x: torch.Tensor,
+    oft_R_in: torch.Tensor,
+    oft_R_out: torch.Tensor,
+    block_size_in: int,
+    block_size_out: int,
+    rows_in: torch.Tensor,
+    cols_in: torch.Tensor,
+    rows_out: torch.Tensor,
+    cols_out: torch.Tensor,
+    perm_in: torch.Tensor,
+    perm_in_inv: torch.Tensor,
+    perm_out: torch.Tensor,
+    perm_out_inv: torch.Tensor,
+    base_weight: torch.Tensor,
+    base_bias: Optional[torch.Tensor],
+    mem_efficient_mode: bool = False,
+) -> torch.Tensor:
+    R_out, R_in = get_weight_poet_decoupled(
+        oft_R_in, oft_R_out, block_size_in, block_size_out,
+        rows_in, cols_in, rows_out, cols_out,
+    )
+    y = chain_layer_x_checkpoint_mem_o2_decoupled(
+        x, R_in, base_weight, base_bias, R_out,
+        perm_in_inv, perm_in, perm_out, perm_out_inv,
+        block_size_in, block_size_out,
+    )
+    return y
+
+
+@torch.compile(fullgraph=True)
 def forward_core_q8(
     x: torch.Tensor, 
     R: torch.Tensor,
@@ -301,12 +368,53 @@ def forward_core_q8(
 
 
 class POETLinear(nn.Module):
-    def __init__(self, in_features, out_features, bsz=256, bias=False, device=None, dtype=None, mem_efficient_mode=False):
+    """Block-orthogonal linear layer.
+
+    Internally stores TWO independent skew parameters, ``oft_R_in`` and
+    ``oft_R_out``, with potentially different block sizes ``block_size_in`` /
+    ``block_size_out``. Two constructor entry points:
+
+    * ``bsz=int`` (legacy): ``block_size_in == block_size_out == bsz``. The
+      block size must divide both ``in_features`` and ``out_features``.
+    * ``block_count=int``: both sides get ``block_count`` blocks, so
+      ``block_size_in = in_features // block_count`` and
+      ``block_size_out = out_features // block_count`` (may differ).
+
+    Exactly one of ``bsz`` / ``block_count`` must be given. The forward always
+    routes through the decoupled op, so the two paths share one code path.
+    """
+
+    def __init__(self, in_features, out_features, bsz=None, block_count=None,
+                 bias=False, device=None, dtype=None, mem_efficient_mode=False):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.block_size = bsz
         self.mem_efficient_mode = mem_efficient_mode
+
+        if (bsz is None) == (block_count is None):
+            raise ValueError("exactly one of bsz or block_count must be set")
+        if bsz is not None:
+            if in_features % bsz != 0 or out_features % bsz != 0:
+                raise ValueError(
+                    f"block_size {bsz} doesn't divide in={in_features} or out={out_features}"
+                )
+            block_size_in = block_size_out = bsz
+        else:
+            if in_features % block_count != 0 or out_features % block_count != 0:
+                raise ValueError(
+                    f"block_count {block_count} doesn't divide in={in_features} or out={out_features}"
+                )
+            block_size_in = in_features // block_count
+            block_size_out = out_features // block_count
+
+        self.block_size_in = block_size_in
+        self.block_size_out = block_size_out
+        # ``block_size`` kept for back-compat (merge/"is-active" guards, logging,
+        # diagnostics). It equals the shared block size in the legacy/equal case;
+        # in the decoupled case it is the input-side block size — callers that
+        # need an exact per-side value must read block_size_in / block_size_out.
+        self.block_size = block_size_in
+
         # Basic linear layer parameters
         self.weight = nn.Parameter(torch.empty((out_features, in_features), device=device, dtype=dtype), requires_grad=False)
         if bias:
@@ -314,20 +422,22 @@ class POETLinear(nn.Module):
         else:
             self.register_parameter("bias", None)
 
-        # Trainable skew-params per block
-        r_in = in_features // bsz
-        r_out = out_features // bsz
-        n_elements = bsz * (bsz - 1) // 2
-        # Param tensors can be any square; we skew them inside forward
-        # self.R_left = nn.Parameter(torch.zeros((r_in, n_elements), **factory_kwargs))
-        # self.R_right = nn.Parameter(torch.zeros((r_out, n_elements), **factory_kwargs))
-        self.oft_R = nn.Parameter(torch.zeros((r_in + r_out, n_elements), device=device, dtype=dtype))
+        # Trainable skew-params per block — two independent tensors.
+        r_in = in_features // block_size_in
+        r_out = out_features // block_size_out
+        n_elems_in = block_size_in * (block_size_in - 1) // 2
+        n_elems_out = block_size_out * (block_size_out - 1) // 2
+        self.oft_R_in = nn.Parameter(torch.zeros((r_in, n_elems_in), device=device, dtype=dtype))
+        self.oft_R_out = nn.Parameter(torch.zeros((r_out, n_elems_out), device=device, dtype=dtype))
         self.r_in = r_in
         self.r_out = r_out
 
-        rows, cols = torch.triu_indices(bsz, bsz, 1, device=device)
-        self.register_buffer('rows', rows.to(torch.int32))
-        self.register_buffer('cols', cols.to(torch.int32))
+        rows_in, cols_in = torch.triu_indices(block_size_in, block_size_in, 1, device=device)
+        self.register_buffer('rows_in', rows_in.to(torch.int32))
+        self.register_buffer('cols_in', cols_in.to(torch.int32))
+        rows_out, cols_out = torch.triu_indices(block_size_out, block_size_out, 1, device=device)
+        self.register_buffer('rows_out', rows_out.to(torch.int32))
+        self.register_buffer('cols_out', cols_out.to(torch.int32))
 
         perm_in = torch.randperm(in_features, device=device, dtype=torch.int32)
         perm_out = torch.randperm(out_features, device=device, dtype=torch.int32)
@@ -338,10 +448,8 @@ class POETLinear(nn.Module):
 
     def random_init_parameters(self):
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        # nn.init.normal_(self.R_left, std=1e-3)
-        # nn.init.normal_(self.R_right, std=1e-3)  
-        nn.init.normal_(self.oft_R[:self.r_in], std=1e-3)
-        nn.init.normal_(self.oft_R[self.r_in:], std=1e-3)
+        nn.init.normal_(self.oft_R_in, std=1e-3)
+        nn.init.normal_(self.oft_R_out, std=1e-3)
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
@@ -365,36 +473,45 @@ class POETLinear(nn.Module):
 
         self.perform_permutation()
 
+    def _merge_R(self):
+        """Build (R_out, R_in) from the two decoupled skew params (no grad)."""
+        return get_weight_poet_decoupled(
+            self.oft_R_in, self.oft_R_out,
+            self.block_size_in, self.block_size_out,
+            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+        )
+
     def merge_then_reinitialize_working(self) -> None:
         # with torch.no_grad():
-        R_out, R_in = get_weight_poet(self.oft_R, self.block_size, self.rows, self.cols, self.r_out, self.r_in)
+        R_out, R_in = self._merge_R()
 
         # y = x @ P_in @ R_in @ P_in.t() @ W_orig.t() @ P_out @ R_out @ P_out.t()
         # 1) P_in.t() @ W_orig.t() @ P_out
         W = self.weight.detach().clone()
         # W0 = W.detach().clone()
         tmp = W.t()
-        # # # 2) R_in @ tmp @ R_out
-        tmp = block_diag_lr_matmul(R_in, tmp, R_out)
+        # # # 2) R_in @ tmp @ R_out  (decoupled: R_in/R_out may differ in block size)
+        tmp = block_diag_lr_matmul_decoupled(R_in, tmp, R_out)
         # 3) P_in @ tmp @ P_out.t()
         tmp = tmp.index_select(0, self.perm_in)
         tmp = tmp.index_select(1, self.perm_out)
         expected = tmp.t()
-        
+
         # Transpose back to weight shape
         self.weight.detach().copy_(expected)
 
-        self.oft_R.zero_()
+        self.oft_R_in.zero_()
+        self.oft_R_out.zero_()
         self.update_permutation()
 
     @torch.no_grad()
     def merge_then_reinitialize(self) -> None:
         # Same math as POETLinear.merge_then_reinitialize, but float compute + requantize
-        R_out, R_in = get_weight_poet(self.oft_R, self.block_size, self.rows, self.cols, self.r_out, self.r_in)
+        R_out, R_in = self._merge_R()
 
         W = self.weight.detach().clone()
         tmp = W.t()
-        tmp = block_diag_lr_matmul(R_in, tmp, R_out)
+        tmp = block_diag_lr_matmul_decoupled(R_in, tmp, R_out)
         tmp = tmp.index_select(0, self.perm_in)
         tmp = tmp.index_select(1, self.perm_out)
         expected = tmp.t()
@@ -417,13 +534,17 @@ class POETLinear(nn.Module):
         self.perm_out.copy_(perm_out)
         self.perm_out_inv.copy_(perm_out_inv)
 
-        self.oft_R.zero_()
+        self.oft_R_in.zero_()
+        self.oft_R_out.zero_()
 
     def forward(self, x):
-        x = forward_core(x, self.oft_R, self.block_size, self.rows, self.cols, 
-                self.perm_in, self.perm_in_inv, self.perm_out, self.perm_out_inv, 
-                self.r_in, self.r_out, self.weight, self.bias, self.mem_efficient_mode)
-
+        x = forward_core_decoupled(
+            x, self.oft_R_in, self.oft_R_out,
+            self.block_size_in, self.block_size_out,
+            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+            self.perm_in, self.perm_in_inv, self.perm_out, self.perm_out_inv,
+            self.weight, self.bias, self.mem_efficient_mode,
+        )
         return x
 
 
@@ -809,11 +930,15 @@ def check_and_merge(model: nn.Module, iter_count=0, poet_reset_gap=4):
                         module.merge_then_reinitialize()
 
                     # ensure all ranks get the exact same state
-                    torch.distributed.broadcast(module.oft_R.data, src=0)
-                    torch.distributed.broadcast(module.weight.data, src=0)
                     if isinstance(module, QPOETLinear):
+                        torch.distributed.broadcast(module.oft_R.data, src=0)
                         torch.distributed.broadcast(module.weight_scales, src=0)
                         torch.distributed.broadcast(module.weight_zeros, src=0)
+                    else:
+                        # POETLinear stores two decoupled skew params.
+                        torch.distributed.broadcast(module.oft_R_in.data, src=0)
+                        torch.distributed.broadcast(module.oft_R_out.data, src=0)
+                    torch.distributed.broadcast(module.weight.data, src=0)
                     if module.bias is not None:
                         torch.distributed.broadcast(module.bias.data, src=0)
                     torch.distributed.broadcast(module.perm_in, src=0)
@@ -860,42 +985,40 @@ def get_grad_clipping_value(global_step, grad_clipping, warmup_steps, period_T, 
 @torch.no_grad()
 def estimate_poet_delta_weff_spec(
     poet_module: nn.Module,
-    oft_R_prev: torch.Tensor,
+    oft_R_in_prev: torch.Tensor,
+    oft_R_out_prev: torch.Tensor,
     compute_dtype: torch.dtype = torch.float32,
 ) -> float:
     """
     Estimates ||ΔW_eff||_2 where (row-space) W_eff^T = Rin @ W^T @ Rout.
     We ignore permutations (they are orthogonal and constant between merges).
+
+    Takes the two decoupled skew snapshots (``oft_R_in_prev``,
+    ``oft_R_out_prev``) and compares to the module's current params.
     """
     device = poet_module.weight.device
     W = poet_module.weight.detach().to(device=device, dtype=compute_dtype)
 
-    # Compute R blocks for prev / cur (keep ops happy by using module's dtype, then cast)
-    R_out_prev, R_in_prev = get_weight_poet(
-        oft_R_prev.to(device=device, dtype=poet_module.oft_R.dtype),
-        poet_module.block_size,
-        poet_module.rows,
-        poet_module.cols,
-        poet_module.r_out,
-        poet_module.r_in,
-    )
-    R_out_cur, R_in_cur = get_weight_poet(
-        poet_module.oft_R.detach().to(device=device, dtype=poet_module.oft_R.dtype),
-        poet_module.block_size,
-        poet_module.rows,
-        poet_module.cols,
-        poet_module.r_out,
-        poet_module.r_in,
-    )
+    def _R(oft_in, oft_out):
+        return get_weight_poet_decoupled(
+            oft_in.to(device=device, dtype=poet_module.oft_R_in.dtype),
+            oft_out.to(device=device, dtype=poet_module.oft_R_out.dtype),
+            poet_module.block_size_in, poet_module.block_size_out,
+            poet_module.rows_in, poet_module.cols_in,
+            poet_module.rows_out, poet_module.cols_out,
+        )
+
+    R_out_prev, R_in_prev = _R(oft_R_in_prev, oft_R_out_prev)
+    R_out_cur, R_in_cur = _R(poet_module.oft_R_in.detach(), poet_module.oft_R_out.detach())
     R_out_prev = R_out_prev.to(dtype=compute_dtype)
     R_in_prev = R_in_prev.to(dtype=compute_dtype)
     R_out_cur = R_out_cur.to(dtype=compute_dtype)
     R_in_cur = R_in_cur.to(dtype=compute_dtype)
 
     # M = Rin @ W^T @ Rout  (shape: in_features x out_features)
-    M_prev = block_diag_lr_matmul(R_in_prev, W.t(), R_out_prev)
+    M_prev = block_diag_lr_matmul_decoupled(R_in_prev, W.t(), R_out_prev)
     # M_prev = M_prev.t()
-    M_cur  = block_diag_lr_matmul(R_in_cur,  W.t(), R_out_cur)
+    M_cur = block_diag_lr_matmul_decoupled(R_in_cur, W.t(), R_out_cur)
     # M_cur = M_cur.t()
 
     dM = M_cur - M_prev

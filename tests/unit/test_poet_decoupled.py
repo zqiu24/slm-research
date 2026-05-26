@@ -427,3 +427,94 @@ def test_decoupled_op_backward_matches_reference():
     assert torch.allclose(gx_op, gx_ref, atol=1e-3, rtol=1e-3)
     assert torch.allclose(gri_op, gri_ref, atol=1e-3, rtol=1e-3)
     assert torch.allclose(gro_op, gro_ref, atol=1e-3, rtol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# POETLinear refactor: constructor + forward (decoupled storage internally).
+# ---------------------------------------------------------------------------
+
+
+def test_poetlinear_constructor_validation():
+    """Exactly one of bsz / block_count; block_count must divide both dims."""
+    from poet_torch import POETLinear
+
+    with pytest.raises(ValueError, match="exactly one of bsz or block_count"):
+        POETLinear(in_features=32, out_features=32)  # neither
+    with pytest.raises(ValueError, match="exactly one of bsz or block_count"):
+        POETLinear(in_features=32, out_features=32, bsz=8, block_count=4)  # both
+    with pytest.raises(ValueError, match="block_count 7 doesn't divide"):
+        POETLinear(in_features=32, out_features=64, block_count=7)
+    with pytest.raises(ValueError, match="block_size 7 doesn't divide"):
+        POETLinear(in_features=32, out_features=64, bsz=7)
+
+
+def test_poetlinear_block_count_sets_decoupled_sizes():
+    """block_count=4 on (32,64) ⇒ bs_in=8, bs_out=16, r_in=r_out=4; two params."""
+    from poet_torch import POETLinear
+
+    layer = POETLinear(in_features=32, out_features=64, block_count=4, dtype=torch.float32)
+    assert layer.block_size_in == 8
+    assert layer.block_size_out == 16
+    assert layer.r_in == 4 and layer.r_out == 4
+    assert layer.oft_R_in.shape == (4, 8 * 7 // 2)
+    assert layer.oft_R_out.shape == (4, 16 * 15 // 2)
+    # Legacy bsz path stores equal sizes.
+    legacy = POETLinear(in_features=32, out_features=32, bsz=8, dtype=torch.float32)
+    assert legacy.block_size_in == legacy.block_size_out == 8
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
+def test_poetlinear_bsz_and_block_count_agree_when_equal():
+    """Task 4.5: bsz=8 and block_count=4 on a 32x32 layer build identical
+    internal shapes and produce identical forward output given identical
+    params/perms (both ⇒ block_size_in == block_size_out == 8)."""
+    from poet_torch import POETLinear
+
+    torch.manual_seed(0)
+    a = POETLinear(in_features=32, out_features=32, bsz=8, device="cuda", dtype=torch.float32)
+    a.random_init_parameters()
+    b = POETLinear(
+        in_features=32, out_features=32, block_count=4, device="cuda", dtype=torch.float32
+    )
+    # Copy a's state into b so they're identical.
+    b.weight.detach().copy_(a.weight.detach())
+    b.oft_R_in.detach().copy_(a.oft_R_in.detach())
+    b.oft_R_out.detach().copy_(a.oft_R_out.detach())
+    for buf in ("perm_in", "perm_in_inv", "perm_out", "perm_out_inv"):
+        getattr(b, buf).copy_(getattr(a, buf))
+
+    x = torch.randn(4, 32, device="cuda", dtype=torch.float32)
+    ya = a(x)
+    yb = b(x)
+    assert torch.equal(ya, yb), f"max abs diff {(ya - yb).abs().max().item():.2e}"
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
+def test_poetlinear_decoupled_forward_matches_reference():
+    """Task 4.6: a decoupled POETLinear (block_count=4 on 32x64, bs_in=8,
+    bs_out=16) matches the pure-PyTorch reference."""
+    from poet_torch import POETLinear
+
+    torch.manual_seed(1)
+    layer = POETLinear(
+        in_features=32, out_features=64, block_count=4, device="cuda", dtype=torch.float32
+    )
+    layer.random_init_parameters()
+
+    x = torch.randn(4, 32, device="cuda", dtype=torch.float32)
+    y_layer = layer(x).detach().cpu()
+    y_ref = poet_reference_forward(
+        x.cpu(),
+        layer.weight.detach().cpu(),
+        layer.oft_R_in.detach().cpu(),
+        layer.oft_R_out.detach().cpu(),
+        layer.perm_in.cpu(),
+        layer.perm_in_inv.cpu(),
+        layer.perm_out.cpu(),
+        layer.perm_out_inv.cpu(),
+        layer.block_size_in,
+        layer.block_size_out,
+    )
+    assert torch.allclose(
+        y_layer, y_ref, atol=1e-4
+    ), f"max abs diff {(y_layer - y_ref).abs().max().item():.2e}"
