@@ -41,7 +41,8 @@ if _REPO not in sys.path:
 
 from poet_torch import POETLinear  # noqa: E402
 from poet_torch.poet_layer import (  # noqa: E402
-    chain_layer_x_checkpoint_mem_o2,
+    chain_layer_x_checkpoint_mem_o2_decoupled,
+    get_weight_poet_decoupled,
     pytorch_skew_symmetric,
 )
 
@@ -50,24 +51,57 @@ from src.optim import poet_cache as pc  # noqa: E402
 MODES = ("none", "cached_fwd_bwd")
 
 
-def build_layer(in_f, out_f, bsz, dtype, device, seed):
+def _block_kwargs(bsz, block_count):
+    """POETLinear takes exactly one of bsz / block_count."""
+    return {"block_count": block_count} if block_count is not None else {"bsz": bsz}
+
+
+def _oft_params(layer):
+    """The two decoupled skew params trained by POET."""
+    return (layer.oft_R_in, layer.oft_R_out)
+
+
+def _grad_vec(layer):
+    """Concatenated fp32 grad over both oft_R params (for parity comparison)."""
+    return torch.cat([p.grad.detach().float().flatten() for p in _oft_params(layer)])
+
+
+def _args_divisor(args):
+    """The dim divisor implied by the chosen block mode."""
+    bc = getattr(args, "block_count", None)
+    return bc if bc is not None else args.block_size
+
+
+def _layer_desc(args):
+    """Human-readable block configuration for headers."""
+    bc = getattr(args, "block_count", None)
+    if bc is not None:
+        bsi = args.in_features // bc
+        bso = args.out_features // bc
+        return f"block_count={bc} (bs_in={bsi}, bs_out={bso})"
+    return f"block_size={args.block_size}"
+
+
+def build_layer(in_f, out_f, bsz, dtype, device, seed, block_count=None):
     torch.manual_seed(seed)
     layer = pc.CachedPOETLinear(
         in_features=in_f,
         out_features=out_f,
-        bsz=bsz,
         bias=False,
         device=device,
         dtype=dtype,
+        **_block_kwargs(bsz, block_count),
     )
     layer.random_init_parameters()
-    layer.oft_R.requires_grad_(True)
+    for p in _oft_params(layer):
+        p.requires_grad_(True)
     return layer
 
 
 def zero_grads(layer):
-    if layer.oft_R.grad is not None:
-        layer.oft_R.grad.zero_()
+    for p in _oft_params(layer):
+        if p.grad is not None:
+            p.grad.zero_()
 
 
 def run_cycle(layer, xs, mode):
@@ -79,7 +113,7 @@ def run_cycle(layer, xs, mode):
         layer._flush_R_grads_to_oft_R()
 
 
-def parity_check(in_f, out_f, bsz, dtype, device, K, batch_shape):
+def parity_check(in_f, out_f, bsz, dtype, device, K, batch_shape, block_count=None):
     """Run one cycle in each mode with identical inputs; report:
     - max_abs:    max |g_cached - g_none|
     - rel_l2:     ||g_cached - g_none||_2 / ||g_none||_2
@@ -93,9 +127,9 @@ def parity_check(in_f, out_f, bsz, dtype, device, K, batch_shape):
     for mode in MODES:
         pc.reset_for_testing()
         pc.set_cache_mode(mode)
-        layer = build_layer(in_f, out_f, bsz, dtype, device, seed=0)
+        layer = build_layer(in_f, out_f, bsz, dtype, device, seed=0, block_count=block_count)
         run_cycle(layer, xs, mode)
-        grads[mode] = layer.oft_R.grad.detach().float().clone()
+        grads[mode] = _grad_vec(layer)
 
     ref = grads["none"]
     ref_max = ref.abs().max().item()
@@ -125,11 +159,13 @@ def parity_check(in_f, out_f, bsz, dtype, device, K, batch_shape):
     return out
 
 
-def time_mode(mode, in_f, out_f, bsz, dtype, device, K, cycles, batch_shape, warmup=5):
+def time_mode(
+    mode, in_f, out_f, bsz, dtype, device, K, cycles, batch_shape, warmup=5, block_count=None
+):
     """Median ms per K-microbatch cycle for a single mode."""
     pc.reset_for_testing()
     pc.set_cache_mode(mode)
-    layer = build_layer(in_f, out_f, bsz, dtype, device, seed=1)
+    layer = build_layer(in_f, out_f, bsz, dtype, device, seed=1, block_count=block_count)
 
     torch.manual_seed(43)
     xs = [torch.randn(*batch_shape, in_f, device=device, dtype=dtype) for _ in range(K)]
@@ -174,7 +210,9 @@ def _time_event(fn, repeats):
     return times
 
 
-def profile_components(in_f, out_f, bsz, dtype, device, K, batch_shape, warmup=8, repeats=50):
+def profile_components(
+    in_f, out_f, bsz, dtype, device, K, batch_shape, warmup=8, repeats=50, block_count=None
+):
     """Time each component of one microbatch + per-cycle extras separately.
 
     Returns a dict with:
@@ -199,19 +237,17 @@ def profile_components(in_f, out_f, bsz, dtype, device, K, batch_shape, warmup=8
     # ---- 1) Baseline (none) per-microbatch ----
     pc.reset_for_testing()
     pc.set_cache_mode("none")
-    layer_b = build_layer(in_f, out_f, bsz, dtype, device, seed=1)
+    layer_b = build_layer(in_f, out_f, bsz, dtype, device, seed=1, block_count=block_count)
 
     for _ in range(warmup):  # warm dynamo + first-call compile
         y = layer_b(x_single)
         y.sum().backward()
-        if layer_b.oft_R.grad is not None:
-            layer_b.oft_R.grad.zero_()
+        zero_grads(layer_b)
 
     def _one_baseline_micro():
         y = layer_b(x_single)
         y.sum().backward()
-        if layer_b.oft_R.grad is not None:
-            layer_b.oft_R.grad.zero_()
+        zero_grads(layer_b)
 
     t_baseline = statistics.median(_time_event(_one_baseline_micro, repeats))
 
@@ -219,7 +255,7 @@ def profile_components(in_f, out_f, bsz, dtype, device, K, batch_shape, warmup=8
     # Build a fresh layer for Mode A.
     pc.reset_for_testing()
     pc.set_cache_mode("cached_fwd_bwd")
-    layer_a = build_layer(in_f, out_f, bsz, dtype, device, seed=1)
+    layer_a = build_layer(in_f, out_f, bsz, dtype, device, seed=1, block_count=block_count)
     pc.register_poet_layer(layer_a)
 
     # Warm the cache: first call builds R_full + dynamo compiles _cached_chain_layer_core.
@@ -297,7 +333,9 @@ def profile_components(in_f, out_f, bsz, dtype, device, K, batch_shape, warmup=8
     }
 
 
-def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repeats=80):
+def micro_profile(
+    in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repeats=80, block_count=None
+):
     """Break down a SINGLE upstream POETLinear microbatch into sub-operations.
 
     Goal: identify where time goes inside the baseline (uncached) POET layer,
@@ -316,25 +354,28 @@ def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repea
     layer = POETLinear(
         in_features=in_f,
         out_features=out_f,
-        bsz=bsz,
         bias=False,
         device=device,
         dtype=dtype,
+        **_block_kwargs(bsz, block_count),
     )
     layer.random_init_parameters()
-    layer.oft_R.requires_grad_(True)
+    for p in (layer.oft_R_in, layer.oft_R_out):
+        p.requires_grad_(True)
 
     x = torch.randn(*batch_shape, in_f, device=device, dtype=dtype)
 
     # Pre-compute R blocks once (for chain_layer-only timing)
     with torch.no_grad():
-        R_out_pre, R_in_pre = pc._compute_cayley(
-            layer.oft_R,
-            layer.block_size,
-            layer.rows,
-            layer.cols,
-            layer.r_in,
-            layer.r_out,
+        R_out_pre, R_in_pre = get_weight_poet_decoupled(
+            layer.oft_R_in,
+            layer.oft_R_out,
+            layer.block_size_in,
+            layer.block_size_out,
+            layer.rows_in,
+            layer.cols_in,
+            layer.rows_out,
+            layer.cols_out,
         )
 
     def time_fn(fn):
@@ -353,41 +394,54 @@ def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repea
             times.append(s.elapsed_time(e))
         return statistics.median(times)
 
-    # 1. pytorch_skew_symmetric
+    # 1. pytorch_skew_symmetric (decoupled = two skews, one per side)
     def fn_skew():
         with torch.no_grad():
-            _ = pytorch_skew_symmetric(layer.oft_R, layer.block_size, layer.rows, layer.cols)
+            _ = pytorch_skew_symmetric(
+                layer.oft_R_in, layer.block_size_in, layer.rows_in, layer.cols_in
+            )
+            _ = pytorch_skew_symmetric(
+                layer.oft_R_out, layer.block_size_out, layer.rows_out, layer.cols_out
+            )
 
     t_skew = time_fn(fn_skew)
 
-    # 2. torch.ops.poet.cayley (the Triton kernel that does (I-Q)(I+Q)^-1)
+    # 2. torch.ops.poet.cayley (the Triton kernel) — both sides
     with torch.no_grad():
-        Q_skew_pre = pytorch_skew_symmetric(layer.oft_R, layer.block_size, layer.rows, layer.cols)
+        Q_in_pre = pytorch_skew_symmetric(
+            layer.oft_R_in, layer.block_size_in, layer.rows_in, layer.cols_in
+        )
+        Q_out_pre = pytorch_skew_symmetric(
+            layer.oft_R_out, layer.block_size_out, layer.rows_out, layer.cols_out
+        )
 
     def fn_cayley_kernel():
         with torch.no_grad():
-            _ = torch.ops.poet.cayley(Q_skew_pre)[0]
+            _ = torch.ops.poet.cayley(Q_in_pre)[0]
+            _ = torch.ops.poet.cayley(Q_out_pre)[0]
 
     t_cayley_kernel = time_fn(fn_cayley_kernel)
 
-    # 3. _compute_cayley end-to-end (= skew + kernel + split)
+    # 3. get_weight_poet_decoupled end-to-end (= two skews + two kernels)
     def fn_cayley_full():
         with torch.no_grad():
-            _ = pc._compute_cayley(
-                layer.oft_R,
-                layer.block_size,
-                layer.rows,
-                layer.cols,
-                layer.r_in,
-                layer.r_out,
+            _ = get_weight_poet_decoupled(
+                layer.oft_R_in,
+                layer.oft_R_out,
+                layer.block_size_in,
+                layer.block_size_out,
+                layer.rows_in,
+                layer.cols_in,
+                layer.rows_out,
+                layer.cols_out,
             )
 
     t_cayley_full = time_fn(fn_cayley_full)
 
-    # 4. chain_layer with perms — EAGER
+    # 4. chain_layer with perms — EAGER (decoupled op)
     def fn_chain_with_perms_eager():
         with torch.no_grad():
-            _ = chain_layer_x_checkpoint_mem_o2(
+            _ = chain_layer_x_checkpoint_mem_o2_decoupled(
                 x,
                 R_in_pre,
                 layer.weight,
@@ -397,15 +451,16 @@ def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repea
                 layer.perm_in,
                 layer.perm_out,
                 layer.perm_out_inv,
-                layer.block_size,
+                layer.block_size_in,
+                layer.block_size_out,
             )
 
     t_chain_with_perms = time_fn(fn_chain_with_perms_eager)
 
-    # 4b. chain_layer with perms — COMPILED (matches Mode A's _cached_chain_layer_core)
+    # 4b. chain_layer with perms — COMPILED (matches Mode A's cached core)
     @torch.compile(fullgraph=True)
-    def _compiled_chain_with_perms(x, R_in, W, b, R_out, p_ii, p_i, p_o, p_oi, bs):
-        return chain_layer_x_checkpoint_mem_o2(
+    def _compiled_chain_with_perms(x, R_in, W, b, R_out, p_ii, p_i, p_o, p_oi, bs_in, bs_out):
+        return chain_layer_x_checkpoint_mem_o2_decoupled(
             x,
             R_in,
             W,
@@ -415,7 +470,8 @@ def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repea
             p_i,
             p_o,
             p_oi,
-            bs,
+            bs_in,
+            bs_out,
         )
 
     def fn_chain_with_perms_compiled():
@@ -430,7 +486,8 @@ def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repea
                 layer.perm_in,
                 layer.perm_out,
                 layer.perm_out_inv,
-                layer.block_size,
+                layer.block_size_in,
+                layer.block_size_out,
             )
 
     t_chain_with_perms_compiled = time_fn(fn_chain_with_perms_compiled)
@@ -454,8 +511,7 @@ def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repea
     def fn_layer_fwdbwd():
         y = layer(x)
         y.sum().backward()
-        if layer.oft_R.grad is not None:
-            layer.oft_R.grad.zero_()
+        zero_grads(layer)
 
     t_layer_fwdbwd = time_fn(fn_layer_fwdbwd)
 
@@ -497,14 +553,15 @@ def micro_profile(in_f, out_f, bsz, dtype, device, batch_shape, warmup=10, repea
 def print_micro_profile(args, dtype, device):
     print("Original POET layer micro-profile")
     print("=" * 60)
-    print(f"  Layer:       in={args.in_features}  out={args.out_features}  block={args.block_size}")
+    print(f"  Layer:       in={args.in_features}  out={args.out_features}  {_layer_desc(args)}")
     print(f"  Input shape: {tuple(args.batch)} + (in,) = {tuple(args.batch) + (args.in_features,)}")
     print(f"  Dtype:       {args.dtype}")
     print(f"  GPU:         {torch.cuda.get_device_name(0)}")
     print()
 
-    if args.in_features % args.block_size != 0 or args.out_features % args.block_size != 0:
-        print(f"SKIP: block_size {args.block_size} doesn't divide both dims")
+    div = _args_divisor(args)
+    if args.in_features % div != 0 or args.out_features % div != 0:
+        print(f"SKIP: {div} doesn't divide both dims")
         return
 
     p = micro_profile(
@@ -514,6 +571,7 @@ def print_micro_profile(args, dtype, device):
         dtype,
         device,
         args.batch,
+        block_count=args.block_count,
     )
 
     fwd_total = p["t_layer_fwd"]
@@ -549,7 +607,7 @@ def print_micro_profile(args, dtype, device):
         f"    perm overhead (with − without):               "
         f"{fmt(p['perm_overhead_eager'])} | {fmt(p['perm_overhead_compiled'])} ms"
     )
-    print(f"    @torch.compile savings (with perms):          " f"{p['compile_savings']:7.3f} ms")
+    print(f"    @torch.compile savings (with perms):          {p['compile_savings']:7.3f} ms")
     print()
     print(
         f"  Compiled fused forward (upstream forward_core): {p['t_layer_fwd']:7.3f} ms  ← what baseline runs"
@@ -574,11 +632,11 @@ def print_micro_profile(args, dtype, device):
     cayley_frac_fwd = p["t_cayley_full"] / fwd_total if fwd_total > 0 else 0
     chain_frac_fwd = p["t_chain_with_perms_compiled"] / fwd_total if fwd_total > 0 else 0
     print("Fractions (relative to compiled forward):")
-    print(f"  Cayley fwd / compiled fwd:           {100*cayley_frac_fwd:5.1f}%")
-    print(f"  chain_layer (compiled) / compiled fwd: {100*chain_frac_fwd:5.1f}%")
+    print(f"  Cayley fwd / compiled fwd:           {100 * cayley_frac_fwd:5.1f}%")
+    print(f"  chain_layer (compiled) / compiled fwd: {100 * chain_frac_fwd:5.1f}%")
     if p["t_chain_with_perms_compiled"] > 0 and not nan(p["perm_overhead_compiled"]):
         print(
-            f"  Perm overhead / chain_layer (compiled): {100*p['perm_overhead_compiled']/p['t_chain_with_perms_compiled']:5.1f}%"
+            f"  Perm overhead / chain_layer (compiled): {100 * p['perm_overhead_compiled'] / p['t_chain_with_perms_compiled']:5.1f}%"
         )
     print()
     print("Bottleneck candidate ranking (by compiled component cost, fwd-only):")
@@ -596,15 +654,16 @@ def print_micro_profile(args, dtype, device):
 def print_profile(args, dtype, device):
     print("POET Cayley cache component profile")
     print("=" * 60)
-    print(f"  Layer:       in={args.in_features}  out={args.out_features}  block={args.block_size}")
+    print(f"  Layer:       in={args.in_features}  out={args.out_features}  {_layer_desc(args)}")
     print(f"  Input shape: {tuple(args.batch)} + (in,) = {tuple(args.batch) + (args.in_features,)}")
     print(f"  Dtype:       {args.dtype}")
     print(f"  K (μbatches/cycle): {args.K}")
     print(f"  GPU:         {torch.cuda.get_device_name(0)}")
     print()
 
-    if args.in_features % args.block_size != 0 or args.out_features % args.block_size != 0:
-        print(f"SKIP: block_size {args.block_size} doesn't divide both dims")
+    div = _args_divisor(args)
+    if args.in_features % div != 0 or args.out_features % div != 0:
+        print(f"SKIP: {div} doesn't divide both dims")
         return
 
     p = profile_components(
@@ -615,6 +674,7 @@ def print_profile(args, dtype, device):
         device,
         args.K,
         args.batch,
+        block_count=args.block_count,
     )
 
     print("Per-microbatch / per-cycle component times (ms):")
@@ -634,7 +694,7 @@ def print_profile(args, dtype, device):
         f"  Cayley embedded in baseline microbatch: {p['t_cayley_embedded']:.3f} ms"
         f"  (= baseline − Mode A hit)"
     )
-    print(f"  Cayley fraction of baseline step:       {p['cayley_frac']*100:.1f}%")
+    print(f"  Cayley fraction of baseline step:       {p['cayley_frac'] * 100:.1f}%")
     print(
         f"  Cache-miss extra cost (vs hit):         {p['t_modea_miss_micro'] - p['t_modea_hit_micro']:.3f} ms"
     )
@@ -659,6 +719,7 @@ def print_profile(args, dtype, device):
         args.K,
         args.cycles,
         args.batch,
+        block_count=args.block_count,
     )
     pc.reset_for_testing()
     pc.set_cache_mode("cached_fwd_bwd")
@@ -672,27 +733,41 @@ def print_profile(args, dtype, device):
         args.K,
         args.cycles,
         args.batch,
+        block_count=args.block_count,
     )
     med_b = statistics.median(baseline_full)
     med_a = statistics.median(modea_full)
     print(f"  baseline cycle (measured):    {med_b:.2f} ms")
     print(f"  Mode A cycle (measured):      {med_a:.2f} ms")
-    print(f"  Speedup (measured):           {med_b/med_a:.3f}x")
+    print(f"  Speedup (measured):           {med_b / med_a:.3f}x")
     print()
     print("Discrepancy between theory and measurement:")
     print(
         f"  Mode A cycle: theory {p['theo_modea_cycle']:.2f} vs measured {med_a:.2f}"
         f"  → overhead = {med_a - p['theo_modea_cycle']:.2f} ms"
-        f" ({100*(med_a - p['theo_modea_cycle'])/med_a:+.1f}%)"
+        f" ({100 * (med_a - p['theo_modea_cycle']) / med_a:+.1f}%)"
     )
 
 
-def run_point(in_f, out_f, bsz, K, cycles, dtype, device, batch_shape, warmup=5):
-    if in_f % bsz != 0 or out_f % bsz != 0:
+def run_point(in_f, out_f, bsz, K, cycles, dtype, device, batch_shape, warmup=5, block_count=None):
+    divisor = block_count if block_count is not None else bsz
+    if in_f % divisor != 0 or out_f % divisor != 0:
         return None
-    parity = parity_check(in_f, out_f, bsz, dtype, device, K, batch_shape)
+    parity = parity_check(in_f, out_f, bsz, dtype, device, K, batch_shape, block_count=block_count)
     timings = {
-        m: time_mode(m, in_f, out_f, bsz, dtype, device, K, cycles, batch_shape, warmup)
+        m: time_mode(
+            m,
+            in_f,
+            out_f,
+            bsz,
+            dtype,
+            device,
+            K,
+            cycles,
+            batch_shape,
+            warmup,
+            block_count=block_count,
+        )
         for m in MODES
     }
     return parity, timings
@@ -701,7 +776,7 @@ def run_point(in_f, out_f, bsz, K, cycles, dtype, device, batch_shape, warmup=5)
 def print_single(args, dtype, device):
     print("POET Cayley cache benchmark (Mode A)")
     print("=" * 60)
-    print(f"  Layer:       in={args.in_features}  out={args.out_features}  block={args.block_size}")
+    print(f"  Layer:       in={args.in_features}  out={args.out_features}  {_layer_desc(args)}")
     print(f"  Input shape: {tuple(args.batch)} + (in,) = {tuple(args.batch) + (args.in_features,)}")
     print(f"  Dtype:       {args.dtype}")
     print(f"  K (μbatches/cycle): {args.K}")
@@ -718,10 +793,12 @@ def print_single(args, dtype, device):
         dtype,
         device,
         args.batch,
+        block_count=args.block_count,
     )
     if out is None:
         print(
-            f"SKIP: block_size {args.block_size} does not divide both {args.in_features} and {args.out_features}"
+            f"SKIP: {_args_divisor(args)} does not divide both "
+            f"{args.in_features} and {args.out_features}"
         )
         return
     parity, timings = out
@@ -767,6 +844,7 @@ DEFAULT_SHAPES = [
     (7168, 7168, "kimi_k2_qkv"),
 ]
 DEFAULT_BLOCK_SIZES = [256]
+DEFAULT_BLOCK_COUNTS = [4, 8, 16, 32]
 DEFAULT_KS = [8, 16, 32, 64]
 
 
@@ -777,14 +855,20 @@ def print_sweep(args, dtype, device):
         else [(int(a), int(b), f"{a}x{b}") for a, b in (s.split("x") for s in args.shapes)]
     )
     block_sizes = args.block_sizes or DEFAULT_BLOCK_SIZES
+    block_counts = args.block_counts or []
     Ks = args.Ks or DEFAULT_KS
+
+    # Unified block-knob list: ("size", N) sweeps a shared block size;
+    # ("count", N) sweeps decoupled block_count (bs_in=in/N, bs_out=out/N).
+    specs = [("size", b) for b in block_sizes] + [("count", c) for c in block_counts]
 
     print("POET Cayley cache sweep (Mode A)")
     print("=" * 60)
     print(f"  Shapes:      {len(shapes)}")
     for in_f, out_f, label in shapes:
         print(f"    {label:<22} ({in_f:>5} × {out_f:>5})")
-    print(f"  Block sizes: {block_sizes}")
+    print(f"  Block sizes:  {block_sizes}")
+    print(f"  Block counts: {block_counts}")
     print(f"  K values:    {Ks}")
     print(f"  Dtype:       {args.dtype}")
     print(f"  Input shape: {tuple(args.batch)} + (in,)")
@@ -793,7 +877,7 @@ def print_sweep(args, dtype, device):
     print()
 
     hdr = (
-        f"{'shape':<22}{'in':>6}{'out':>7}{'blk':>5}{'K':>4}"
+        f"{'shape':<22}{'in':>6}{'out':>7}{'block':>10}{'K':>4}"
         f"{'err_max':>11}{'rel_L2':>11}{'ref_max':>11}"
         f"{'ms_none':>10}{'ms_A':>10}{'sp_A':>8}{'cayley%':>9}"
     )
@@ -802,12 +886,30 @@ def print_sweep(args, dtype, device):
 
     rows = []
     for in_f, out_f, label in shapes:
-        for bsz in block_sizes:
-            if in_f % bsz != 0 or out_f % bsz != 0:
-                continue
+        for kind, n in specs:
+            # block label + the (bsz, block_count) args for this point.
+            if kind == "size":
+                if in_f % n != 0 or out_f % n != 0:
+                    continue
+                blk_label = f"bs{n}"
+                bsz, block_count = n, None
+            else:  # count
+                if in_f % n != 0 or out_f % n != 0:
+                    continue
+                blk_label = f"bc{n}"
+                bsz, block_count = 256, n
             for K in Ks:
                 out = run_point(
-                    in_f, out_f, bsz, K, args.cycles, dtype, device, args.batch, warmup=3
+                    in_f,
+                    out_f,
+                    bsz,
+                    K,
+                    args.cycles,
+                    dtype,
+                    device,
+                    args.batch,
+                    warmup=3,
+                    block_count=block_count,
                 )
                 if out is None:
                     continue
@@ -822,7 +924,7 @@ def print_sweep(args, dtype, device):
                     (1.0 - 1.0 / sp_A) * K / (K - 1) * 100.0 if sp_A > 1.0 and K > 1 else 0.0
                 )
                 row = (
-                    f"{label:<22}{in_f:>6}{out_f:>7}{bsz:>5}{K:>4}"
+                    f"{label:<22}{in_f:>6}{out_f:>7}{blk_label:>10}{K:>4}"
                     f"{err_max:>11.2e}{rel_l2:>11.2e}{ref_max:>11.2e}"
                     f"{med_none:>10.2f}{med_A:>10.2f}{sp_A:>7.2f}x{cayley_frac:>8.1f}%"
                 )
@@ -838,6 +940,13 @@ def main():
     p.add_argument("--in-features", type=int, default=1536)
     p.add_argument("--out-features", type=int, default=1536)
     p.add_argument("--block-size", type=int, default=256)
+    p.add_argument(
+        "--block-count",
+        type=int,
+        default=None,
+        help="decoupled mode: each side gets N blocks (bs_in=in/N, bs_out=out/N). "
+        "Mutually exclusive with --block-size; takes precedence when set.",
+    )
     p.add_argument("--K", type=int, default=16, help="microbatches per cycle")
     p.add_argument("--cycles", type=int, default=50, help="cycles to time")
     p.add_argument(
@@ -866,6 +975,14 @@ def main():
         help='shapes for sweep, e.g. "1536x1536 1536x3840" (default: pruned to ≤8 to stay under torch.compile recompile_limit)',
     )
     p.add_argument("--block-sizes", type=int, nargs="+", default=None)
+    p.add_argument(
+        "--block-counts",
+        type=int,
+        nargs="+",
+        default=None,
+        help=f"sweep these decoupled block_counts in addition to --block-sizes "
+        f"(suggested: {DEFAULT_BLOCK_COUNTS}). Invalid (non-dividing) combos are skipped.",
+    )
     p.add_argument("--Ks", type=int, nargs="+", default=None)
     args = p.parse_args()
 
