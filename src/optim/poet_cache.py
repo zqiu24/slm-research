@@ -79,33 +79,41 @@ def reset_for_testing() -> None:
 import torch  # noqa: E402
 from poet_torch import POETLinear  # noqa: E402
 from poet_torch.poet_layer import (  # noqa: E402
-    chain_layer_x_checkpoint_mem_o2,
-    pytorch_skew_symmetric,
+    chain_layer_x_checkpoint_mem_o2_decoupled,
+    get_weight_poet_decoupled,
 )
 from torch import Tensor  # noqa: E402
 
 
-def _compute_cayley(
-    oft_R: Tensor,  # noqa: N803
-    block_size: int,
-    rows: Tensor,
-    cols: Tensor,
-    r_in: int,
-    r_out: int,
+def _compute_cayley_decoupled(
+    oft_R_in: Tensor,  # noqa: N803
+    oft_R_out: Tensor,  # noqa: N803
+    block_size_in: int,
+    block_size_out: int,
+    rows_in: Tensor,
+    cols_in: Tensor,
+    rows_out: Tensor,
+    cols_out: Tensor,
 ) -> tuple[Tensor, Tensor]:
-    """Build (R_out, R_in) block-orthogonal matrices from oft_R.
+    """Build (R_out, R_in) block-orthogonal matrices from the two decoupled
+    skew params via two Cayley calls.
 
-    Mirrors get_weight_poet in third_party/poet_torch/poet_layer.py.
+    Mirrors get_weight_poet_decoupled in third_party/poet_torch/poet_layer.py.
     `torch.ops.poet.cayley` is a GPU Triton kernel; this function is
-    GPU-only at runtime.
-
-    Spec §5 lists this as a "compiled region"; v1 ships it as plain
-    Python — see Task 3 design note for the rationale.
+    GPU-only at runtime. Differentiable w.r.t. both oft_R params (each R side
+    depends only on its own oft_R), so the end-of-cycle flush runs two
+    independent VJPs.
     """
-    Q_skew = pytorch_skew_symmetric(oft_R, block_size, rows, cols)  # noqa: N806
-    R_cat = torch.ops.poet.cayley(Q_skew)[0]  # noqa: N806
-    R_out, R_in = R_cat.split([r_out, r_in], dim=0)  # noqa: N806
-    return R_out, R_in
+    return get_weight_poet_decoupled(
+        oft_R_in,
+        oft_R_out,
+        block_size_in,
+        block_size_out,
+        rows_in,
+        cols_in,
+        rows_out,
+        cols_out,
+    )
 
 
 class CachedPOETLinear(POETLinear):
@@ -153,13 +161,15 @@ class CachedPOETLinear(POETLinear):
         """
         if self._R_cache_version != get_poet_version():
             with torch.enable_grad():
-                R_out_full, R_in_full = _compute_cayley(  # noqa: N806
-                    self.oft_R,
-                    self.block_size,
-                    self.rows,
-                    self.cols,
-                    self.r_in,
-                    self.r_out,
+                R_out_full, R_in_full = _compute_cayley_decoupled(  # noqa: N806
+                    self.oft_R_in,
+                    self.oft_R_out,
+                    self.block_size_in,
+                    self.block_size_out,
+                    self.rows_in,
+                    self.cols_in,
+                    self.rows_out,
+                    self.cols_out,
                 )
             self._R_out_full = R_out_full
             self._R_in_full = R_in_full
@@ -189,20 +199,20 @@ class CachedPOETLinear(POETLinear):
             gR_out = torch.zeros_like(self._R_out_full)  # noqa: N806
         if gR_in is None:
             gR_in = torch.zeros_like(self._R_in_full)  # noqa: N806
-        (g,) = torch.autograd.grad(
-            outputs=[self._R_out_full, self._R_in_full],
-            inputs=self.oft_R,
-            grad_outputs=[gR_out, gR_in],
-        )
-        if hasattr(self.oft_R, "main_grad") and self.oft_R.main_grad is not None:
-            # Megatron path: zero-initialized FP32 buffer; copy our VJP in.
-            self.oft_R.main_grad.copy_(g.to(self.oft_R.main_grad.dtype))
-        else:
-            # Test / non-Megatron path.
-            if self.oft_R.grad is None:
-                self.oft_R.grad = g
+        # Two independent VJPs: R_in_full depends only on oft_R_in, R_out_full
+        # only on oft_R_out (separate Cayley graphs in the decoupled layer).
+        (g_in,) = torch.autograd.grad(self._R_in_full, self.oft_R_in, gR_in)
+        (g_out,) = torch.autograd.grad(self._R_out_full, self.oft_R_out, gR_out)
+        for param, g in ((self.oft_R_in, g_in), (self.oft_R_out, g_out)):
+            if hasattr(param, "main_grad") and param.main_grad is not None:
+                # Megatron path: zero-initialized FP32 buffer; copy our VJP in.
+                param.main_grad.copy_(g.to(param.main_grad.dtype))
             else:
-                self.oft_R.grad.copy_(g)
+                # Test / non-Megatron path.
+                if param.grad is None:
+                    param.grad = g
+                else:
+                    param.grad.copy_(g)
         self._invalidate_R_cache()
 
     def forward(self, x: Tensor) -> Tensor:
@@ -212,7 +222,7 @@ class CachedPOETLinear(POETLinear):
         if mode != "cached_fwd_bwd":
             raise ValueError(f"unknown poet_cache_mode: {mode!r}")
         R_out, R_in = self._get_R_blocks_mode_a()  # noqa: N806
-        return _cached_chain_layer_core(
+        return _cached_chain_layer_core_decoupled(
             x,
             R_in,
             self.weight,
@@ -222,12 +232,13 @@ class CachedPOETLinear(POETLinear):
             self.perm_in,
             self.perm_out,
             self.perm_out_inv,
-            self.block_size,
+            self.block_size_in,
+            self.block_size_out,
         )
 
 
 @torch.compile(fullgraph=True)
-def _cached_chain_layer_core(
+def _cached_chain_layer_core_decoupled(
     x: Tensor,
     R_in: Tensor,  # noqa: N803
     weight: Tensor,
@@ -237,18 +248,19 @@ def _cached_chain_layer_core(
     perm_in: Tensor,
     perm_out: Tensor,
     perm_out_inv: Tensor,
-    block_size: int,
+    block_size_in: int,
+    block_size_out: int,
 ) -> Tensor:
-    """Mode A hot path mirror of upstream `forward_core`.
+    """Mode A hot path mirror of upstream `forward_core_decoupled`.
 
-    Upstream's `forward_core` is wrapped in `@torch.compile(fullgraph=True)`
-    and fuses Cayley + chain_layer in one compiled region. Mode A skips
-    the Cayley step (it's cached and supplied via R_in/R_out), so we wrap
-    only the chain_layer call here with the same decorator. Without this,
-    every microbatch's linear call runs uncompiled and the per-call
-    overhead drowns the (K-1) Cayley savings for large shapes.
+    Upstream's `forward_core_decoupled` is wrapped in
+    `@torch.compile(fullgraph=True)` and fuses Cayley + chain_layer in one
+    compiled region. Mode A skips the Cayley step (it's cached and supplied
+    via R_in/R_out), so we wrap only the chain_layer call here with the same
+    decorator. Without this, every microbatch's linear call runs uncompiled
+    and the per-call overhead drowns the (K-1) Cayley savings for large shapes.
     """
-    return chain_layer_x_checkpoint_mem_o2(
+    return chain_layer_x_checkpoint_mem_o2_decoupled(
         x,
         R_in,
         weight,
@@ -258,7 +270,8 @@ def _cached_chain_layer_core(
         perm_in,
         perm_out,
         perm_out_inv,
-        block_size,
+        block_size_in,
+        block_size_out,
     )
 
 

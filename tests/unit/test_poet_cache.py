@@ -118,45 +118,56 @@ def test_invalidate_all_poet_caches_walks_registry():
     assert b._R_cache_version == -1
 
 
-def test_compute_cayley_matches_upstream_get_weight_poet():
-    """_compute_cayley must produce the same (R_out, R_in) as the
-    upstream get_weight_poet helper on identical inputs.
+def test_compute_cayley_decoupled_matches_upstream_helper():
+    """_compute_cayley_decoupled must produce the same (R_out, R_in) as the
+    upstream get_weight_poet_decoupled helper on identical inputs, with the
+    block sizes threaded through correctly. Also checks near-orthogonality.
 
     GPU-only because torch.ops.poet.cayley is a Triton kernel.
     """
     if not torch.cuda.is_available():
         pytest.skip("requires CUDA Triton kernel")
-    from poet_torch.poet_layer import get_weight_poet
+    from poet_torch.poet_layer import get_weight_poet_decoupled
 
     pc.reset_for_testing()
+    # Decoupled layer: in=16, out=64, block_count=4 → bs_in=4, bs_out=16.
     layer = pc.CachedPOETLinear(
         in_features=16,
-        out_features=32,
-        bsz=16,
+        out_features=64,
+        block_count=4,
         bias=False,
         device="cuda",
         dtype=torch.float32,
     )
     layer.random_init_parameters()
 
-    R_out_ref, R_in_ref = get_weight_poet(  # noqa: N806
-        layer.oft_R,
-        layer.block_size,
-        layer.rows,
-        layer.cols,
-        layer.r_out,
-        layer.r_in,
+    R_out_ref, R_in_ref = get_weight_poet_decoupled(  # noqa: N806
+        layer.oft_R_in,
+        layer.oft_R_out,
+        layer.block_size_in,
+        layer.block_size_out,
+        layer.rows_in,
+        layer.cols_in,
+        layer.rows_out,
+        layer.cols_out,
     )
-    R_out, R_in = pc._compute_cayley(  # noqa: N806
-        layer.oft_R,
-        layer.block_size,
-        layer.rows,
-        layer.cols,
-        layer.r_in,
-        layer.r_out,
+    R_out, R_in = pc._compute_cayley_decoupled(  # noqa: N806
+        layer.oft_R_in,
+        layer.oft_R_out,
+        layer.block_size_in,
+        layer.block_size_out,
+        layer.rows_in,
+        layer.cols_in,
+        layer.rows_out,
+        layer.cols_out,
     )
+    assert R_in.shape == (4, 4, 4)
+    assert R_out.shape == (4, 16, 16)
     assert torch.allclose(R_out, R_out_ref, atol=1e-6)
     assert torch.allclose(R_in, R_in_ref, atol=1e-6)
+    # Near-orthogonal (small init).
+    eye_in = torch.eye(4, device="cuda").unsqueeze(0)
+    assert (R_in @ R_in.transpose(-2, -1) - eye_in).abs().max() < 1e-3
 
 
 def test_forward_none_mode_matches_upstream_poet_linear():
@@ -193,7 +204,8 @@ def test_forward_none_mode_matches_upstream_poet_linear():
     )
     ref.random_init_parameters()
     ref.weight.detach().copy_(cached.weight.detach())
-    ref.oft_R.detach().copy_(cached.oft_R.detach())
+    ref.oft_R_in.detach().copy_(cached.oft_R_in.detach())
+    ref.oft_R_out.detach().copy_(cached.oft_R_out.detach())
     ref.perm_in.copy_(cached.perm_in)
     ref.perm_in_inv.copy_(cached.perm_in_inv)
     ref.perm_out.copy_(cached.perm_out)
@@ -216,8 +228,24 @@ def _build_layer_for_parity(seed=0, dtype=torch.float32, device="cuda"):
         dtype=dtype,
     )
     layer.random_init_parameters()
-    layer.oft_R.requires_grad_(True)
+    layer.oft_R_in.requires_grad_(True)
+    layer.oft_R_out.requires_grad_(True)
     return layer
+
+
+def _stub_compute_cayley_decoupled(
+    oft_in, oft_out, bs_in, bs_out, rows_in, cols_in, rows_out, cols_out
+):
+    """Stub mirroring _compute_cayley_decoupled's signature/return order.
+
+    R_in depends only on oft_in and R_out only on oft_out, matching the real
+    decoupled graph so the two-VJP flush is exercised. Called positionally.
+    """
+    r_in = oft_in.shape[0]
+    r_out = oft_out.shape[0]
+    eye_out = torch.eye(bs_out).unsqueeze(0).repeat(r_out, 1, 1) * oft_out.sum()
+    eye_in = torch.eye(bs_in).unsqueeze(0).repeat(r_in, 1, 1) * oft_in.sum()
+    return eye_out, eye_in
 
 
 def test_mode_a_caches_cayley_across_K_calls(monkeypatch):  # noqa: N802
@@ -236,14 +264,11 @@ def test_mode_a_caches_cayley_across_K_calls(monkeypatch):  # noqa: N802
 
     call_count = {"n": 0}
 
-    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
+    def stub(*args, **kwargs):
         call_count["n"] += 1
-        scale = oft_R.sum()
-        eye_out = torch.eye(block_size).unsqueeze(0).repeat(r_out, 1, 1)
-        eye_in = torch.eye(block_size).unsqueeze(0).repeat(r_in, 1, 1)
-        return eye_out * scale, eye_in * scale
+        return _stub_compute_cayley_decoupled(*args, **kwargs)
 
-    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
+    monkeypatch.setattr(pc, "_compute_cayley_decoupled", stub)
 
     for _ in range(4):
         layer._get_R_blocks_mode_a()
@@ -268,26 +293,23 @@ def test_mode_a_flush_writes_to_oft_R_grad_when_no_main_grad(monkeypatch):  # no
         dtype=torch.float32,
     )
     layer.random_init_parameters()
-    layer.oft_R.requires_grad_(True)
+    layer.oft_R_in.requires_grad_(True)
+    layer.oft_R_out.requires_grad_(True)
 
-    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
-        scale = oft_R.sum()
-        eye_out = torch.eye(block_size).unsqueeze(0).repeat(r_out, 1, 1)
-        eye_in = torch.eye(block_size).unsqueeze(0).repeat(r_in, 1, 1)
-        return eye_out * scale, eye_in * scale
-
-    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
+    monkeypatch.setattr(pc, "_compute_cayley_decoupled", _stub_compute_cayley_decoupled)
 
     layer._get_R_blocks_mode_a()
     # Simulate K=2 micro-batch backwards depositing into R-leaf .grad.
     layer._R_out_leaf.grad = torch.ones_like(layer._R_out_leaf) * 2
     layer._R_in_leaf.grad = torch.ones_like(layer._R_in_leaf) * 2
 
-    # oft_R has no main_grad attribute → flush writes to .grad.
-    assert not hasattr(layer.oft_R, "main_grad")
+    # oft_R params have no main_grad attribute → flush writes to .grad on both.
+    assert not hasattr(layer.oft_R_in, "main_grad")
+    assert not hasattr(layer.oft_R_out, "main_grad")
     layer._flush_R_grads_to_oft_R()
-    assert layer.oft_R.grad is not None
-    assert torch.isfinite(layer.oft_R.grad).all()
+    assert layer.oft_R_in.grad is not None and layer.oft_R_out.grad is not None
+    assert torch.isfinite(layer.oft_R_in.grad).all()
+    assert torch.isfinite(layer.oft_R_out.grad).all()
 
 
 def test_mode_a_flush_writes_to_main_grad_when_present(monkeypatch):
@@ -305,26 +327,23 @@ def test_mode_a_flush_writes_to_main_grad_when_present(monkeypatch):
         dtype=torch.float32,
     )
     layer.random_init_parameters()
-    layer.oft_R.requires_grad_(True)
-    # Simulate Megatron's main_grad buffer (FP32 zero-initialized).
-    layer.oft_R.main_grad = torch.zeros_like(layer.oft_R, dtype=torch.float32)
+    layer.oft_R_in.requires_grad_(True)
+    layer.oft_R_out.requires_grad_(True)
+    # Simulate Megatron's main_grad buffer (FP32 zero-initialized) on both params.
+    layer.oft_R_in.main_grad = torch.zeros_like(layer.oft_R_in, dtype=torch.float32)
+    layer.oft_R_out.main_grad = torch.zeros_like(layer.oft_R_out, dtype=torch.float32)
 
-    def stub_compute_cayley(oft_R, block_size, rows, cols, r_in, r_out):  # noqa: N803
-        scale = oft_R.sum()
-        eye_out = torch.eye(block_size).unsqueeze(0).repeat(r_out, 1, 1)
-        eye_in = torch.eye(block_size).unsqueeze(0).repeat(r_in, 1, 1)
-        return eye_out * scale, eye_in * scale
-
-    monkeypatch.setattr(pc, "_compute_cayley", stub_compute_cayley)
+    monkeypatch.setattr(pc, "_compute_cayley_decoupled", _stub_compute_cayley_decoupled)
 
     layer._get_R_blocks_mode_a()
     layer._R_out_leaf.grad = torch.ones_like(layer._R_out_leaf) * 2
     layer._R_in_leaf.grad = torch.ones_like(layer._R_in_leaf) * 2
 
     layer._flush_R_grads_to_oft_R()
-    # main_grad must be populated; .grad must NOT (the flush bypasses it).
-    assert (layer.oft_R.main_grad != 0).any()
-    assert layer.oft_R.grad is None
+    # main_grad must be populated on both; .grad must NOT (flush bypasses it).
+    assert (layer.oft_R_in.main_grad != 0).any()
+    assert (layer.oft_R_out.main_grad != 0).any()
+    assert layer.oft_R_in.grad is None and layer.oft_R_out.grad is None
 
 
 def test_mode_a_flush_invalidates_cache_after_running():
@@ -339,9 +358,10 @@ def test_mode_a_flush_invalidates_cache_after_running():
         dtype=torch.float32,
     )
     layer.random_init_parameters()
-    layer.oft_R.requires_grad_(True)
-    layer._R_out_full = torch.zeros(2, 8, 8) * layer.oft_R.sum()
-    layer._R_in_full = torch.zeros(1, 8, 8) * layer.oft_R.sum()
+    layer.oft_R_in.requires_grad_(True)
+    layer.oft_R_out.requires_grad_(True)
+    layer._R_out_full = torch.zeros(2, 8, 8) * layer.oft_R_out.sum()
+    layer._R_in_full = torch.zeros(1, 8, 8) * layer.oft_R_in.sum()
     layer._R_out_leaf = layer._R_out_full.detach().requires_grad_(True)
     layer._R_in_leaf = layer._R_in_full.detach().requires_grad_(True)
     layer._R_out_leaf.grad = torch.zeros_like(layer._R_out_leaf)
@@ -367,7 +387,7 @@ def test_mode_a_flush_is_noop_when_no_forward_happened():
     )
     layer.random_init_parameters()
     layer._flush_R_grads_to_oft_R()  # must not raise
-    assert layer.oft_R.grad is None
+    assert layer.oft_R_in.grad is None and layer.oft_R_out.grad is None
 
 
 def test_mode_a_K_microbatch_parity_with_none():  # noqa: N802
@@ -390,7 +410,8 @@ def test_mode_a_K_microbatch_parity_with_none():  # noqa: N802
     for x in xs:
         y = layer_n(x)
         y.sum().backward()
-    g_n = layer_n.oft_R.grad.detach().clone()
+    g_n_in = layer_n.oft_R_in.grad.detach().clone()
+    g_n_out = layer_n.oft_R_out.grad.detach().clone()
 
     pc.reset_for_testing()
     pc.set_cache_mode("cached_fwd_bwd")
@@ -400,16 +421,62 @@ def test_mode_a_K_microbatch_parity_with_none():  # noqa: N802
         y = layer_a(x)
         y.sum().backward()
     layer_a._flush_R_grads_to_oft_R()
-    g_a = layer_a.oft_R.grad.detach().clone()
+    g_a_in = layer_a.oft_R_in.grad.detach().clone()
+    g_a_out = layer_a.oft_R_out.grad.detach().clone()
 
     # Parity is bit-exact at K=1; for K>1 the per-element rounding diff grows
     # only because grad magnitudes grow with K, while the *relative* error
-    # stays at the fp32 floor (~1.7e-6 measured on B200). With grads here of
-    # O(10-50), the plan's original atol=1e-5 demanded ~3e-7 relative
-    # precision, which fp32 Triton kernels cannot deliver. Assert a
-    # magnitude-aware relative error instead (a real logic bug would be >>1e-4).
+    # stays at the fp32 floor. Assert a magnitude-aware relative error on each
+    # of the two decoupled grads (a real logic bug would be >>1e-4).
+    g_n = torch.cat([g_n_in.flatten(), g_n_out.flatten()])
+    g_a = torch.cat([g_a_in.flatten(), g_a_out.flatten()])
     rel_err = (g_n - g_a).norm() / g_n.norm().clamp_min(1e-12)
     assert rel_err < 1e-4, f"mode A vs none relative grad error {rel_err:.2e} >= 1e-4"
+
+
+def test_mode_a_K_microbatch_parity_decoupled():  # noqa: N802
+    """Task 6.5: same K-microbatch parity, but on a DECOUPLED layer
+    (in≠out, block_count=4 ⇒ block_size_in≠block_size_out). Mode A's flushed
+    grad on both oft_R_in and oft_R_out must match none-mode accumulation."""
+    if not torch.cuda.is_available():
+        pytest.skip("requires CUDA Triton kernel")
+
+    K = 4  # noqa: N806
+    xs = [torch.randn(4, 32, device="cuda", dtype=torch.float32) for _ in range(K)]
+
+    def build():
+        torch.manual_seed(0)
+        layer = pc.CachedPOETLinear(
+            in_features=32,
+            out_features=64,
+            block_count=4,  # bs_in=8, bs_out=16
+            bias=False,
+            device="cuda",
+            dtype=torch.float32,
+        )
+        layer.random_init_parameters()
+        layer.oft_R_in.requires_grad_(True)
+        layer.oft_R_out.requires_grad_(True)
+        return layer
+
+    pc.reset_for_testing()
+    pc.set_cache_mode("none")
+    layer_n = build()
+    for x in xs:
+        layer_n(x).sum().backward()
+    g_n = torch.cat([layer_n.oft_R_in.grad.flatten(), layer_n.oft_R_out.grad.flatten()])
+
+    pc.reset_for_testing()
+    pc.set_cache_mode("cached_fwd_bwd")
+    layer_a = build()
+    pc.register_poet_layer(layer_a)
+    for x in xs:
+        layer_a(x).sum().backward()
+    layer_a._flush_R_grads_to_oft_R()
+    g_a = torch.cat([layer_a.oft_R_in.grad.flatten(), layer_a.oft_R_out.grad.flatten()])
+
+    rel_err = (g_n - g_a).norm() / g_n.norm().clamp_min(1e-12)
+    assert rel_err < 1e-4, f"decoupled mode A vs none relative grad error {rel_err:.2e} >= 1e-4"
 
 
 def test_sync_helper_is_safe_noop_on_cpu():
@@ -426,12 +493,16 @@ def test_sync_helper_is_safe_noop_on_cpu():
         dtype=torch.float32,
     )
     layer.random_init_parameters()
-    layer.oft_R.main_grad = torch.ones_like(layer.oft_R, dtype=torch.float32)
-    snapshot = layer.oft_R.main_grad.clone()
+    # Decoupled layer carries two oft_R params; set main_grad on both.
+    layer.oft_R_in.main_grad = torch.ones_like(layer.oft_R_in, dtype=torch.float32)
+    layer.oft_R_out.main_grad = torch.ones_like(layer.oft_R_out, dtype=torch.float32) * 2
+    snap_in = layer.oft_R_in.main_grad.clone()
+    snap_out = layer.oft_R_out.main_grad.clone()
 
     _sync_oft_R_grads_across_dp([layer])
-    # Single process → no op.
-    assert torch.equal(layer.oft_R.main_grad, snapshot)
+    # Single process → no op on either param.
+    assert torch.equal(layer.oft_R_in.main_grad, snap_in)
+    assert torch.equal(layer.oft_R_out.main_grad, snap_out)
 
 
 @pytest.mark.skipif(
