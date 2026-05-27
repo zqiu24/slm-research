@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-export WANDB_MODE=offline
+{% if cfg.cluster.wandb_offline %}export WANDB_MODE=offline{% endif %}
 export CONFIG_HASH={{ cfg._derived.config_hash }}
 export SEED={{ cfg.seed }}
 

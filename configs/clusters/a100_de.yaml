@@ -10,7 +10,7 @@ cluster:
   transformer_engine_version: "1.12.0"
   cuda_version: "12.1"
   pytorch_version: "2.4.0"
-  wandb_offline: true
+  wandb_offline: false                 # internet-capable; log to wandb online
   slurm_partition: "a100"
   slurm_account: "research"
   slurm_template: "launchers/slurm/bid_cluster.sbatch.j2"
