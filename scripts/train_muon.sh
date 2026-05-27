@@ -19,7 +19,7 @@ fi
 case "${ARCH}" in
   llama3)
     FAMILY="llama3"
-    DEFAULT_SCALE=""                # inherit launch config default (1_2b)
+    DEFAULT_SCALE="300m"            # smallest dense scale; override with base/scale=...
     ;;
   deepseek_v3)
     FAMILY="deepseek_v3"
