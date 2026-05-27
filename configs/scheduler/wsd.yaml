@@ -1,0 +1,8 @@
+# @package _global_
+# Warmup-Stable-Decay (MiniCPM, arXiv:2404.06395). Stable at peak, then anneal.
+scheduler:
+  type: wsd
+  warmup_fraction: 0.01
+  min_lr_ratio: 0.1
+  wsd_decay_fraction: 0.2    # final 20% is the anneal tail
+  wsd_decay_style: cosine    # exponential | linear | cosine | minus_sqrt

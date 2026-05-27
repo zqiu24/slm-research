@@ -12,7 +12,7 @@ import argparse
 import importlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from omegaconf import DictConfig, OmegaConf
@@ -30,6 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 AXIS_TO_CONFIG_DIR = {
     "base/family": "configs/base/family",
     "base/scale": "configs/base/scale",
+    "scheduler": "configs/scheduler",
     "experiment": "configs/experiments",
     "training_regime": "configs/training_regime",
     "cluster": "configs/clusters",
@@ -61,11 +62,16 @@ def _default_axis_entries(defaults: list) -> list[tuple[str, str]]:
 
 
 def _load_champion_for(family: str, scale: str) -> DictConfig:
-    """Load the champion config layered onto the same family + scale."""
+    """Load the champion config layered onto the same family + scale.
+
+    The champion uses the default cosine scheduler; include it so that a
+    default run diffs as "champion" and only real scheduler changes show up.
+    """
     base_family = OmegaConf.load(REPO_ROOT / f"configs/base/family/{family}.yaml")
     base_scale = OmegaConf.load(REPO_ROOT / f"configs/base/scale/{scale}.yaml")
+    scheduler = OmegaConf.load(REPO_ROOT / "configs/scheduler/cosine.yaml")
     champion = OmegaConf.load(REPO_ROOT / "configs/experiments/champion.yaml")
-    return OmegaConf.merge(base_family, base_scale, champion)
+    return OmegaConf.merge(base_family, base_scale, scheduler, champion)
 
 
 def _first_line(s: str | None) -> str:
@@ -173,7 +179,7 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
     cfg._derived.experiment_summary = _first_line(cfg.experiment.description)
 
     # 10. Run identity — a readable, timestamped name (one fresh dir per launch).
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     cfg._derived.launch_timestamp_utc = now.isoformat()
     run_name = (
         f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}"

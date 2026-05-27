@@ -1,0 +1,6 @@
+# @package _global_
+# Cosine decay with linear warmup. The de-facto default.
+scheduler:
+  type: cosine
+  warmup_fraction: 0.01      # 1% of total tokens; auto-scales with the budget
+  min_lr_ratio: 0.1          # min_lr = 0.1 × optim.lr

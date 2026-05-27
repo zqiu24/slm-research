@@ -120,3 +120,47 @@ def test_poet_argv_includes_cache_mode():
     args = _optimizer_args(cfg)
     assert "--poet-cache-mode" in args
     assert "cached_fwd_bwd" in args
+
+
+def test_wandb_entity_is_passed_through():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=600m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    args = _args_to_map(build_megatron_args(cfg))
+    # The configured entity must reach Megatron, not just sit unused in config.
+    assert args["--wandb-entity"] == cfg.wandb.entity
+
+
+def test_scheduler_defaults_to_cosine_block():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    assert cfg.scheduler.type == "cosine"
+    assert float(cfg.scheduler.warmup_fraction) == 0.01
+
+
+def test_scheduler_override_selects_wsd():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=wsd",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    assert cfg.scheduler.type == "wsd"
+    assert float(cfg.scheduler.wsd_decay_fraction) == 0.2

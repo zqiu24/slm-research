@@ -4,6 +4,7 @@
 defaults:
   - base/family: qwen3
   - base/scale: 1_2b
+  - scheduler: cosine
   - experiment: champion
   - training_regime: ablation_20x
   - cluster: b200_de

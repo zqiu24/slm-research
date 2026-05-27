@@ -1,0 +1,5 @@
+# @package _global_
+# Constant LR after warmup. Used for the "stable" half of a decay-only run.
+scheduler:
+  type: constant
+  warmup_fraction: 0.01
