@@ -107,6 +107,14 @@ def main() -> None:
         raise RuntimeError("--slm-config-path must be present in torchrun args")
 
     cfg = _load_resolved_config(config_path)
+
+    # Honor the cluster's wandb_offline flag: wandb reads WANDB_MODE natively,
+    # and Megatron's wandb.init does not pass a mode. Set it before pretrain()
+    # (which initializes wandb deep inside). setdefault so an explicit env
+    # override (e.g. for local debugging) still wins.
+    if bool(cfg.get("cluster", {}).get("wandb_offline", False)):
+        os.environ.setdefault("WANDB_MODE", "offline")
+
     _apply_runtime_patches(cfg)
 
     import pretrain_gpt as mg
