@@ -314,6 +314,37 @@ def _data_args(cfg: DictConfig) -> list[str]:
     return args
 
 
+def _wandb_run_name(cfg: DictConfig) -> str:
+    """Build the wandb run name: ``<experiment>-<family>-<scale>-lr<lr>``.
+
+    No seed. The LR shown is the headline LR per optimizer: ``optim.lr`` for
+    adam/poet/ngpt, and ``optim.muon.lr`` (the Muon-side LR) for muon_hybrid.
+    POET additionally appends the block parameterization: ``-bc<n>`` when
+    ``block_count`` is set, else ``-bs<n>`` for the legacy shared block size.
+    """
+    optim = cfg.optim
+    otype = str(optim.type)
+    if otype == "muon_hybrid":
+        lr = optim.get("muon", {}).get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
+    else:
+        lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
+
+    parts = [
+        str(cfg.experiment.name),
+        str(cfg.base.family),
+        str(cfg.base.scale),
+        f"lr{float(lr):g}",
+    ]
+    if otype == "poet":
+        poet = optim.get("poet", {})
+        block_count = poet.get("block_count", None)
+        if block_count is not None:
+            parts.append(f"bc{int(block_count)}")
+        else:
+            parts.append(f"bs{int(poet.get('block_size', 256))}")
+    return "-".join(parts)
+
+
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
     archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
@@ -350,7 +381,7 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             "--wandb-entity",
             cfg.wandb.entity,
             "--wandb-exp-name",
-            f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}-s{cfg.seed}",
+            _wandb_run_name(cfg),
         ]
     )
     if resume:

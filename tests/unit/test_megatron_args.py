@@ -279,3 +279,46 @@ def test_decay_only_resume_emits_finetune_and_override():
     # whole run is the anneal: warmup 0, wsd tail == total decay samples
     assert m["--lr-warmup-fraction"] == "0.0"
     assert m["--lr-wsd-decay-samples"] == str(1_200_000_000 // 4096)
+
+
+def _run_name(experiment: str) -> str:
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            f"experiment={experiment}",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    return _args_to_map(build_megatron_args(cfg))["--wandb-exp-name"]
+
+
+def test_wandb_run_name_has_lr_and_no_seed():
+    # champion optim.lr = 1.0e-3; no "-s<seed>" suffix anymore.
+    assert _run_name("champion") == "champion-llama3-300m-lr0.001"
+
+
+def test_wandb_run_name_muon_uses_muon_side_lr():
+    # muon_hybrid has no optim.lr; the headline LR is optim.muon.lr = 2.0e-3.
+    assert _run_name("optim/muon_hybrid") == "muon_hybrid-llama3-300m-lr0.002"
+
+
+def test_wandb_run_name_poet_appends_block_param():
+    # poet optim.lr = 3.0e-4; default uses block_size=256 (no block_count).
+    name = _run_name("optim/poet")
+    assert name.startswith("poet-llama3-300m-lr0.0003")
+    assert name.endswith("-bs256")
+
+
+def test_wandb_run_name_poet_block_count_overrides_block_size():
+    from src.utils.megatron_args import _wandb_run_name
+
+    cfg = OmegaConf.create(
+        {
+            "experiment": {"name": "poet"},
+            "base": {"family": "llama3", "scale": "300m"},
+            "optim": {"type": "poet", "lr": 3.0e-4, "poet": {"block_count": 8}},
+        }
+    )
+    assert _wandb_run_name(cfg) == "poet-llama3-300m-lr0.0003-bc8"
