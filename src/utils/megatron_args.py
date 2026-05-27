@@ -157,18 +157,6 @@ def _training_args(cfg: DictConfig) -> list[str]:
     _add(args, "--min-lr", training.get("min_lr", 1.0e-5))
     lr_decay_style = str(training.get("lr_decay_style", "cosine"))
     _add(args, "--lr-decay-style", lr_decay_style)
-    if lr_decay_style == "step":
-        ratio = training.get("lr_decay_step_ratio", None)
-        coeff = training.get("lr_decay_step_coeff", None)
-        if ratio is None or coeff is None:
-            raise ValueError(
-                "training.lr_decay_style=step requires training.lr_decay_step_ratio "
-                "and training.lr_decay_step_coeff"
-            )
-        args.append("--lr-decay-step-ratio")
-        args.extend(str(float(r)) for r in ratio)
-        args.append("--lr-decay-step-coeff")
-        args.extend(str(float(c)) for c in coeff)
     _add(args, "--clip-grad", training.get("clip_grad", 1.0))
     _add(args, "--weight-decay", optim.get("weight_decay", 0.1))
     _add(args, "--bf16")
