@@ -8,14 +8,8 @@ training:
   seq_length: 4096
   micro_batch_size: null
   resume_from_stable_stage: true     # required: checkpoint must exist
-
-scheduler:
-  type: wsd_decay_only
-  # Warmup + stable are skipped — we resume at the end of stable.
-  decay_tokens: null                 # set explicitly at launch
-  peak_lr: 0.01
-  min_lr_ratio: 0.1
-  decay_shape: "linear"
+  decay_tokens: null                 # set explicitly at launch (e.g. decay_tokens=1_200_000_000)
+  stable_checkpoint_dir: null        # set at launch: the stable run's checkpoints dir
 
 checkpointing:
   save_every_tokens: 2_000_000_000
