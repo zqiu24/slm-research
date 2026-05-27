@@ -164,3 +164,55 @@ def test_scheduler_override_selects_wsd():
     )
     assert cfg.scheduler.type == "wsd"
     assert float(cfg.scheduler.wsd_decay_fraction) == 0.2
+
+
+def test_cosine_scheduler_emits_warmup_fraction_and_min_lr():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=cosine",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    m = _args_to_map(build_megatron_args(cfg))
+    assert m["--lr-decay-style"] == "cosine"
+    assert m["--lr-warmup-fraction"] == "0.01"
+    # champion optim.lr = 1.0e-3, min_lr_ratio = 0.1
+    assert m["--min-lr"] == str(1.0e-3 * 0.1)
+    assert "--lr-decay-step-ratio" not in m
+
+
+def test_wsd_scheduler_emits_wsd_flags():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=wsd",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    m = _args_to_map(build_megatron_args(cfg))
+    assert m["--lr-decay-style"] == "WSD"
+    assert m["--lr-wsd-decay-style"] == "cosine"
+    assert "--lr-wsd-decay-samples" in m
+
+
+def test_ngpt_forces_zero_lr_warmup():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=cosine",
+            "experiment=arch/ngpt",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    m = _args_to_map(build_megatron_args(cfg))
+    assert m["--lr-warmup-samples"] == "0"
+    assert "--lr-warmup-fraction" not in m
