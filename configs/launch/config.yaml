@@ -15,7 +15,7 @@ seed: 42
 
 wandb:
   entity: "neckariumai-research"
-  project: "sandbox-${oc.env:USER,unknown}"
+  project: "slm-${oc.env:USER,unknown}"
   job_type: "sandbox"
 
 allow_dirty: false

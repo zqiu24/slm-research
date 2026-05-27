@@ -10,8 +10,8 @@ import subprocess
 from pathlib import Path
 
 
-class GitDirty(RuntimeError):
-    """Raised when the working tree has uncommitted changes in a non-sandbox run."""
+class GitDirty(RuntimeError):  # noqa: N818
+    """Raised when the working tree has uncommitted changes in a non-scratch run."""
 
 
 def _run(args: list[str], cwd: Path | str | None = None) -> str:
@@ -30,7 +30,7 @@ def git_sha(cwd: Path | str | None = None, *, allow_dirty: bool = False) -> str:
         if not allow_dirty:
             raise GitDirty(
                 "Working tree is dirty. Commit or stash before submitting to a shared project, "
-                "or submit to wandb.project=sandbox-<you> which permits dirty trees."
+                "or submit to wandb.project=slm-<you> which permits dirty trees."
             )
         return f"{sha}+dirty"
     return sha

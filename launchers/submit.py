@@ -173,9 +173,8 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
     cfg._derived.patch_set_hash = _register_experiment_patches(cfg)
 
     # 8. Git metadata
-    allow_dirty = bool(cfg.get("allow_dirty", False)) or str(cfg.wandb.project).startswith(
-        "sandbox"
-    )
+    # Personal "slm-<user>" projects are dev/scratch and permit dirty trees.
+    allow_dirty = bool(cfg.get("allow_dirty", False)) or str(cfg.wandb.project).startswith("slm")
     cfg._derived.git_sha = git_sha(cwd=REPO_ROOT, allow_dirty=allow_dirty)
     try:
         cfg._derived.megatron_sha = submodule_sha("third_party/Megatron-LM", cwd=REPO_ROOT)
@@ -259,7 +258,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = _parse_overrides(args.overrides)
-    # allow_dirty is on in sandbox projects by default
+    # allow_dirty is on in personal slm-<user> projects by default
     if "allow_dirty" not in cfg:
         cfg.allow_dirty = False
 
