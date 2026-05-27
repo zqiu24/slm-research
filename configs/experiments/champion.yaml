@@ -7,10 +7,11 @@ experiment:
   description: |
     Baseline: AdamW on all parameters, cosine LR schedule with linear warmup,
     standard SwiGLU / GQA / RMSNorm architecture from the active base family.
-    No patches.
+    No behavioral patches (only a logging-only ETA patch).
   references:
     - "Hu et al. 2024 (arXiv:2404.06395) — MiniCPM"
-  patches: []
+  patches:
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
   required_capabilities: []
 
 optim:

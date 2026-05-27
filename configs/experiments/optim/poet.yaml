@@ -24,6 +24,7 @@ experiment:
     - poet_unfuse_te_impl
     - poet_apply_to_model
     - poet_merge_step
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
   required_capabilities: []
 
 optim:

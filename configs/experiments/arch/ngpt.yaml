@@ -20,6 +20,7 @@ experiment:
     - ngpt_apply_spec
     - ngpt_normalize_step
     - ngpt_optimizer_setup
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
   required_capabilities: []
 
 optim:
