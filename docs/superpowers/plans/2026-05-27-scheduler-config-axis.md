@@ -54,15 +54,19 @@ Megatron has no native `step` decay style; the repo added it via a patch we no l
 **Files:**
 - Delete: `src/patches/lr_decay_style_step.py`
 - Delete: `configs/experiments/optim/adamw_step_decay.yaml`
+- Delete: `docs/experiments/adamw_step_decay.md`
 - Delete: `tests/unit/test_megatron_args_step_decay.py`
 - Modify: `launchers/pretrain_gpt_slm.py:63-66`
 - Modify: `src/utils/megatron_args.py:160-168`
 
-- [ ] **Step 1.1: Delete the three step-decay files**
+- [ ] **Step 1.1: Delete the four step-decay files**
+
+The experiment YAML has a paired doc (`docs/experiments/adamw_step_decay.md`) — delete both so the "every experiment YAML has a matching doc" pre-commit hook stays consistent and no orphan doc lingers.
 
 ```bash
 git rm src/patches/lr_decay_style_step.py \
        configs/experiments/optim/adamw_step_decay.yaml \
+       docs/experiments/adamw_step_decay.md \
        tests/unit/test_megatron_args_step_decay.py
 ```
 
@@ -511,6 +515,9 @@ git commit -m "refactor(scheduler): strip phantom scheduler blocks from regimes"
 - Create: `configs/scheduler/inverse_square_root.yaml`
 - Create: `configs/scheduler/wsd_decay_only.yaml`
 - Modify: `configs/launch/config.yaml`
+- Modify: `launchers/submit.py` (`AXIS_TO_CONFIG_DIR` registration + `_load_champion_for`)
+
+> **Why `submit.py` must change:** this repo does **not** use native Hydra composition. `launchers/submit.py::_parse_overrides` resolves each axis through the hardcoded `AXIS_TO_CONFIG_DIR` dict and `_axis_config_path` raises `ValueError("Unknown config axis ...")` for anything not registered. Adding `scheduler` to the `defaults:` list alone makes composition **crash** (both for the default entry and for `scheduler=wsd` overrides). The axis must also be registered, and the champion baseline must include the default scheduler so it doesn't show up as a spurious config diff.
 
 - [ ] **Step 5.1: Create the six scheduler files**
 
@@ -598,7 +605,56 @@ defaults:
   - _self_
 ```
 
-- [ ] **Step 5.3: Verify composition picks up the scheduler block**
+- [ ] **Step 5.3: Register the `scheduler` axis in the custom composition layer**
+
+In `launchers/submit.py`, add the `scheduler` entry to `AXIS_TO_CONFIG_DIR` (currently lines 30-37):
+
+```python
+AXIS_TO_CONFIG_DIR = {
+    "base/family": "configs/base/family",
+    "base/scale": "configs/base/scale",
+    "scheduler": "configs/scheduler",
+    "experiment": "configs/experiments",
+    "training_regime": "configs/training_regime",
+    "cluster": "configs/clusters",
+    "data": "configs/data",
+}
+```
+
+This makes both the default `- scheduler: cosine` and CLI overrides like `scheduler=wsd` resolve to `configs/scheduler/<value>.yaml` instead of raising `ValueError("Unknown config axis 'scheduler'")` (or, for the override, being misrouted into the dotlist and clobbering `cfg.scheduler` with a bare string).
+
+- [ ] **Step 5.4: Include the default scheduler in the champion baseline**
+
+`_load_champion_for` (currently lines 63-68) builds the champion comparison config from family + scale + `champion.yaml` only. Since every resolved config now carries a `scheduler:` block, the champion baseline must include the default one — otherwise `config_diff.diff_from_champion` flags `scheduler.*` as a deviation on *every* run (it walks all keys and reports any present in the resolved config but absent in champion; `scheduler` is not in `DEFAULT_EXCLUDED`), breaking the "champion" label.
+
+Replace:
+
+```python
+def _load_champion_for(family: str, scale: str) -> DictConfig:
+    """Load the champion config layered onto the same family + scale."""
+    base_family = OmegaConf.load(REPO_ROOT / f"configs/base/family/{family}.yaml")
+    base_scale = OmegaConf.load(REPO_ROOT / f"configs/base/scale/{scale}.yaml")
+    champion = OmegaConf.load(REPO_ROOT / "configs/experiments/champion.yaml")
+    return OmegaConf.merge(base_family, base_scale, champion)
+```
+
+with:
+
+```python
+def _load_champion_for(family: str, scale: str) -> DictConfig:
+    """Load the champion config layered onto the same family + scale.
+
+    The champion uses the default cosine scheduler; include it so that a
+    default run diffs as "champion" and only real scheduler changes show up.
+    """
+    base_family = OmegaConf.load(REPO_ROOT / f"configs/base/family/{family}.yaml")
+    base_scale = OmegaConf.load(REPO_ROOT / f"configs/base/scale/{scale}.yaml")
+    scheduler = OmegaConf.load(REPO_ROOT / "configs/scheduler/cosine.yaml")
+    champion = OmegaConf.load(REPO_ROOT / "configs/experiments/champion.yaml")
+    return OmegaConf.merge(base_family, base_scale, scheduler, champion)
+```
+
+- [ ] **Step 5.5: Verify composition picks up the scheduler block**
 
 Add a quick test to `tests/unit/test_megatron_args.py` (helpers `_parse_overrides`, `_args_to_map` already imported at top of that file):
 
@@ -632,16 +688,57 @@ def test_scheduler_override_selects_wsd():
     assert float(cfg.scheduler.wsd_decay_fraction) == 0.2
 ```
 
-- [ ] **Step 5.4: Run to verify pass**
+- [ ] **Step 5.6: Add a champion-diff regression test**
 
-Run: `pytest tests/unit/test_megatron_args.py -k scheduler -q`
-Expected: PASS (2 tests). If `_parse_overrides` cannot find the `scheduler` group, confirm the directory is `configs/scheduler/` and each file begins with `# @package _global_`.
+A default cosine run must still diff as `"champion"` (not flag `scheduler.*`). Add to `tests/unit/test_config_diff.py` (it already imports `diff_from_champion`; add the submit-helper imports shown):
 
-- [ ] **Step 5.5: Commit**
+```python
+from launchers.submit import _load_champion_for, _parse_overrides
+from src.utils.config_diff import diff_from_champion
+
+
+def test_default_cosine_run_diffs_as_champion():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    champ = _load_champion_for("llama3", "300m")
+    diff = diff_from_champion(cfg, champ)
+    assert "scheduler." not in diff  # cosine default must not show as a deviation
+
+
+def test_wsd_run_shows_scheduler_diff():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=wsd",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    champ = _load_champion_for("llama3", "300m")
+    diff = diff_from_champion(cfg, champ)
+    assert "scheduler.type=" in diff  # wsd is a real deviation from cosine champion
+```
+
+- [ ] **Step 5.7: Run to verify pass**
+
+Run: `pytest tests/unit/test_megatron_args.py -k scheduler tests/unit/test_config_diff.py -q`
+Expected: PASS. If `_parse_overrides` raises `Unknown config axis 'scheduler'`, Step 5.3 (AXIS_TO_CONFIG_DIR) was missed. If `test_default_cosine_run_diffs_as_champion` fails with `scheduler.*` in the diff, Step 5.4 (`_load_champion_for`) was missed.
+
+- [ ] **Step 5.8: Commit**
 
 ```bash
-git add configs/scheduler/ configs/launch/config.yaml tests/unit/test_megatron_args.py
-git commit -m "feat(scheduler): add scheduler config group and launch default"
+git add configs/scheduler/ configs/launch/config.yaml launchers/submit.py \
+        tests/unit/test_megatron_args.py tests/unit/test_config_diff.py
+git commit -m "feat(scheduler): add scheduler config group, register axis, fix champion baseline"
 ```
 
 ---
@@ -784,7 +881,11 @@ When `training.resume_from_stable_stage` is set, point `--load` at the stable ch
 
 **Files:**
 - Modify: `src/utils/megatron_args.py` (`_training_args` total_tokens; `_logging_args` load/finetune)
+- Modify: `launchers/submit.py` (`resolve_config` step 3 total-tokens, for the full launch pipeline)
 - Test: `tests/unit/test_megatron_args.py` (extend)
+- Test: `tests/unit/test_train_megatron_command.py` (extend — exercises the full `resolve_config` pipeline)
+
+> **Note:** the unit tests above only exercise `build_megatron_args`. The *real* launch path goes through `launchers.submit.resolve_config`, whose step 3 (`cfg.training.total_tokens = total_tokens(cfg.training.tokens_per_param, ...)`) crashes on `tokens_per_param: null` (`ladder_math.total_tokens` rejects non-positive). Both call sites must be made resume-aware, or decay-only "works" in unit tests while a `--dry-run` launch dies.
 
 - [ ] **Step 7.1: Add a failing decay-only test**
 
@@ -916,16 +1017,71 @@ def _logging_args(cfg: DictConfig) -> list[str]:
     return args
 ```
 
-- [ ] **Step 7.5: Run to verify pass**
+- [ ] **Step 7.5: Make `resolve_config` total-tokens resume-aware (full launch pipeline)**
 
-Run: `pytest tests/unit/test_megatron_args.py -q`
+In `launchers/submit.py`, `resolve_config` step 3 currently reads:
+
+```python
+    # 3. Token count
+    cfg.training.total_tokens = total_tokens(
+        cfg.training.tokens_per_param, int(cfg.base.non_embedding_params)
+    )
+```
+
+Replace with (decay-only sets the budget from `decay_tokens`, since `tokens_per_param` is null):
+
+```python
+    # 3. Token count
+    if bool(cfg.training.get("resume_from_stable_stage", False)):
+        decay_tokens = cfg.training.get("decay_tokens", None)
+        if decay_tokens is None:
+            raise ValueError(
+                "resume_from_stable_stage requires training.decay_tokens "
+                "(e.g. training.decay_tokens=1_200_000_000)"
+            )
+        cfg.training.total_tokens = int(decay_tokens)
+    else:
+        cfg.training.total_tokens = total_tokens(
+            cfg.training.tokens_per_param, int(cfg.base.non_embedding_params)
+        )
+```
+
+- [ ] **Step 7.6: Add a full-pipeline decay-only test**
+
+`tests/unit/test_train_megatron_command.py` already drives `resolve_config`. Add a test there asserting the decay-only path resolves without crashing and sets the budget from `decay_tokens`:
+
+```python
+def test_decay_only_resolves_total_tokens_from_decay_tokens():
+    from launchers.submit import _parse_overrides, resolve_config
+
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3", "base/scale=300m",
+            "scheduler=wsd_decay_only",
+            "experiment=champion",
+            "training_regime=final_wsd_decay_only",
+            "cluster=h800_cn",
+            "training.decay_tokens=1200000000",
+            "training.stable_checkpoint_dir=/tmp/stable_ckpt",
+        ]
+    )
+    resolve_config(cfg)  # must not raise on tokens_per_param: null
+    assert int(cfg.training.total_tokens) == 1_200_000_000
+```
+
+(If `resolve_config` needs `allow_dirty` or other fields the existing tests in this file already set, mirror their setup — check the top of `test_train_megatron_command.py` for the shared fixture/helper before writing this test.)
+
+- [ ] **Step 7.7: Run to verify pass**
+
+Run: `pytest tests/unit/test_megatron_args.py tests/unit/test_train_megatron_command.py -q`
 Expected: PASS (all). The non-resume tests are unaffected because `resume_from_stable_stage` defaults False.
 
-- [ ] **Step 7.6: Commit**
+- [ ] **Step 7.8: Commit**
 
 ```bash
-git add src/utils/megatron_args.py tests/unit/test_megatron_args.py
-git commit -m "feat(scheduler): decay-only resume flags (finetune + override scheduler)"
+git add src/utils/megatron_args.py launchers/submit.py \
+        tests/unit/test_megatron_args.py tests/unit/test_train_megatron_command.py
+git commit -m "feat(scheduler): decay-only resume flags + resume-aware token budget"
 ```
 
 ---
@@ -940,10 +1096,20 @@ git commit -m "feat(scheduler): decay-only resume flags (finetune + override sch
 
 `configs/experiments/champion.yaml` line 8 says "WSD schedule". It actually composes with `scheduler=cosine` now. Change the description text from `WSD schedule` to `cosine LR schedule with linear warmup` so the doc matches reality. (Pure comment/description edit — no behavioral change.)
 
-- [ ] **Step 8.2: Run the full unit suite**
+- [ ] **Step 8.2: Run the full unit suite, with attention to the existing pipeline tests**
 
 Run: `pytest tests/unit/ -q`
-Expected: PASS, with the step-decay test gone and the new scheduler tests present. Note any failures unrelated to this work (pre-existing) but do not fix them here.
+Expected: PASS, with the step-decay test gone and the new scheduler tests present.
+
+These existing tests exercise the full `resolve_config` / `diff_from_champion` pipeline and are the safety net for the composition-layer changes in Tasks 5 and 7 — they must stay green:
+- `tests/unit/test_config_diff.py` — would fail if `_load_champion_for` (Step 5.4) didn't include the cosine scheduler (spurious `scheduler.*` diffs).
+- `tests/unit/test_train_megatron_command.py` — drives `resolve_config`; would fail if the `scheduler` axis isn't registered (Step 5.3) or decay-only token budget isn't resume-aware (Step 7.5).
+- `tests/unit/test_deepseek_proxy_small_scale.py`, `tests/unit/test_deepseek_v3_3b_scale.py`, `tests/unit/test_data_cache_path.py` — also run the pipeline; confirm the new `scheduler` default composes cleanly for the deepseek family too.
+
+Run them explicitly first to localize any composition regression:
+
+Run: `pytest tests/unit/test_config_diff.py tests/unit/test_train_megatron_command.py tests/unit/test_deepseek_proxy_small_scale.py tests/unit/test_deepseek_v3_3b_scale.py tests/unit/test_data_cache_path.py -q`
+Expected: PASS. A failure here points back to a missed step in Task 5 (axis registration / champion baseline) or Task 7 (resume token budget). Note any failures genuinely unrelated to this work (pre-existing) but do not fix them here.
 
 - [ ] **Step 8.3: Smoke the four train scripts compose correctly (dry, no GPU)**
 
@@ -965,7 +1131,31 @@ for sched in ['cosine','wsd','constant','linear','inverse_square_root']:
 
 Expected: prints `cosine OK` … `inverse_square_root OK`.
 
-- [ ] **Step 8.4: Commit**
+- [ ] **Step 8.4: Smoke the full launch pipeline via `--dry-run` (catches composition/resolve issues unit tests miss)**
+
+Run:
+
+```bash
+python -m launchers.submit base/family=llama3 base/scale=300m \
+    scheduler=wsd experiment=champion training_regime=ablation_20x \
+    cluster=h800_cn --dry-run
+```
+
+Expected: prints the resolved-config JSON (run_name, config_diff_from_champion containing `scheduler.type=`, total_tokens, parallelism) and exits 0. A `ValueError: Unknown config axis 'scheduler'` means Step 5.3 was missed.
+
+Then the decay-only path:
+
+```bash
+python -m launchers.submit base/family=llama3 base/scale=300m \
+    scheduler=wsd_decay_only experiment=champion \
+    training_regime=final_wsd_decay_only cluster=h800_cn \
+    training.decay_tokens=1200000000 \
+    training.stable_checkpoint_dir=/tmp/stable_ckpt --dry-run
+```
+
+Expected: resolves and exits 0 (total_tokens = 1200000000). A crash in `total_tokens(...)` means Step 7.5 was missed.
+
+- [ ] **Step 8.5: Commit**
 
 ```bash
 git add configs/experiments/champion.yaml
@@ -980,7 +1170,8 @@ git commit -m "docs(scheduler): champion description matches cosine default"
 - `scheduler=cosine scheduler.warmup_fraction=0.02` tweaks warmup without editing YAML.
 - All 5 regimes are scheduler-free; all 6 scheduler files compose.
 - Step-decay legacy is gone; zero patches involved.
-- `pytest tests/unit/test_scheduler.py tests/unit/test_megatron_args.py` is green.
+- `pytest tests/unit/test_scheduler.py tests/unit/test_megatron_args.py tests/unit/test_config_diff.py tests/unit/test_train_megatron_command.py` is green.
+- `python -m launchers.submit ... scheduler=wsd ... --dry-run` resolves; a default cosine run still labels as `"champion"` while `scheduler=wsd` shows a `scheduler.type=` diff.
 
 ## Out of scope (per spec)
 
