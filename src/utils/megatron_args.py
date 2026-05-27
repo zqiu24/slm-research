@@ -7,6 +7,8 @@ from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
+from src.utils.scheduler import scheduler_args
+
 
 def _truthy(value: Any) -> bool:
     return bool(value)
@@ -138,37 +140,37 @@ def _training_args(cfg: DictConfig) -> list[str]:
     else:
         micro_batch_size = int(micro_batch_raw)
 
-    total_tokens = int(training.get("total_tokens", 0)) or (
-        int(training.get("tokens_per_param", 20)) * int(cfg.base.non_embedding_params)
-    )
+    if bool(training.get("resume_from_stable_stage", False)):
+        decay_tokens = training.get("decay_tokens", None)
+        if decay_tokens is None:
+            raise ValueError(
+                "resume_from_stable_stage requires training.decay_tokens "
+                "(e.g. training.decay_tokens=1_200_000_000)"
+            )
+        total_tokens = int(decay_tokens)
+    else:
+        total_tokens = int(training.get("total_tokens", 0)) or (
+            int(training.get("tokens_per_param", 20)) * int(cfg.base.non_embedding_params)
+        )
+
+    peak_lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
+    force_no_warmup = bool(cfg.optim.get("ngpt", {}).get("no_warmup", False))
 
     args: list[str] = []
     _add(args, "--micro-batch-size", micro_batch_size)
     _add(args, "--global-batch-size", global_batch_size)
     _add(args, "--train-samples", total_tokens // seq_length)
     _add(args, "--lr-decay-samples", total_tokens // seq_length)
-    warmup_samples = (
-        0
-        if bool(cfg.optim.get("ngpt", {}).get("no_warmup", False))
-        else max(1, (total_tokens // seq_length) // 500)
+    _add(args, "--lr", peak_lr)
+    args.extend(
+        scheduler_args(
+            cfg.scheduler,
+            peak_lr=float(peak_lr),
+            total_tokens=total_tokens,
+            seq_length=seq_length,
+            force_no_warmup=force_no_warmup,
+        )
     )
-    _add(args, "--lr-warmup-samples", warmup_samples)
-    _add(args, "--lr", optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3)))
-    _add(args, "--min-lr", training.get("min_lr", 1.0e-5))
-    lr_decay_style = str(training.get("lr_decay_style", "cosine"))
-    _add(args, "--lr-decay-style", lr_decay_style)
-    if lr_decay_style == "step":
-        ratio = training.get("lr_decay_step_ratio", None)
-        coeff = training.get("lr_decay_step_coeff", None)
-        if ratio is None or coeff is None:
-            raise ValueError(
-                "training.lr_decay_style=step requires training.lr_decay_step_ratio "
-                "and training.lr_decay_step_coeff"
-            )
-        args.append("--lr-decay-step-ratio")
-        args.extend(str(float(r)) for r in ratio)
-        args.append("--lr-decay-step-coeff")
-        args.extend(str(float(c)) for c in coeff)
     _add(args, "--clip-grad", training.get("clip_grad", 1.0))
     _add(args, "--weight-decay", optim.get("weight_decay", 0.1))
     _add(args, "--bf16")
@@ -315,7 +317,14 @@ def _data_args(cfg: DictConfig) -> list[str]:
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
     archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
-    return _sequence(
+    training = cfg.training
+    resume = bool(training.get("resume_from_stable_stage", False))
+    load_dir = (
+        str(training.get("stable_checkpoint_dir"))
+        if resume and training.get("stable_checkpoint_dir", None) is not None
+        else f"{archive}/checkpoints"
+    )
+    args = _sequence(
         [
             "--log-interval",
             cfg.training.get("log_interval", 10),
@@ -335,13 +344,19 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             "--save",
             f"{archive}/checkpoints",
             "--load",
-            f"{archive}/checkpoints",
+            load_dir,
             "--wandb-project",
             cfg.wandb.project,
+            "--wandb-entity",
+            cfg.wandb.entity,
             "--wandb-exp-name",
             f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}-s{cfg.seed}",
         ]
     )
+    if resume:
+        _add(args, "--finetune")
+        _add(args, "--override-opt-param-scheduler")
+    return args
 
 
 def build_megatron_args(cfg: DictConfig) -> list[str]:

@@ -1,0 +1,9 @@
+# @package _global_
+# Decay-only resume: no warmup, the entire run is the WSD anneal. Compose with
+# training_regime=final_wsd_decay_only (which sets resume_from_stable_stage).
+scheduler:
+  type: wsd
+  warmup_fraction: 0.0
+  min_lr_ratio: 0.1
+  wsd_decay_fraction: 1.0    # whole run is anneal
+  wsd_decay_style: cosine

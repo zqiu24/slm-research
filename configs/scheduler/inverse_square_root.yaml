@@ -1,0 +1,5 @@
+# @package _global_
+scheduler:
+  type: inverse-square-root
+  warmup_fraction: 0.01
+  min_lr_ratio: 0.1

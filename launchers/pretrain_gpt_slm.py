@@ -60,10 +60,6 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         action="store_true",
         help="Force LR warmup steps to 0 (matches reference train.py:114)",
     )
-    # Piecewise-constant step decay (see src/patches/lr_decay_style_step.py).
-    # Only consumed when --lr-decay-style=step.
-    group.add_argument("--lr-decay-step-ratio", nargs="+", type=float, default=None)
-    group.add_argument("--lr-decay-step-coeff", nargs="+", type=float, default=None)
     return parser
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from launchers.submit import _load_champion_for, _parse_overrides
 from src.utils.config_diff import diff_from_champion
 
 
@@ -55,3 +56,34 @@ def test_removed_field_marked():
     cur = _base()
     del cur["optim"]["betas"]
     assert "optim.betas=<removed>" in diff_from_champion(cur, _base())
+
+
+def test_default_cosine_run_diffs_as_champion():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    champ = _load_champion_for("llama3", "300m")
+    diff = diff_from_champion(cfg, champ)
+    assert "scheduler." not in diff  # cosine default must not show as a deviation
+
+
+def test_wsd_run_shows_scheduler_diff():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=wsd",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    champ = _load_champion_for("llama3", "300m")
+    diff = diff_from_champion(cfg, champ)
+    assert "scheduler.type=" in diff  # wsd is a real deviation from cosine champion
