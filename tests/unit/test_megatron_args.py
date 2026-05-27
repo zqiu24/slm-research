@@ -216,3 +216,26 @@ def test_ngpt_forces_zero_lr_warmup():
     m = _args_to_map(build_megatron_args(cfg))
     assert m["--lr-warmup-samples"] == "0"
     assert "--lr-warmup-fraction" not in m
+
+
+def test_decay_only_resume_emits_finetune_and_override():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=wsd_decay_only",
+            "experiment=champion",
+            "training_regime=final_wsd_decay_only",
+            "cluster=h800_cn",
+            "training.decay_tokens=1200000000",
+            "training.stable_checkpoint_dir=/tmp/stable_ckpt",
+        ]
+    )
+    m = _args_to_map(build_megatron_args(cfg))
+    assert m["--finetune"] is True
+    assert m["--override-opt-param-scheduler"] is True
+    assert m["--load"] == "/tmp/stable_ckpt"
+    assert m["--lr-decay-style"] == "WSD"
+    # whole run is the anneal: warmup 0, wsd tail == total decay samples
+    assert m["--lr-warmup-fraction"] == "0.0"
+    assert m["--lr-wsd-decay-samples"] == str(1_200_000_000 // 4096)

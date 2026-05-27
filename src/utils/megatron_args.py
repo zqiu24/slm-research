@@ -140,9 +140,18 @@ def _training_args(cfg: DictConfig) -> list[str]:
     else:
         micro_batch_size = int(micro_batch_raw)
 
-    total_tokens = int(training.get("total_tokens", 0)) or (
-        int(training.get("tokens_per_param", 20)) * int(cfg.base.non_embedding_params)
-    )
+    if bool(training.get("resume_from_stable_stage", False)):
+        decay_tokens = training.get("decay_tokens", None)
+        if decay_tokens is None:
+            raise ValueError(
+                "resume_from_stable_stage requires training.decay_tokens "
+                "(e.g. training.decay_tokens=1_200_000_000)"
+            )
+        total_tokens = int(decay_tokens)
+    else:
+        total_tokens = int(training.get("total_tokens", 0)) or (
+            int(training.get("tokens_per_param", 20)) * int(cfg.base.non_embedding_params)
+        )
 
     peak_lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
     force_no_warmup = bool(cfg.optim.get("ngpt", {}).get("no_warmup", False))
@@ -303,7 +312,14 @@ def _data_args(cfg: DictConfig) -> list[str]:
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
     archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
-    return _sequence(
+    training = cfg.training
+    resume = bool(training.get("resume_from_stable_stage", False))
+    load_dir = (
+        str(training.get("stable_checkpoint_dir"))
+        if resume and training.get("stable_checkpoint_dir", None) is not None
+        else f"{archive}/checkpoints"
+    )
+    args = _sequence(
         [
             "--log-interval",
             cfg.training.get("log_interval", 10),
@@ -323,7 +339,7 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             "--save",
             f"{archive}/checkpoints",
             "--load",
-            f"{archive}/checkpoints",
+            load_dir,
             "--wandb-project",
             cfg.wandb.project,
             "--wandb-entity",
@@ -332,6 +348,10 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}-s{cfg.seed}",
         ]
     )
+    if resume:
+        _add(args, "--finetune")
+        _add(args, "--override-opt-param-scheduler")
+    return args
 
 
 def build_megatron_args(cfg: DictConfig) -> list[str]:

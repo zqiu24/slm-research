@@ -67,3 +67,20 @@ def test_build_torchrun_command_honors_env_node_count(monkeypatch):
 
     i = cmd.index("--nnodes")
     assert cmd[i + 1] == "4"
+
+
+def test_decay_only_resolves_total_tokens_from_decay_tokens():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=wsd_decay_only",
+            "experiment=champion",
+            "training_regime=final_wsd_decay_only",
+            "cluster=h800_cn",
+            "training.decay_tokens=1200000000",
+            "training.stable_checkpoint_dir=/tmp/stable_ckpt",
+        ]
+    )
+    resolve_config(cfg)  # must not raise on tokens_per_param: null
+    assert int(cfg.training.total_tokens) == 1_200_000_000

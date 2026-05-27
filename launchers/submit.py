@@ -140,9 +140,18 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
     )
 
     # 3. Token count
-    cfg.training.total_tokens = total_tokens(
-        cfg.training.tokens_per_param, int(cfg.base.non_embedding_params)
-    )
+    if bool(cfg.training.get("resume_from_stable_stage", False)):
+        decay_tokens = cfg.training.get("decay_tokens", None)
+        if decay_tokens is None:
+            raise ValueError(
+                "resume_from_stable_stage requires training.decay_tokens "
+                "(e.g. training.decay_tokens=1_200_000_000)"
+            )
+        cfg.training.total_tokens = int(decay_tokens)
+    else:
+        cfg.training.total_tokens = total_tokens(
+            cfg.training.tokens_per_param, int(cfg.base.non_embedding_params)
+        )
 
     # 4. Capability check
     assert_compatible(
