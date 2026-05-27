@@ -57,6 +57,11 @@ def _ngpt_cfg():
                     "no_warmup": True,
                 },
             },
+            "scheduler": {
+                "type": "cosine",
+                "warmup_fraction": 0.01,
+                "min_lr_ratio": 0.1,
+            },
             "parallelism": {"tp": 1, "pp": 1, "sequence_parallel": False},
             "data": {
                 "path": "/tmp/x",
@@ -93,12 +98,15 @@ def test_no_warmup_emits_zero_warmup_samples():
     assert int(args[i + 1]) == 0
 
 
-def test_no_warmup_false_keeps_default_warmup_samples():
+def test_no_warmup_false_keeps_default_warmup():
     cfg = _ngpt_cfg()
     cfg.optim.ngpt.no_warmup = False
     args = build_megatron_args(cfg)
-    i = args.index("--lr-warmup-samples")
-    assert int(args[i + 1]) > 0
+    # With no_warmup False the scheduler's warmup applies; the cosine default
+    # expresses warmup as a fraction of the budget, not an explicit sample count.
+    i = args.index("--lr-warmup-fraction")
+    assert float(args[i + 1]) > 0
+    assert "--lr-warmup-samples" not in args
 
 
 def test_disable_bias_linear_still_present():
