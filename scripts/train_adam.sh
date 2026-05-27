@@ -57,5 +57,6 @@ python -m launchers.train_megatron \
   "experiment=champion" \
   "base.model.seq_length=256" \
   "training.seq_length=256" \
+  "training.global_batch_size_tokens=131072" \
   "base.model.transformer_impl=local" \
   "$@"
