@@ -58,3 +58,6 @@ runs/**/wandb/
 *.key
 
 runs
+
+# Local scratch (node keep-alive loop, etc.)
+hold.py
