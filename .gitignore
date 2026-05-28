@@ -61,3 +61,11 @@ runs
 
 # Local scratch (node keep-alive loop, etc.)
 hold.py
+
+# huawei vendored POET stack — runtime outputs (not source)
+poet_torch_huawei/runs_dev/
+poet_torch_huawei/**/__pycache__/
+poet_torch_huawei/**/*.pyc
+poet_torch_huawei/**/wandb/
+poet_torch_huawei/**/*.log
+poet_torch_huawei/training_scripts/**/data_cache/
