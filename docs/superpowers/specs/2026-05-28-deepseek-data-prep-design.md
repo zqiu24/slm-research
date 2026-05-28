@@ -76,6 +76,13 @@ Downloaded **tokenizer files only** (no weights) via `snapshot_download(..., all
      (default **partitions=1, workers=8** — single file written directly, matching the
      `zqiu24/Megatron-LM` fork's recipe; `--partitions>1` is available for very large corpora).
 
+3. **`preprocess_deepseek_nemotron.sh`** — hardcoded one-command driver for the full
+   Nemotron-CC-v2 corpus. Input is already one merged jsonl
+   (`/lustre/scratch/zqiu/Megatron-LM/Nemotron-CC-v2/nemotron_full.jsonl`, 2.7 TB), so it skips
+   stages 1-2 and calls file #1 directly (workers=8, partitions=1). Output follows the sibling
+   naming convention → `nemotron_cc_v2_high_quality_deepseek_v3_tokenizer_text_document.{bin,idx}`
+   (alongside the existing `_llama31_tokenizer` / `_qwen3_tokenizer` / `_qwen35_tokenizer` sets).
+
 ### Reused unchanged
 - `preprocess_parquet_to_jsonl.py` (tokenizer-agnostic; sharded jsonl writer).
 
