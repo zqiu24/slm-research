@@ -14,7 +14,7 @@ def test_parse_overrides_loads_defaults_and_data_axis():
 
     assert cfg.base.family == "qwen3"
     assert cfg.base.scale == "1_2b"
-    assert cfg.experiment.name == "champion"
+    assert cfg.experiment.name == "adam"
     assert cfg.cluster.name == "h800_cn"
     assert cfg.data.name == "nemotron_cc_v2_llama31_8b"
     assert cfg.data.path == (

@@ -1,4 +1,4 @@
-# Experiment: muon_hybrid
+# Experiment: muon
 
 **Family**: optim
 **Status**: exploratory

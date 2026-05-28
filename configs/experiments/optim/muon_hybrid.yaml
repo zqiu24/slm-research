@@ -1,6 +1,8 @@
 # @package _global_
+# Selector/file stays `muon_hybrid` (and optim.type below); the display name
+# is `muon` so runs are named `muon-...`.
 experiment:
-  name: muon_hybrid
+  name: muon
   family: optim
   description: |
     Muon on linear weights, Adam on embeddings, norms, biases, and LM head.

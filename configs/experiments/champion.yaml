@@ -1,8 +1,11 @@
 # @package _global_
 # Current champion baseline. Overwritten at each promotion event
 # (SPEC.md §11). Matching this exactly -> config_diff_from_champion == "champion".
+# No champion has been crowned yet, so this slot holds the plain AdamW
+# baseline and runs are named `adam-...` (not `champion-...`). The file name
+# stays champion.yaml -- it is the diff reference (`_load_champion_for`).
 experiment:
-  name: champion
+  name: adam
   family: optim
   description: |
     Baseline: AdamW on all parameters, cosine LR schedule with linear warmup,

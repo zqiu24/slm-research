@@ -312,13 +312,13 @@ def _run_name(experiment: str) -> str:
 
 
 def test_wandb_run_name_has_lr_and_no_seed():
-    # champion optim.lr = 1.0e-3; no "-s<seed>" suffix anymore.
-    assert _run_name("champion") == "champion-llama3-300m-lr0.001"
+    # champion optim.lr = 1.0e-3; display name is "adam"; no "-s<seed>" suffix.
+    assert _run_name("champion") == "adam-llama3-300m-lr0.001"
 
 
 def test_wandb_run_name_muon_uses_muon_side_lr():
     # muon_hybrid has no optim.lr; the headline LR is optim.muon.lr = 2.0e-3.
-    assert _run_name("optim/muon_hybrid") == "muon_hybrid-llama3-300m-lr0.002"
+    assert _run_name("optim/muon_hybrid") == "muon-llama3-300m-lr0.002"
 
 
 def test_wandb_run_name_poet_appends_block_param():
