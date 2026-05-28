@@ -1,0 +1,25 @@
+# @package _global_
+# AdamW baseline as a first-class optim experiment, sibling to poet/muon.
+# Mirrors configs/experiments/champion.yaml (the promotion slot + diff
+# reference), which currently holds this same AdamW baseline because no
+# champion has been crowned yet. Keep the experiment + optim sections in sync
+# with champion.yaml so adam runs report config_diff_from_champion=="champion".
+experiment:
+  name: adam
+  family: optim
+  description: |
+    Baseline: AdamW on all parameters, cosine LR schedule with linear warmup,
+    standard SwiGLU / GQA / RMSNorm architecture from the active base family.
+    No behavioral patches (only a logging-only ETA patch).
+  references:
+    - "Hu et al. 2024 (arXiv:2404.06395) — MiniCPM"
+  patches:
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
+  required_capabilities: []
+
+optim:
+  type: adamw
+  lr: 1.0e-3
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  weight_decay: 0.1

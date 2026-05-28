@@ -54,7 +54,7 @@ python -m launchers.train_megatron \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
   "cluster=h100_de" \
-  "experiment=champion" \
+  "experiment=optim/adam" \
   "base.model.seq_length=256" \
   "training.seq_length=256" \
   "training.global_batch_size_tokens=131072" \
