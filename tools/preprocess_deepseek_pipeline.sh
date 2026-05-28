@@ -113,7 +113,7 @@ fi
 # --- Stage 3: tokenize merged jsonl -> .bin/.idx -----------------------------
 if want_stage 3; then
   [[ -f "$JSONL_MERGED" ]] || { echo "stage 3 needs $JSONL_MERGED" >&2; exit 2; }
-  echo "[stage 3] tokenize -> ${OUTPUT_PREFIX}.{bin,idx}"
+  echo "[stage 3] tokenize -> ${OUTPUT_PREFIX}_text_document.{bin,idx}"
   INPUT_FILE="$JSONL_MERGED" \
   OUTPUT_PREFIX="$OUTPUT_PREFIX" \
   TOKENIZER_MODEL="$TOKENIZER_MODEL" \
@@ -123,4 +123,6 @@ if want_stage 3; then
     bash tools/preprocess_deepseek_tokenize.sh
 fi
 
-echo "[done] ${OUTPUT_PREFIX}.bin / ${OUTPUT_PREFIX}.idx"
+# preprocess_data.py appends "_text_document"; that is the prefix to pass to the trainer's --data-path.
+echo "[done] ${OUTPUT_PREFIX}_text_document.bin / ${OUTPUT_PREFIX}_text_document.idx"
+echo "[trainer] --data-path ${OUTPUT_PREFIX}_text_document"

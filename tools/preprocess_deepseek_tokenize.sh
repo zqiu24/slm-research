@@ -38,7 +38,9 @@ fi
 
 mkdir -p "$(dirname "$OUTPUT_PREFIX")"
 
-echo "[deepseek-tokenize] ${INPUT_FILE} -> ${OUTPUT_PREFIX}.{bin,idx}"
+# NOTE: preprocess_data.py appends "_<json-key>_document" to --output-prefix, so the
+# real files are ${OUTPUT_PREFIX}_${JSON_KEYS}_document.{bin,idx} (default: _text_document).
+echo "[deepseek-tokenize] ${INPUT_FILE} -> ${OUTPUT_PREFIX}_${JSON_KEYS}_document.{bin,idx}"
 echo "  tokenizer=${TOKENIZER_MODEL} (${TOKENIZER_TYPE})  workers=${WORKERS}  partitions=${PARTITIONS}"
 
 python "$PREP" \
