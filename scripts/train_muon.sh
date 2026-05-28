@@ -50,7 +50,6 @@ python -m launchers.train_megatron \
   "cluster=h100_de" \
   "experiment=optim/muon_hybrid" \
   "base.model.seq_length=256" \
-  "training.seq_length=256" \
   "training.global_batch_size_tokens=131072" \
   "base.model.transformer_impl=local" \
   "$@"
