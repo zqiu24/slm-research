@@ -11,5 +11,8 @@ base:
     num_attention_heads: 16
     num_query_groups: 4          # GQA 4:1
     head_dim: 64
-    seq_length: 4096
+    # Dev/smoke context length. NOTE: diverges from the 4096 used across the
+    # rest of the scale ladder, so a 300m run is NOT a valid 4096 slope-anchor
+    # as-is (override base.model.seq_length=4096 to use 300m for cross-scale slope).
+    seq_length: 256
     tie_embeddings: true

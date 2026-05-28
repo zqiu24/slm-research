@@ -293,9 +293,10 @@ def test_decay_only_resume_emits_finetune_and_override():
     assert m["--override-opt-param-scheduler"] is True
     assert m["--load"] == "/tmp/stable_ckpt"
     assert m["--lr-decay-style"] == "WSD"
-    # whole run is the anneal: warmup 0, wsd tail == total decay samples
+    # whole run is the anneal: warmup 0, wsd tail == total decay samples.
+    # 300m scale uses seq_length=256, so samples = decay_tokens // 256.
     assert m["--lr-warmup-fraction"] == "0.0"
-    assert m["--lr-wsd-decay-samples"] == str(1_200_000_000 // 4096)
+    assert m["--lr-wsd-decay-samples"] == str(1_200_000_000 // 256)
 
 
 def _run_name(experiment: str) -> str:
