@@ -5,8 +5,13 @@
 # It calls Megatron-poet's OWN tools/preprocess_data.py on purpose: that script
 # writes via the same megatron.core.datasets.indexed_dataset and builds the
 # tokenizer via the same build_tokenizer the DeepSeek trainer reads with, so the
-# output is byte-compatible with training. Run this under the same conda env as
-# the trainer (e.g. `megatron-lm-014`) so `import megatron` resolves.
+# output is byte-compatible with training.
+#
+# Activate an env that can `import megatron` (incl. transformer_engine) FIRST, e.g.:
+#   source /lustre/fast/fast/zqiu/slm-research/load_cuda13_2_nccl_env.sh   # CUDA-13.2 + LD_PRELOAD
+#   source /fast/zqiu/slm_env/.venv/bin/activate
+# The CUDA-13.2 loader is required: poet's megatron imports transformer_engine eagerly,
+# and slm_env's TE needs the system libcublasLt.so.13 the loader LD_PRELOADs.
 #
 # Tokenizer note: on the HuggingFaceTokenizer path Megatron derives the vocab
 # from len(tokenizer) and ignores --vocab-size, so it is intentionally NOT

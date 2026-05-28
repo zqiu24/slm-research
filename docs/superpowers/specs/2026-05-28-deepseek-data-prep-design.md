@@ -87,8 +87,17 @@ Downloaded **tokenizer files only** (no weights) via `snapshot_download(..., all
 - `preprocess_parquet_to_jsonl.py` (tokenizer-agnostic; sharded jsonl writer).
 
 ### Run environment
-The DeepSeek conda env (`megatron-lm-014`, per `train_DeepSeek_3b.sh`), so `import megatron`
-resolves for the poet preprocessor.
+Tokenization is **CPU-only (0 GPUs)**, but poet's `megatron` imports `transformer_engine`
+eagerly, so the env must satisfy that import. Verified working on this cluster:
+```
+source /lustre/fast/fast/zqiu/slm-research/load_cuda13_2_nccl_env.sh   # CUDA-13.2 + LD_PRELOAD
+source /fast/zqiu/slm_env/.venv/bin/activate
+```
+The CUDA-13.2 loader is required: `slm_env`'s TE references `cublasLtGroupedMatrixLayoutInit_internal@libcublasLt.so.13`,
+exported only by the system cuBLAS the loader `LD_PRELOAD`s. (`megatron-lm-014` from the train
+script lives on a different cluster and is absent here.) The hardcoded Nemotron driver does this
+env setup itself (`SKIP_ENV_SETUP=1` to opt out).
+CPU sizing: ~`--workers` + 1 cores (default 8 → ~8-12 CPUs); RAM modest (streaming).
 
 ### Output / consumption
 `<output-prefix>.bin/.idx` → trainer `--data-path <output-prefix>` (single dataset), or referenced

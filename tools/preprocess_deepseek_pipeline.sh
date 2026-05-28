@@ -8,7 +8,9 @@
 # Stage 1 is auto-skipped when --input-dir already holds .jsonl (and no .parquet).
 # Any stage can be force-skipped with --skip-stage {1|2|3} (repeatable).
 #
-# Run under the same conda env as the DeepSeek trainer (e.g. `megatron-lm-014`).
+# Activate an env that can `import megatron` (incl. transformer_engine) FIRST, e.g.:
+#   source /lustre/fast/fast/zqiu/slm-research/load_cuda13_2_nccl_env.sh
+#   source /fast/zqiu/slm_env/.venv/bin/activate
 set -euo pipefail
 
 INPUT_DIR=""
