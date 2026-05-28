@@ -15,6 +15,11 @@ dependencies = [
     "pyyaml>=6.0",
     "numpy>=1.26,<3.0",
     "wandb>=0.17,<1.0",
+    # Required for wandb metric logging to work at all: Megatron nests every
+    # wandb.log() for loss/lr/grad-norm inside `if writer:` where writer is the
+    # tensorboard SummaryWriter (training.py training_log). Without tensorboard
+    # installed that writer is None and wandb gets only system metrics.
+    "tensorboard>=2.14",
     "gitpython>=3.1",
     "pydantic>=2.6,<3.0",
     "rich>=13.7",
