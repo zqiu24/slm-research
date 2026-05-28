@@ -17,7 +17,7 @@ JSONL_MERGED=""
 OUTPUT_PREFIX=""
 TOKENIZER_MODEL="${TOKENIZER_MODEL:-/lustre/fast/fast/zqiu/hf_models/DeepSeek-V3-tokenizer}"
 TEXT_COLUMN="text"
-WORKERS="32"
+WORKERS="8"
 PARTITIONS="1"
 MEGATRON_POET_ROOT="${MEGATRON_POET_ROOT:-/lustre/fast/fast/zqiu/tmp/Megatron-poet}"
 SKIPS=()
@@ -31,8 +31,8 @@ Usage: $(basename "$0") [options]
   --output-prefix PREFIX   final .bin/.idx prefix (no extension)   [required]
   --tokenizer-model PATH   HF tokenizer dir (default: DeepSeek-V3-tokenizer)
   --text-column NAME       parquet text column (default: text)
-  --workers N              tokenize workers (default: 32; must be a multiple of partitions)
-  --partitions N           tokenize partitions (default: 1)
+  --workers N              tokenize workers (default: 8; must be a multiple of partitions)
+  --partitions N           tokenize partitions (default: 1 = single file written directly)
   --megatron-poet-root DIR Megatron-poet checkout (default: $MEGATRON_POET_ROOT)
   --skip-stage {1|2|3}     skip that stage (repeatable)
   -h | --help              this text

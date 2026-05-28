@@ -59,7 +59,9 @@ Downloaded **tokenizer files only** (no weights) via `snapshot_download(..., all
    - `--tokenizer-type HuggingFaceTokenizer`
    - `--tokenizer-model` ← default `/lustre/fast/fast/zqiu/hf_models/DeepSeek-V3-tokenizer`
    - `--append-eod` (writes EOS id 1 as the doc separator)
-   - `--workers`, `--partitions` (parallel tokenization)
+   - `--workers` (default 8), `--partitions` (default **1** = one process writes the single
+     `_text_document.{bin,idx}` directly, no merge / no temp partition files; raise only for
+     very large corpora, and then `workers % partitions == 0`)
    - **no `--vocab-size`** (proven dead for HF tokenizer)
    - env: `MEGATRON_POET_ROOT` (default `/lustre/fast/fast/zqiu/tmp/Megatron-poet`),
      `INPUT_FILE`, `OUTPUT_PREFIX`, `TOKENIZER_MODEL`, `WORKERS`, `PARTITIONS`.
@@ -70,8 +72,9 @@ Downloaded **tokenizer files only** (no weights) via `snapshot_download(..., all
    - **Stage 1** parquet → jsonl shards via existing `preprocess_parquet_to_jsonl.py`
      (auto-skipped if `--input-dir` already holds `.jsonl`).
    - **Stage 2** cat shards → one merged jsonl.
-   - **Stage 3** tokenize merged jsonl → `<output-prefix>.bin/.idx` via file #1
-     (**merged + `--partitions`** strategy).
+   - **Stage 3** tokenize merged jsonl → `<output-prefix>_text_document.bin/.idx` via file #1
+     (default **partitions=1, workers=8** — single file written directly, matching the
+     `zqiu24/Megatron-LM` fork's recipe; `--partitions>1` is available for very large corpora).
 
 ### Reused unchanged
 - `preprocess_parquet_to_jsonl.py` (tokenizer-agnostic; sharded jsonl writer).

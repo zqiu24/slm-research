@@ -20,7 +20,10 @@ INPUT_FILE="${INPUT_FILE:?set INPUT_FILE=/path/to/merged.jsonl}"
 OUTPUT_PREFIX="${OUTPUT_PREFIX:?set OUTPUT_PREFIX=/path/to/out_prefix (no extension)}"
 TOKENIZER_TYPE="${TOKENIZER_TYPE:-HuggingFaceTokenizer}"
 TOKENIZER_MODEL="${TOKENIZER_MODEL:-/lustre/fast/fast/zqiu/hf_models/DeepSeek-V3-tokenizer}"
-WORKERS="${WORKERS:-32}"
+WORKERS="${WORKERS:-8}"
+# Default partitions=1: one process tokenizes the whole jsonl and writes the single
+# {OUTPUT_PREFIX}_text_document.{bin,idx} directly (no merge, no temp partition files).
+# Raise it only for very large corpora; WORKERS must then be a multiple of PARTITIONS.
 PARTITIONS="${PARTITIONS:-1}"
 JSON_KEYS="${JSON_KEYS:-text}"
 MEGATRON_POET_ROOT="${MEGATRON_POET_ROOT:-/lustre/fast/fast/zqiu/tmp/Megatron-poet}"
