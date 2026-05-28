@@ -378,12 +378,16 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             load_dir,
             "--wandb-project",
             cfg.wandb.project,
-            "--wandb-entity",
-            cfg.wandb.entity,
             "--wandb-exp-name",
             _wandb_run_name(cfg),
         ]
     )
+    # Only force an entity when one is configured. An empty/null entity lets
+    # wandb fall back to the logged-in account's default (personal) namespace,
+    # avoiding "entity ... not found" when the configured team is inaccessible.
+    entity = cfg.wandb.get("entity", None)
+    if entity:
+        _add(args, "--wandb-entity", str(entity))
     if resume:
         _add(args, "--finetune")
         _add(args, "--override-opt-param-scheduler")

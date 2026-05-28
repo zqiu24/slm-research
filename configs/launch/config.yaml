@@ -14,7 +14,9 @@ defaults:
 seed: 42
 
 wandb:
-  entity: "neckariumai-research"
+  # null -> wandb uses the logged-in account's default (personal) namespace.
+  # Set a team slug here (or override wandb.entity=<team>) once it's accessible.
+  entity: null
   project: "slm-${oc.env:USER,unknown}"
   job_type: "sandbox"
 

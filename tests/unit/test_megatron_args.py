@@ -162,7 +162,9 @@ def test_poet_argv_emits_block_count_when_set():
     assert args[args.index("--poet-block-count") + 1] == "8"
 
 
-def test_wandb_entity_is_passed_through():
+def test_wandb_entity_omitted_when_unset():
+    # Default entity is null -> do NOT emit --wandb-entity, so wandb falls back
+    # to the account's personal namespace (avoids "entity not found").
     cfg = _parse_overrides(
         [
             "base/family=llama3",
@@ -173,8 +175,23 @@ def test_wandb_entity_is_passed_through():
         ]
     )
     args = _args_to_map(build_megatron_args(cfg))
-    # The configured entity must reach Megatron, not just sit unused in config.
-    assert args["--wandb-entity"] == cfg.wandb.entity
+    assert "--wandb-entity" not in args
+
+
+def test_wandb_entity_passed_through_when_set():
+    # When a team is configured, it must reach Megatron.
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=600m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+            "wandb.entity=some_team",
+        ]
+    )
+    args = _args_to_map(build_megatron_args(cfg))
+    assert args["--wandb-entity"] == "some_team"
 
 
 def test_scheduler_defaults_to_cosine_block():
