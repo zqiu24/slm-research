@@ -9,9 +9,9 @@ notably ``training_log_eta`` (the ETA injection patch). To avoid a
 ``targets=()`` and document the implicit dependency in this docstring.
 
 Apply order is sorted-by-name, so ``training_log_eta`` (e) applies first
-and ``training_log_wandb_tokens_seen`` (w) wraps the already-wrapped fn —
-ETA injection still runs because it's done via a logging.Filter, not via
-the wrapper chain.
+and ``training_log_wandb_tokens_seen`` (w) wraps ``training_log``. The two
+are orthogonal: ``training_log_eta`` wraps ``print_rank_last`` (the stdout
+emitter called *inside* ``training_log``), so both run independently.
 """
 
 from __future__ import annotations

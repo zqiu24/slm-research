@@ -1,65 +1,76 @@
-"""Patch: prepend ``ETA: 1h30m`` to the per-iteration training log.
+"""Patch: rewrite the per-iteration training log line.
 
-Ported from fork 2's training.py customisation (commit bb43fa063).
-Targets ``megatron.training.training.training_log``.
+Two changes to the stdout line Megatron emits each ``log_interval``:
 
-The upstream ``training_log`` builds the log string with f-strings, so a
-post-hoc replacement on the formatted record is the cleanest path: we
-register a logging.Filter that rewrites the per-step log record after
-``_orig`` produces it.
+1. Inject ``ETA: 1h30m`` right after ``iteration X/Y |``.
+2. Strip fields that are noise on the console because they either never
+   change or are already in wandb/tensorboard: ``learning rate``,
+   ``global batch size``, ``loss scale``, ``grad norm``. (learning rate
+   and grad norm are logged to wandb in ``training_log`` itself, so
+   dropping them here loses nothing.)
+
+The per-iteration line is built with f-strings and emitted via
+``megatron.training.training.print_rank_last`` (a plain ``print``), not
+through the logging module -- so we wrap ``print_rank_last`` and rewrite
+its argument. (An earlier version registered a ``logging.Filter``, which
+never fired because the line is printed, not logged.)
 """
 
 from __future__ import annotations
 
-import logging
+import contextlib
 import re
 
 from src.patches._registry import register_patch
 
-_TARGET = ("megatron.training.training.training_log",)
-log = logging.getLogger(__name__)
+_TARGET = ("megatron.training.training.print_rank_last",)
 
-_ITER_RE = re.compile(r"iteration\s+(\d+)/(\d+)")
+# ``/\s*`` tolerates Megatron's right-justified ``iteration {:8d}/{:8d}``
+# padding, e.g. ``iteration       50/   45776 |``.
+_ITER_RE = re.compile(r"iteration\s+(\d+)/\s*(\d+)\s*\|")
 _ELAPSED_RE = re.compile(r"elapsed time per iteration \(ms\): ([\d.]+)")
 
+# Each matches one `` <label>: <value> |`` field for removal.
+_STRIP_RES = (
+    re.compile(r"\s*learning rate:\s*[\d.eE+\-]+\s*\|"),
+    re.compile(r"\s*global batch size:\s*\d+\s*\|"),
+    re.compile(r"\s*loss scale:\s*[\d.eE+\-]+\s*\|"),
+    re.compile(r"\s*grad norm:\s*[\d.eE+\-]+\s*\|"),
+)
 
-class _ETAFilter(logging.Filter):
-    """Injects ``ETA: HhMMm`` after ``iteration X/Y |`` in the formatted record."""
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            msg = record.getMessage()
-        except Exception:
-            return True
-        if "iteration" not in msg or "/" not in msg or "elapsed time per iteration" not in msg:
-            return True
-        try:
-            m = _ITER_RE.search(msg)
-            e = _ELAPSED_RE.search(msg)
-            if not m or not e:
-                return True
-            curr, total = int(m.group(1)), int(m.group(2))
-            sec = float(e.group(1)) / 1000.0
-            eta = max(0.0, (total - curr) * sec)
-            h, m_ = int(eta // 3600), int((eta % 3600) // 60)
-            new_msg = msg.replace(
-                f"iteration {m.group(1)}/{m.group(2)} |",
-                f"iteration {m.group(1)}/{m.group(2)} | ETA: {h}h{m_:02d}m |",
-                1,
-            )
-            record.msg = new_msg
-            record.args = ()
-        except Exception:
-            # The filter must never break logging.
-            pass
-        return True
+def _rewrite(msg: str) -> str:
+    """Inject ETA and strip noise fields from a per-iteration log line."""
+    if "iteration" not in msg or "elapsed time per iteration" not in msg:
+        return msg
+    m = _ITER_RE.search(msg)
+    e = _ELAPSED_RE.search(msg)
+    if m and e:
+        curr, total = int(m.group(1)), int(m.group(2))
+        sec = float(e.group(1)) / 1000.0
+        eta = max(0.0, (total - curr) * sec)
+        h, mm = int(eta // 3600), int((eta % 3600) // 60)
+        msg = f"{msg[:m.end()]} ETA: {h}h{mm:02d}m |{msg[m.end():]}"
+    for pat in _STRIP_RES:
+        msg = pat.sub("", msg)
+    return msg
 
 
 @register_patch(name="training_log_eta", targets=_TARGET)
 def apply() -> None:
-    """Install the ETA filter on Megatron's training logger."""
-    from megatron.training import training as _mt  # noqa: F401  (ensures target exists)
+    """Wrap ``print_rank_last`` to rewrite the per-iteration log line."""
+    from megatron.training import training as _mt
 
-    mt_logger = logging.getLogger("megatron.training.training")
-    if not any(isinstance(f, _ETAFilter) for f in mt_logger.filters):
-        mt_logger.addFilter(_ETAFilter())
+    _orig = _mt.print_rank_last
+    if getattr(_orig, "_slm_eta_wrapped", False):
+        return
+
+    def _wrapped(message):
+        if isinstance(message, str):
+            # Rewriting must never break logging.
+            with contextlib.suppress(Exception):
+                message = _rewrite(message)
+        return _orig(message)
+
+    _wrapped._slm_eta_wrapped = True
+    _mt.print_rank_last = _wrapped
