@@ -80,7 +80,7 @@ RUNTIME=$(date +%m%d%H%M)
 DATE=$(date +%Y%m%d)
 export WANDB_PROJECT="H200_sepllm_3bv3_sandwich_mqa"
 export WANDB_EXP_NAME="SepLLM3bv3_bf16_seqlen${SEQ_LEN}_node${NUM_NODES}_data${DATA_NAME}_w${SEPLLM_WINDOW}_init${SEPLLM_INIT_TOKENS}_kern${SEPLLM_KERNEL}_mbs${MBS}_gbs${GBS}_TP${TP}_PP${PP}_CP${CP}_EP${EP}_eval${EVAL_STEP}_save${SAVE_STEP}_${RUNTIME}"
-export WANDB_API_KEY="4604e54e9c69942344bf98f695b966bc710a6a90"
+export WANDB_API_KEY="${WANDB_API_KEY:-}"
 export WANDB_SYNC_TENSORBOARD=false
 
 EXP_NAME=$WANDB_EXP_NAME
