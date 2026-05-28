@@ -316,24 +316,29 @@ def _data_args(cfg: DictConfig) -> list[str]:
 def _wandb_run_name(cfg: DictConfig) -> str:
     """Build the wandb run name: ``<experiment>-<family>-<scale>-lr<lr>``.
 
-    No seed. The LR shown is the headline LR per optimizer: ``optim.lr`` for
-    adam/poet/ngpt, and ``optim.muon.lr`` (the Muon-side LR) for muon_hybrid.
-    POET additionally appends the block parameterization: ``-bc<n>`` when
-    ``block_count`` is set, else ``-bs<n>`` for the legacy shared block size.
+    No seed. ``lr`` is ``optim.lr`` for adam/poet/ngpt. For muon_hybrid it is
+    the Adam-side LR (``optim.adam.lr``) and a second ``-muon_lr<lr>`` segment
+    holds the Muon-side LR (``optim.muon.lr``). POET additionally appends the
+    block parameterization: ``-bc<n>`` when ``block_count`` is set, else
+    ``-bs<n>`` for the legacy shared block size.
     """
     optim = cfg.optim
     otype = str(optim.type)
-    if otype == "muon_hybrid":
-        lr = optim.get("muon", {}).get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
-    else:
-        lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
 
     parts = [
         str(cfg.experiment.name),
         str(cfg.base.family),
         str(cfg.base.scale),
-        f"lr{float(lr):g}",
     ]
+    if otype == "muon_hybrid":
+        adam_lr = optim.get("adam", {}).get("lr", 1.0e-3)
+        muon_lr = optim.get("muon", {}).get("lr", adam_lr)
+        parts.append(f"lr{float(adam_lr):g}")
+        parts.append(f"muon_lr{float(muon_lr):g}")
+    else:
+        lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
+        parts.append(f"lr{float(lr):g}")
+
     if otype == "poet":
         poet = optim.get("poet", {})
         block_count = poet.get("block_count", None)

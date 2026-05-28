@@ -317,9 +317,10 @@ def test_wandb_run_name_has_lr_and_no_seed():
     assert _run_name("champion") == "adam-llama3-300m-lr0.001"
 
 
-def test_wandb_run_name_muon_uses_muon_side_lr():
-    # muon_hybrid has no optim.lr; the headline LR is optim.muon.lr = 2.0e-3.
-    assert _run_name("optim/muon_hybrid") == "muon-llama3-300m-lr0.002"
+def test_wandb_run_name_muon_shows_adam_lr_and_muon_lr():
+    # muon_hybrid: lr = Adam-side (optim.adam.lr = 1.0e-3),
+    # plus muon_lr = Muon-side (optim.muon.lr = 2.0e-3).
+    assert _run_name("optim/muon_hybrid") == "muon-llama3-300m-lr0.001-muon_lr0.002"
 
 
 def test_wandb_run_name_poet_appends_block_param():
