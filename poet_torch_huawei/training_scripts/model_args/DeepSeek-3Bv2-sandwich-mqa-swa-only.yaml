@@ -1,0 +1,112 @@
+MODEL_ARGS:
+  # Distributed args
+  --use-distributed-optimizer: true
+  # Note: comment out below two args if using --delay-wgrad-compute and TransformerEngine < v2.8.0
+  --overlap-grad-reduce: true
+  --overlap-param-gather: true
+
+  # Training args
+  --use-mcore-models: true
+  --sequence-parallel: true
+  --use-flash-attn: true
+  --disable-bias-linear: true
+  --no-save-optim: false
+  --no-check-for-nan-in-loss-and-grad: false
+  --cross-entropy-loss-fusion: true
+  --cross-entropy-fusion-impl: native # te ce fusion is broken
+  --manual-gc: true
+  --manual-gc-interval: 10
+
+  # Transformer Engine args
+  --transformer-impl: transformer_engine
+  --no-masked-softmax-fusion: false
+  --no-rope-fusion: true
+
+  # Add network size args
+  --num-layers: 12
+  --hidden-size: 1280
+  --ffn-hidden-size: 7168
+  --num-attention-heads: 16
+  --max-position-embeddings: 4096
+  --position-embedding-type: rope
+  --rotary-base: 10000
+  --make-vocab-size-divisible-by: 3232
+  --normalization: RMSNorm
+  --norm-epsilon: 1e-6
+  --swiglu: true
+  --untie-embeddings-and-output-weights: true
+  --use-sandwich-norm: true
+  --attn-post-norm-scale: 0.03
+  --ffn-post-norm-scale: 0.03
+
+  # Add regularization args
+  --attention-dropout: 0.0
+  --hidden-dropout: 0.0
+  --clip-grad: 1.0
+  --weight-decay: 0.1
+  --qk-layernorm: true
+
+  # Add learning rate args
+  # --lr-decay-style: cosine
+  --adam-beta1: 0.9
+  --adam-beta2: 0.95
+
+  # Add MoE args
+  --num-experts: 64
+  --moe-layer-freq: ([0]*1+[1]*11)
+  --moe-ffn-hidden-size: 896
+  --moe-shared-expert-intermediate-size: 1792
+  --moe-router-load-balancing-type: seq_aux_loss
+  --moe-router-topk: 6
+  --moe-grouped-gemm: true
+  --moe-aux-loss-coeff: 1e-4
+  # --moe-router-group-topk: 4
+  # --moe-router-num-groups: 8
+  --moe-router-topk-scaling-factor: 2.5
+  --moe-router-score-function: sigmoid
+  --moe-router-enable-expert-bias: true
+  --moe-router-bias-update-rate: 1e-3
+  --moe-router-dtype: fp32
+  --moe-permute-fusion: true
+  --moe-router-fusion: true
+  --moe-layer-recompute: true
+  --moe-token-dispatcher-type: alltoall
+
+  # Add MQA SWA-only args
+  --group-query-attention: true
+  --num-query-groups: 1
+  --kv-channels: 384
+  --rotary-percent: 0.25
+  --use-native-sparse-attention: true
+  --nsa-swa-only: true
+  --nsa-swa-window-size: 128
+
+  # Add 1F1B overlapping
+  #--delay-wgrad-compute: true
+  #--overlap-moe-expert-parallel-comm: true
+
+  # Add MTP args
+  --mtp-num-layers: 1
+  --mtp-loss-scaling-factor: 0.3
+
+  # Add validation args
+  # --eval-iters: 32
+  # --eval-interval: 200
+
+  # Add initialization args
+  --init-method-std: 0.006
+  --embedding-init-method-std: 0.006
+
+  # Add logging args
+  --log-timers-to-tensorboard: true
+  --log-memory-to-tensorboard: true
+  --log-num-zeros-in-grad: false
+  --log-params-norm: true
+  --log-validation-ppl-to-tensorboard: true
+  --log-throughput: true
+  --log-interval: 1
+
+  # Add mixed precision args
+  --bf16: true
+  --distributed-timeout-minutes: 3000 # for frist load cache, controll time
+  --num-dataset-builder-threads: 8

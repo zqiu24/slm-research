@@ -1,0 +1,157 @@
+# DeepSeek-3B v2 (MQA, **plan A**: standard pre-norm) with POET-X_fast.
+#
+# Diff vs DeepSeek-3Bv2-sandwich-mqa-poetx.yaml:
+#   * Removed --use-sandwich-norm + --attn-post-norm-scale 0.03 +
+#     --ffn-post-norm-scale 0.03.
+#
+# Rationale (see chat history "POET 复现"):
+#
+#   POET preserves the singular-value spectrum of W_0 by construction:
+#   sigma_i(W_eff) == sigma_i(W_0) for all training. Reproducing the paper
+#   therefore requires sigma(W_0) ~ 1, which only happens when oft_R is
+#   row-L2-normalized at install time (POET_NORMALIZE_WEIGHTS=1).
+#
+#   Once normalize_weights=True, the row L2 of every wrapped W_0 jumps from
+#   ~0.006 * sqrt(in_dim) ~= 0.21 to exactly 1.0 -- a ~4.6x scale change in
+#   per-layer output magnitude. The previous sandwich-norm scale of 0.03 was
+#   tuned for the 0.21 regime (AdamW baseline); paired with the new 1.0
+#   regime, the residual stream dynamics drift away from the baseline and
+#   POET trains *worse* than AdamW.
+#
+#   Plan A drops sandwich-norm entirely and falls back to the standard
+#   pre-norm transformer that the POET paper actually uses, which removes
+#   sandwich-norm from the failure-mode space. Plan B (keep sandwich-norm
+#   but rescale post-norm-scale) is in a separate yaml -- see the chat
+#   discussion or train it explicitly with --use-sandwich-norm + a tuned
+#   --attn/ffn-post-norm-scale.
+#
+# Note on --init-method-std=0.006:
+#   * For wrapped Column/Row-parallel linears it is a no-op: normalize_weights
+#     re-normalizes every row to unit L2 *after* the std-controlled init,
+#     so the original std drops out of W_0's spectrum entirely.
+#   * For unwrapped layers (token embedding, output_layer, MTP, router), and
+#     for any MoE linears skipped by POET, init_method_std still applies; we keep
+#     0.006 to match the AdamW baseline these schedules were tuned for.
+#
+# Dimension check for --poet-block-size 128 at TP=1 (moe_ffn_hidden_size 896 requires
+# block_size dividing RowParallel fc2 local input dims; use 128 not 256):
+#   * hidden = 1280            -> 1280 / 128 = 10     OK
+#   * ffn    = 7168            -> 7168 / 128 = 56    OK
+#   * qkv_out = (16+2*1)*384   = 6912 -> OK
+#   * proj_in = 16*384         = 6144 -> OK
+#   * routed experts (896 / SwiGLU fc widths) vs 128 -> OK
+#   * shared_ffn = 1792        -> OK
+
+MODEL_ARGS:
+  # Distributed args
+  --use-distributed-optimizer: true
+  --overlap-grad-reduce: true
+  --overlap-param-gather: true
+
+  # Training args
+  --use-mcore-models: true
+  --sequence-parallel: true
+  --use-flash-attn: true
+  --disable-bias-linear: true
+  --no-save-optim: false
+  --no-check-for-nan-in-loss-and-grad: false
+  --cross-entropy-loss-fusion: true
+  --cross-entropy-fusion-impl: native
+  --manual-gc: true
+  --manual-gc-interval: 10
+
+  # Transformer Engine args
+  # NOTE: we use impl=local (not transformer_engine) because TE's linear
+  # classes don't subclass Megatron's ColumnParallelLinear/RowParallelLinear,
+  # so POET would silently skip every layer. FlashAttention is still on via
+  # --use-flash-attn below.
+  --transformer-impl: local
+  --no-persist-layer-norm: true
+  --no-masked-softmax-fusion: false
+  --no-rope-fusion: true
+
+  # Network size
+  --num-layers: 12
+  --hidden-size: 1280
+  --ffn-hidden-size: 7168
+  --num-attention-heads: 16
+  --max-position-embeddings: 4096
+  --position-embedding-type: rope
+  --rotary-base: 10000
+  --make-vocab-size-divisible-by: 3232
+  --normalization: RMSNorm
+  --norm-epsilon: 1e-6
+  --swiglu: true
+  --untie-embeddings-and-output-weights: true
+  # --use-sandwich-norm: <DROPPED for plan A>
+  # --attn-post-norm-scale: <DROPPED for plan A; default 1.0>
+  # --ffn-post-norm-scale:  <DROPPED for plan A; default 1.0>
+
+  # Regularization
+  --attention-dropout: 0.0
+  --hidden-dropout: 0.0
+  --clip-grad: 1.0
+  --weight-decay: 0.1
+  --qk-layernorm: true
+
+  # Optimizer
+  --adam-beta1: 0.9
+  --adam-beta2: 0.95
+
+  # MoE: omit --moe-grouped-gemm; use SequentialMLP + --poet-wrap-moe-experts.
+  --num-experts: 64
+  --moe-layer-freq: ([0]*1+[1]*11)
+  --moe-ffn-hidden-size: 896
+  --moe-shared-expert-intermediate-size: 1792
+  --moe-router-load-balancing-type: seq_aux_loss
+  --moe-router-topk: 6
+  --moe-aux-loss-coeff: 1e-4
+  --moe-router-topk-scaling-factor: 2.5
+  --moe-router-score-function: sigmoid
+  --moe-router-enable-expert-bias: true
+  --moe-router-bias-update-rate: 1e-3
+  --moe-router-dtype: fp32
+  --moe-permute-fusion: true
+  --moe-router-fusion: true
+  --moe-layer-recompute: true
+  --moe-token-dispatcher-type: alltoall
+
+  # MQA
+  --group-query-attention: true
+  --num-query-groups: 1
+  --kv-channels: 384
+  --rotary-percent: 0.25
+
+  # MTP (also excluded from POET wrapping by default).
+  --mtp-num-layers: 1
+  --mtp-loss-scaling-factor: 0.3
+
+  # Initialization. Kept at AdamW-baseline values; for POET-wrapped linears
+  # this gets overwritten by the row-L2 renormalization at install time.
+  --init-method-std: 0.006
+  --embedding-init-method-std: 0.006
+
+  # Logging
+  --log-timers-to-tensorboard: true
+  --log-memory-to-tensorboard: true
+  --log-num-zeros-in-grad: false
+  --log-params-norm: true
+  --log-validation-ppl-to-tensorboard: true
+  --log-throughput: true
+  --log-interval: 1
+
+  # Mixed precision
+  --bf16: true
+  --distributed-timeout-minutes: 3000
+  --num-dataset-builder-threads: 8
+
+  # --------------------------------------------------------------------
+  # POET-X specific flags (consumed by pretrain_gpt_poet.py).
+  # --------------------------------------------------------------------
+  --use-poet: true
+  --poet-variant: poetx          # input-centric forward (POET-X_fast)
+  --poet-wrap-moe-experts: true
+  --poet-block-size: 128
+  --poet-merge-interval: 200
+  # --poet-mem-efficient: true   # recompute x-rotations in bwd (requires Triton)
+  # --poet-quantize: true        # POET-XQ (INT8 base weights, requires Triton)
