@@ -3,7 +3,6 @@
 training:
   tokens_per_param: 40
   global_batch_size_tokens: 4_194_304
-  seq_length: 4096
   micro_batch_size: null
 
 checkpointing:
