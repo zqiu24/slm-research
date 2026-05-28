@@ -364,7 +364,10 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             "--eval-interval",
             cfg.training.get("eval_interval", 500),
             "--save-interval",
-            cfg.training.get("save_interval", 5000),
+            # Model saving is off for now: default to an effectively-never
+            # interval so dev runs don't write checkpoints. Re-enable per run
+            # with training.save_interval=N.
+            cfg.training.get("save_interval", 1_000_000_000),
             "--log-throughput",
             "--tensorboard-dir",
             f"{archive}/tensorboard",
