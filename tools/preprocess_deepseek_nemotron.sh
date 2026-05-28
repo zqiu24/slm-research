@@ -29,8 +29,8 @@ fi
 INPUT_FILE="/lustre/scratch/zqiu/Megatron-LM/Nemotron-CC-v2/nemotron_full.jsonl"
 OUTPUT_PREFIX="/lustre/scratch/zqiu/Megatron-LM/Nemotron-CC-v2/nemotron_cc_v2_high_quality_deepseek_v3_tokenizer"
 TOKENIZER_MODEL="/lustre/fast/fast/zqiu/hf_models/DeepSeek-V3-tokenizer"
-WORKERS="8"
-PARTITIONS="1"
+WORKERS="${WORKERS:-16}"
+PARTITIONS="${PARTITIONS:-1}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
