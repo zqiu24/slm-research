@@ -1,0 +1,38 @@
+# @package _global_
+# Single-GPU dev / debug cluster. Launches LOCALLY via torchrun
+# (--nproc_per_node = gpus_per_node = 1), NOT through SLURM — the slurm_*
+# fields below are inert placeholders kept only so the schema matches the
+# other cluster configs.
+#
+# Usage (pick a free device with CUDA_VISIBLE_DEVICES):
+#   CUDA_VISIBLE_DEVICES=0 bash scripts/train_poet.sh llama3 \
+#     cluster=dev base/scale=300m \
+#     training.global_batch_size=8 training.micro_batch_size=1 \
+#     training.log_interval=1
+cluster:
+  name: dev
+  site: local
+  nodes: 1
+  gpus_per_node: 1
+  interconnect: "single_gpu"
+  capabilities: [bf16, fp16, fp8]
+  transformer_engine_version: "1.12.0"
+  cuda_version: "12.4"
+  pytorch_version: "2.4.0"
+  wandb_offline: true                  # keep debug runs out of online wandb
+  slurm_partition: "dev"               # inert: dev launches locally, not via slurm
+  slurm_account: "research"            # inert
+  slurm_template: "launchers/slurm/bid_cluster.sbatch.j2"  # inert
+
+parallelism:
+  # Single GPU => world_size 1, so every scale must resolve to tp=pp=1.
+  # One catch-all rule keeps any base/scale runnable here (large models may
+  # OOM — that's the caller's call).
+  tp_size_rules:
+    - { model_params_lt: 1.0e15, tp: 1, pp: 1 }
+  sequence_parallel: false             # auto-disabled at tp=1 anyway
+  distributed_optimizer: false         # dp=1; nothing to shard
+
+precision:
+  default: bf16                        # _training_args forces --bf16 regardless
+  bf16_fallback: true
