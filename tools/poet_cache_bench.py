@@ -780,7 +780,7 @@ def print_single(args, dtype, device):
     print(f"  Input shape: {tuple(args.batch)} + (in,) = {tuple(args.batch) + (args.in_features,)}")
     print(f"  Dtype:       {args.dtype}")
     print(f"  K (μbatches/cycle): {args.K}")
-    print(f"  Timing cycles:      {args.cycles}  (after 5 warmup cycles)")
+    print(f"  Timing cycles:      {args.cycles}  (after {args.warmup} warmup cycles)")
     print(f"  GPU:         {torch.cuda.get_device_name(0)}")
     print()
 
@@ -793,6 +793,7 @@ def print_single(args, dtype, device):
         dtype,
         device,
         args.batch,
+        warmup=args.warmup,
         block_count=args.block_count,
     )
     if out is None:
@@ -872,7 +873,7 @@ def print_sweep(args, dtype, device):
     print(f"  K values:    {Ks}")
     print(f"  Dtype:       {args.dtype}")
     print(f"  Input shape: {tuple(args.batch)} + (in,)")
-    print(f"  Cycles:      {args.cycles} timed, 3 warmup")
+    print(f"  Cycles:      {args.cycles} timed, {args.warmup} warmup")
     print(f"  GPU:         {torch.cuda.get_device_name(0)}")
     print()
 
@@ -908,7 +909,7 @@ def print_sweep(args, dtype, device):
                     dtype,
                     device,
                     args.batch,
-                    warmup=3,
+                    warmup=args.warmup,
                     block_count=block_count,
                 )
                 if out is None:
@@ -949,6 +950,12 @@ def main():
     )
     p.add_argument("--K", type=int, default=16, help="microbatches per cycle")
     p.add_argument("--cycles", type=int, default=50, help="cycles to time")
+    p.add_argument(
+        "--warmup",
+        type=int,
+        default=5,
+        help="warmup cycles before timing (discarded; warms caches + torch.compile)",
+    )
     p.add_argument(
         "--batch",
         type=int,
