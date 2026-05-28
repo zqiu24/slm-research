@@ -49,5 +49,5 @@ python -m launchers.train_megatron \
   "${SCALE_ARGS[@]}" \
   "cluster=h100_de" \
   "experiment=arch/ngpt" \
-  "training.global_batch_size_tokens=131072" \
+  "training.global_batch_size=512" \
   "$@"

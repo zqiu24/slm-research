@@ -4,7 +4,7 @@
 # shape) that don't touch the stable stage (SPEC.md §7.1).
 training:
   tokens_per_param: null             # derived from resume-from checkpoint
-  global_batch_size_tokens: 4_194_304
+  global_batch_size: 1024
   micro_batch_size: null
   resume_from_stable_stage: true     # required: checkpoint must exist
   decay_tokens: null                 # set explicitly at launch (e.g. decay_tokens=1_200_000_000)

@@ -35,7 +35,7 @@ def _ngpt_cfg():
             },
             "training": {
                 "tokens_per_param": 20,
-                "global_batch_size_tokens": 4096,
+                "global_batch_size": 64,
                 "seq_length": 64,
                 "micro_batch_size": 1,
                 "log_interval": 1,

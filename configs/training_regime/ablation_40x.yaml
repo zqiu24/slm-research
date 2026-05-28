@@ -2,7 +2,7 @@
 # 40 tokens/param dev regime — for 600M daily iteration (SPEC.md §1.2).
 training:
   tokens_per_param: 40
-  global_batch_size_tokens: 4_194_304
+  global_batch_size: 1024
   micro_batch_size: null
 
 checkpointing:

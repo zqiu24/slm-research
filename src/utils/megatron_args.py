@@ -131,9 +131,8 @@ def _training_args(cfg: DictConfig) -> list[str]:
     training = cfg.training
     optim = cfg.optim
     model = cfg.base.model
-    global_batch_tokens = int(training.global_batch_size_tokens)
     seq_length = int(model.seq_length)
-    global_batch_size = global_batch_tokens // seq_length
+    global_batch_size = int(training.global_batch_size)
     micro_batch_raw = training.get("micro_batch_size", None)
     if micro_batch_raw is None:
         micro_batch_size = min(64, global_batch_size)

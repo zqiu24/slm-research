@@ -55,6 +55,6 @@ python -m launchers.train_megatron \
   "${SCALE_ARGS[@]}" \
   "cluster=h100_de" \
   "experiment=optim/adam" \
-  "training.global_batch_size_tokens=131072" \
+  "training.global_batch_size=512" \
   "base.model.transformer_impl=local" \
   "$@"

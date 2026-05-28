@@ -2,7 +2,7 @@
 # Extended final budget at 400 tokens/param (SPEC.md §1.2).
 training:
   tokens_per_param: 400
-  global_batch_size_tokens: 4_194_304
+  global_batch_size: 1024
   micro_batch_size: null
 
 checkpointing:
