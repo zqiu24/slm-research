@@ -3,24 +3,26 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^(third_party/|tests/_fixtures/)
+        exclude: ^(third_party/|tests/_fixtures/|poet_torch_huawei/)
       - id: end-of-file-fixer
-        exclude: ^(third_party/|tests/_fixtures/)
+        exclude: ^(third_party/|tests/_fixtures/|poet_torch_huawei/)
       - id: check-yaml
-        exclude: ^(launchers/slurm/|third_party/|tests/_fixtures/)
+        exclude: ^(launchers/slurm/|third_party/|tests/_fixtures/|poet_torch_huawei/)
       - id: check-added-large-files
         args: ["--maxkb=500"]
+        exclude: ^(third_party/|tests/_fixtures/|poet_torch_huawei/)
       - id: check-merge-conflict
       - id: check-toml
+        exclude: ^(third_party/|tests/_fixtures/|poet_torch_huawei/)
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.6
     hooks:
       - id: ruff
         args: [--fix]
-        exclude: ^(third_party/|tests/_fixtures/)
+        exclude: ^(third_party/|tests/_fixtures/|poet_torch_huawei/)
       - id: ruff-format
-        exclude: ^(third_party/|tests/_fixtures/)
+        exclude: ^(third_party/|tests/_fixtures/|poet_torch_huawei/)
 
   - repo: local
     hooks:
