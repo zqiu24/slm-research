@@ -135,6 +135,13 @@ MAX_JOBS=16 NVTE_BUILD_THREADS_PER_JOB=2 \
 # --- slm-research itself (editable, pointing at $SLM_REPO) ----------------
 uv pip install -e "${SLM_REPO}[dev,gpu]"
 
+# TensorBoard: required for W&B to log training metrics at all. Megatron nests
+# every wandb.log() for loss/lr/grad-norm inside `if writer:`, where writer is
+# the tensorboard SummaryWriter (training.training_log). Without tensorboard
+# installed that writer is None and W&B records only system metrics. Also a
+# declared dep in pyproject; kept explicit here (like torch above).
+uv pip install tensorboard
+
 # --- poet_torch (vendored under third_party/, editable) -------------------
 # Provides POETLinear used by src/optim/poet_layers.py.
 # Pin tracked in docs/poet_torch_pin.md.
