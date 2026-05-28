@@ -38,13 +38,21 @@ def test_embedding_untied():
 
 
 def test_steps_from_tokens_at_frozen_batch():
-    # 24B tokens @ 4M-token global batch = 5722 steps (ceil)
-    gbs = 4_194_304
+    # 24B tokens, seq 4096, 1024-seq global batch -> ceil(samples / gbs).
+    # Equivalent to the old 4M-token batch (4096 * 1024 = 4_194_304).
     tokens = 24_000_000_000
-    expected = -(-tokens // gbs)  # ceil
-    assert steps_from_tokens(tokens, global_batch_size_tokens=gbs) == expected
+    seq_length = 4096
+    gbs = 1024
+    samples = tokens // seq_length
+    expected = -(-samples // gbs)  # ceil
+    assert steps_from_tokens(tokens, seq_length=seq_length, global_batch_size=gbs) == expected
 
 
 def test_steps_rejects_zero_batch():
     with pytest.raises(ValueError):
-        steps_from_tokens(1, global_batch_size_tokens=0)
+        steps_from_tokens(1, seq_length=256, global_batch_size=0)
+
+
+def test_steps_rejects_zero_seq_length():
+    with pytest.raises(ValueError):
+        steps_from_tokens(1, seq_length=0, global_batch_size=512)

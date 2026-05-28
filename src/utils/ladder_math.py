@@ -45,12 +45,19 @@ def total_tokens(tokens_per_param: float | int, non_embedding_params: int) -> in
 def steps_from_tokens(
     total_tokens_: int,
     *,
-    global_batch_size_tokens: int,
+    seq_length: int,
+    global_batch_size: int,
 ) -> int:
-    """Training steps implied by a token budget and a fixed global batch size.
+    """Training steps implied by a token budget at a fixed global batch size.
 
-    Global batch size is frozen across the ladder (SPEC.md §1.3).
+    The token budget is converted to samples via ``seq_length`` (matching
+    ``--train-samples = total_tokens // seq_length``), then divided by the
+    per-step ``global_batch_size`` (in sequences), which is frozen across the
+    ladder (SPEC.md §1.3).
     """
-    if global_batch_size_tokens <= 0:
-        raise ValueError("global_batch_size_tokens must be positive")
-    return (total_tokens_ + global_batch_size_tokens - 1) // global_batch_size_tokens
+    if seq_length <= 0:
+        raise ValueError("seq_length must be positive")
+    if global_batch_size <= 0:
+        raise ValueError("global_batch_size must be positive")
+    samples = total_tokens_ // seq_length
+    return (samples + global_batch_size - 1) // global_batch_size
