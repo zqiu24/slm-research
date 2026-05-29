@@ -33,3 +33,18 @@ def test_apply_post_norm_scale_noop_at_one():
     m = nn.LayerNorm(4)
     apply_post_norm_scale(m, 1.0)
     assert torch.allclose(m.weight, torch.ones(4))
+
+
+def test_sandwich_layer_subclasses_transformer_layer():
+    import pytest
+
+    # Importing Megatron pulls Transformer Engine, whose .so can fail to load on
+    # CPU-only / mismatched-CUDA boxes with OSError (not just ImportError), so we
+    # skip on any import-time failure. Runs for real on the GPU box (Task 9).
+    try:
+        import megatron.core.transformer.transformer_layer as tl
+    except Exception as exc:
+        pytest.skip(f"megatron.core not importable here: {exc}")
+    from src.model.sandwich_layer import SandwichTransformerLayer
+
+    assert issubclass(SandwichTransformerLayer, tl.TransformerLayer)
