@@ -250,6 +250,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 "--adam-eps",
                 optim.eps,
             ]
+            + (["--poet-split-qkv"] if poet.get("split_qkv", False) else [])
+            + (["--poet-split-fc1"] if poet.get("split_fc1", False) else [])
         )
 
     if kind == "ngpt_adamw":

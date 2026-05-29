@@ -341,3 +341,19 @@ def test_wandb_run_name_poet_block_count_overrides_block_size():
         }
     )
     assert _wandb_run_name(cfg) == "poet-llama3-300m-lr0.0003-bc8"
+
+
+def test_poet_argv_omits_split_flags_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-split-qkv" not in args
+    assert "--poet-split-fc1" not in args
+
+
+def test_poet_argv_emits_split_flags_when_set():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256, "split_qkv": True, "split_fc1": True}))
+    assert "--poet-split-qkv" in args
+    assert "--poet-split-fc1" in args
