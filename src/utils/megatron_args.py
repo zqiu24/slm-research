@@ -359,6 +359,7 @@ def _logging_args(cfg: DictConfig) -> list[str]:
         if resume and training.get("stable_checkpoint_dir", None) is not None
         else f"{archive}/checkpoints"
     )
+    save_enabled = bool(training.get("save_enabled", True))
     args = _sequence(
         [
             "--log-interval",
@@ -367,11 +368,6 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             cfg.training.get("eval_iters", 32),
             "--eval-interval",
             cfg.training.get("eval_interval", 500),
-            "--save-interval",
-            # Model saving is off for now: default to an effectively-never
-            # interval so dev runs don't write checkpoints. Re-enable per run
-            # with training.save_interval=N.
-            cfg.training.get("save_interval", 1_000_000_000),
             "--log-throughput",
             "--tensorboard-dir",
             f"{archive}/tensorboard",
@@ -379,8 +375,6 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             cfg.training.get("ckpt_format", "torch_dist"),
             "--distributed-timeout-minutes",
             60,
-            "--save",
-            f"{archive}/checkpoints",
             "--load",
             load_dir,
             "--wandb-project",
@@ -389,6 +383,15 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             _wandb_run_name(cfg),
         ]
     )
+    # Checkpoint saving. With training.save_enabled=false we omit --save
+    # entirely, so Megatron writes NO checkpoints — including the implicit
+    # end-of-run save (every save_checkpoint() call is guarded by
+    # `if args.save`). When enabled, --save-interval defaults to an
+    # effectively-never value so only an explicit training.save_interval=N
+    # checkpoints periodically.
+    if save_enabled:
+        _add(args, "--save-interval", cfg.training.get("save_interval", 1_000_000_000))
+        _add(args, "--save", f"{archive}/checkpoints")
     # Only force an entity when one is configured. An empty/null entity lets
     # wandb fall back to the logged-in account's default (personal) namespace,
     # avoiding "entity ... not found" when the configured team is inaccessible.

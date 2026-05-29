@@ -69,13 +69,19 @@ DATA_ARGS_LIST=(
   --num-workers 1
 )
 
+# Checkpoint saving is OFF by default for the smoke (set SAVE_CKPT=1 to enable).
+# Without --save, Megatron writes no checkpoints — including the implicit
+# end-of-run save (every save_checkpoint() call is guarded by `if args.save`).
+# This also sidesteps the post-merge heterogeneous-optimizer-step save assert.
 CHECKPOINT_LOGGING_ARGS=(
-  --save "$OUT_DIR/checkpoints" --load "$OUT_DIR/checkpoints"
   --tensorboard-dir "$OUT_DIR/tb"
   --eval-iters 0 --eval-interval 1000 --save-interval 1000
   --ckpt-format torch_dist
   --log-interval 1
 )
+if [[ "${SAVE_CKPT:-0}" != "0" ]]; then
+  CHECKPOINT_LOGGING_ARGS+=( --save "$OUT_DIR/checkpoints" --load "$OUT_DIR/checkpoints" )
+fi
 
 echo "[dev] launching DeepSeek-3B POET smoke: 1 GPU, mock data, block-size 128, 30 steps"
 # Launch via the active env's python (poet, 3.12) — a bare `torchrun` resolves to
