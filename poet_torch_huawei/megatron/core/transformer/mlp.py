@@ -169,6 +169,26 @@ class MLP(MegatronModule):
 
     def forward(self, hidden_states, per_token_scale=None):
         """Perform the forward pass through the MLP block."""
+        if getattr(self, "split_fc1", False):
+            # POET gate/up split: two independent projections, then SwiGLU.
+            # Each linear has its own frozen weight + POET orbit, so the gate
+            # and up branches are never entangled by a shared rotation.
+            nvtx_range_push(suffix="linear_fc1_gate_up")
+            gate, _ = self.linear_fc1_gate(hidden_states)
+            up, _ = self.linear_fc1_up(hidden_states)
+            nvtx_range_pop(suffix="linear_fc1_gate_up")
+            intermediate_parallel = self.activation_func(gate) * up
+            if per_token_scale is not None:
+                original_dtype = intermediate_parallel.dtype
+                intermediate_parallel = intermediate_parallel * per_token_scale.unsqueeze(-1)
+                intermediate_parallel = intermediate_parallel.to(original_dtype)
+            nvtx_range_push(suffix="linear_fc2")
+            output, output_bias = self.linear_fc2(intermediate_parallel)
+            nvtx_range_pop(suffix="linear_fc2")
+            if per_token_scale is not None:
+                assert output_bias is None, "Bias is not supported with per_token_scale"
+            return output, output_bias
+
         # [s, b, 4 * h/p]
         nvtx_range_push(suffix="linear_fc1")
         intermediate_parallel, bias_parallel = self.linear_fc1(hidden_states)
