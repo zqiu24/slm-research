@@ -652,16 +652,15 @@ def _try_attach(
     if out_local is None or in_local is None:
         return False
     if out_local % block_size != 0 or in_local % block_size != 0:
-        logger.info(
-            "POET: skipping %s (kind=%s, out_local=%d, in_local=%d) -- "
-            "not divisible by block_size=%d",
-            module_name,
-            kind,
-            out_local,
-            in_local,
-            block_size,
+        msg = (
+            f"POET: cannot wrap {module_name} (kind={kind}, out_local={out_local}, "
+            f"in_local={in_local}) -- not divisible by block_size={block_size}. "
+            f"This layer is type/name eligible but its local dims don't tile into "
+            f"{block_size}-blocks. Fix the dims, lower --poet-block-size, or exclude "
+            f"this layer via --poet-exclude-modules / --poet-exclude-ancestors."
         )
-        return False
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     # Freeze the base weight so only oft_R trains.
     weight.requires_grad = False
@@ -749,16 +748,16 @@ def _try_attach_te(
 
     out_local, in_local = int(weight.shape[0]), int(weight.shape[1])
     if out_local % block_size != 0 or in_local % block_size != 0:
-        logger.info(
-            "POET[TE]: skipping %s (%s, out_local=%d, in_local=%d) -- "
-            "not divisible by block_size=%d",
-            module_name,
-            type(module).__name__,
-            out_local,
-            in_local,
-            block_size,
+        msg = (
+            f"POET[TE]: cannot wrap {module_name} ({type(module).__name__}, "
+            f"out_local={out_local}, in_local={in_local}) -- not divisible by "
+            f"block_size={block_size}. This layer is type/name eligible but its "
+            f"local dims don't tile into {block_size}-blocks. Fix the dims, lower "
+            f"--poet-block-size, or exclude it via --poet-exclude-modules / "
+            f"--poet-exclude-ancestors."
         )
-        return False
+        logger.error(msg)
+        raise RuntimeError(msg)
 
     # FP8 + POET weight-swap is unsafe: TE caches an FP8-quantized copy of the
     # weight and would keep reusing it across forwards even though W_eff

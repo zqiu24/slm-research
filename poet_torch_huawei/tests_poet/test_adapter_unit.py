@@ -46,3 +46,37 @@ def test_ancestor_dotted_pattern_still_matches():
     # matching real expert paths while not matching shared_experts.
     assert _name_matches("decoder.layers.1.mlp.experts.local_experts.0.linear_fc1", (".experts.",)) is True
     assert _name_matches("decoder.layers.1.mlp.shared_experts.linear_fc1", (".experts.",)) is False
+
+
+import torch
+import torch.nn as nn
+from megatron.core.poet_adapter.adapter import _try_attach
+
+
+class _FakeColumnLinear(nn.Module):
+    """Minimal stand-in exposing the attrs _try_attach reads for kind='column'."""
+
+    def __init__(self, out_local, in_local):
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(out_local, in_local))
+        self.output_size_per_partition = out_local
+        self.input_size = in_local
+
+
+def test_divisible_dims_attach_succeeds():
+    m = _FakeColumnLinear(out_local=256, in_local=128)  # both divisible by 128
+    ok = _try_attach(
+        m, "decoder.layers.0.mlp.linear_fc1_gate", kind="column",
+        block_size=128, normalize_weights=False, exclude_patterns=(),
+    )
+    assert ok is True
+    assert getattr(m, "_poet_state", None) is not None
+
+
+def test_indivisible_dims_hard_error():
+    m = _FakeColumnLinear(out_local=200, in_local=128)  # 200 % 128 != 0
+    with pytest.raises(RuntimeError, match="not divisible by block_size"):
+        _try_attach(
+            m, "decoder.layers.0.mlp.linear_fc1_gate", kind="column",
+            block_size=128, normalize_weights=False, exclude_patterns=(),
+        )
