@@ -89,24 +89,67 @@ class MLP(MegatronModule):
             )
             ffn_hidden_size = self.config.ffn_hidden_size
 
-        # If this is a gated linear unit we double the output width
+        # Per-branch width (gate / up each get this). For a gated linear unit the
+        # fused layer doubles the output (gate stacked on up); the split path
+        # instead builds two separate linears of this width.
         # see https://arxiv.org/pdf/2002.05202.pdf
+        branch_ffn_hidden_size = ffn_hidden_size
+
+        # POET gate/up split: build linear_fc1_gate + linear_fc1_up as two
+        # independent ColumnParallelLinears from the SAME submodule spec, so each
+        # branch gets its own frozen weight + POET orbit (no fused block-diagonal
+        # rotation entangling gate and up). Driven purely by config — no spec
+        # threading needed because dense / routed-SequentialMLP / shared experts
+        # all hand us a ColumnParallelLinear here.
+        self.split_fc1 = bool(
+            getattr(self.config, "poet_split_fc1", False)
+            and self.config.gated_linear_unit
+        )
+
         if self.config.gated_linear_unit:
             ffn_hidden_size *= 2
 
-        self.linear_fc1 = build_module(
-            submodules.linear_fc1,
-            self.input_size,
-            ffn_hidden_size,
-            config=self.config,
-            init_method=self.config.init_method,
-            gather_output=False,
-            bias=self.config.add_bias_linear,
-            skip_bias_add=True,
-            is_expert=is_expert,
-            tp_comm_buffer_name="fc1",
-            tp_group=tp_group,
-        )
+        if self.split_fc1:
+            self.linear_fc1_gate = build_module(
+                submodules.linear_fc1,
+                self.input_size,
+                branch_ffn_hidden_size,
+                config=self.config,
+                init_method=self.config.init_method,
+                gather_output=False,
+                bias=self.config.add_bias_linear,
+                skip_bias_add=True,
+                is_expert=is_expert,
+                tp_comm_buffer_name="fc1",
+                tp_group=tp_group,
+            )
+            self.linear_fc1_up = build_module(
+                submodules.linear_fc1,
+                self.input_size,
+                branch_ffn_hidden_size,
+                config=self.config,
+                init_method=self.config.init_method,
+                gather_output=False,
+                bias=self.config.add_bias_linear,
+                skip_bias_add=True,
+                is_expert=is_expert,
+                tp_comm_buffer_name="fc1",
+                tp_group=tp_group,
+            )
+        else:
+            self.linear_fc1 = build_module(
+                submodules.linear_fc1,
+                self.input_size,
+                ffn_hidden_size,
+                config=self.config,
+                init_method=self.config.init_method,
+                gather_output=False,
+                bias=self.config.add_bias_linear,
+                skip_bias_add=True,
+                is_expert=is_expert,
+                tp_comm_buffer_name="fc1",
+                tp_group=tp_group,
+            )
 
         self.activation_func = self.config.activation_func
 
