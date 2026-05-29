@@ -500,8 +500,13 @@ def _row_parallel_poetx_forward(self, input_):
 def _name_matches(name: str, patterns: Optional[Sequence[str]]) -> bool:
     if not patterns:
         return False
-    lower = name.lower()
-    return any(pat.lower() in lower for pat in patterns)
+    # Dot-bound the haystack so a bare leaf token (e.g. "gate") matches a path
+    # SEGMENT (".gate.") rather than any substring ("linear_fc1_gate"). Patterns
+    # that already carry dots (e.g. ".experts.") keep their intended meaning.
+    # Prevents the substring-collision class of bug where a new layer name
+    # containing an exclusion token gets silently dropped from POET wrapping.
+    hay = "." + name.lower() + "."
+    return any(("." + pat.lower().strip(".") + ".") in hay for pat in patterns)
 
 
 def _get_te_linear_classes() -> Tuple[type, ...]:
