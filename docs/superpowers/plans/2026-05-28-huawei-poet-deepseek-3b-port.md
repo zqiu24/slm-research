@@ -594,3 +594,73 @@ Plan complete and saved to `docs/superpowers/plans/2026-05-28-huawei-poet-deepse
 **2. Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints for review.
 
 Which approach?
+
+---
+
+## Execution Status — COMPLETED 2026-05-29 (inline execution)
+
+**Outcome:** Tasks 1–8 implemented, committed, and verified on branch **`huawei`** (base `main` @ `49463d8`). **Task 9 skipped per user** (full 8-GPU run; only 1 GPU available). Branch kept as-is — nothing pushed or merged. Working tree clean.
+
+### Acceptance gate (Task 8) — PASSED
+Run via `bash scripts/train_poet_huawei.sh dev` on the `poet` node (1× H100); log at `/lustre/home/zqiu/log/poet_huawei_dev.log`. All five criteria met:
+1. `[POET] variant=poet | wrapped 72 parallel-linear layers | block_size=128 | merge_interval=20`
+2. `[POET] params: total=664,864,128 trainable=467,273,088 oft_R=15,654,528 (oft_R = 3.35% of trainable)`
+3. 30/30 iterations — lm loss **11.97 → 2.83**, 0 NaN / 0 skipped iterations
+4. `[POET] merge-then-reinitialize at step 20`
+5. `successfully saved checkpoint from iteration 30` + clean exit (no traceback)
+
+### Commits (9, oldest→newest)
+```
+ce03f1c chore(huawei): branch + ignore rules for vendored POET stack
+6164925 chore(huawei): exclude vendored poet_torch_huawei/ from pre-commit hooks
+f509a15 feat(huawei): vendor reference Megatron 0.14 POET + DeepSeek-3B stack
+5f5c57c fix(huawei): scrub hardcoded W&B key from vendored training scripts
+846f1ab feat(huawei): single-GPU mock dev config for DeepSeek-3B POET (block-size 128)
+4e9d4ea feat(huawei): single-GPU mock-data POET smoke launcher (block-size 128)
+f1449e9 feat(huawei): thin train_poet_huawei.sh entry (dev|full) for the vendored stack
+f2fbfbb fix(huawei): guard sandwich-norm, POET te_classes, and router gemm on HAVE_TE for local impl
+3e003e0 fix(huawei): dev smoke triage — CUDA_HOME + env-pinned torchrun, disable TE/apex fusions, skip optim save past POET merge
+```
+
+### Files — ADDED
+
+**New repo files (authored for this port):**
+- `scripts/train_poet_huawei.sh` — thin `dev|full` entry wrapper (Task 7).
+- `poet_torch_huawei/training_scripts/train_DeepSeek_dev_mock_1gpu.sh` — single-GPU mock smoke launcher (Task 6; later edited in Task-8 triage).
+- `poet_torch_huawei/training_scripts/model_args/DeepSeek-3Bv2-sandwich-mqa-poet-dev.yaml` — shrunk dev config (Task 5; later edited in Task-8 triage).
+
+**Vendored stack (bulk verbatim copy of `/lustre/fast/fast/zqiu/tmp/Megatron-poet`, Task 2):** 561 files added under `poet_torch_huawei/` — `megatron/` (Megatron-core 0.14.1, incl. `poet_adapter/`), `poet_torch/`, `tools/`, `pretrain_*.py`, `training_scripts/` (all reference `.sh` + `model_args/*.yaml`), `parse_yaml.sh`, `uv.lock`, etc. Excluded from the copy: `.git/`, caches, `*.pt`/`*.ckpt`, `examples/`, `images/`, `docs/`, `tasks/`, `tests/`, `docker/`.
+
+### Files — MODIFIED
+
+**Repo-level:**
+- `.gitignore` — ignore `poet_torch_huawei/runs_dev/`, `__pycache__`, `*.pyc`, `wandb/`, `*.log`, `data_cache/` (Task 1).
+- `.pre-commit-config.yaml` — added `poet_torch_huawei/` to the `exclude:` of trailing-whitespace, end-of-file-fixer, check-yaml, check-added-large-files, check-toml, ruff, ruff-format (so the vendored tree is kept **verbatim**, not reformatted). *Not in the original plan — required because slm-research's hooks would otherwise mangle/reject the 561-file vendor drop (e.g. `uv.lock` >500 KB).*
+
+**Vendored — W&B secret scrub (Task 3, 9 scripts):** replaced the hardcoded `WANDB_API_KEY` with `"${WANDB_API_KEY:-}"` in `train_3bv3_sandwich_sepllm.sh`, `train_DeepSeek_3bv3_mqa_poetx_planA.sh`, `train_DeepSeek_3bv3_sandwich_mqa.sh`, `..._mqa_cx.sh`, `..._mqa_cx_swa.sh`, `..._mqa_muon.sh`, `..._mqa_poet.sh`, `..._mqa_poetx.sh`, `..._mqa_swa_only.sh`. *(Plan named only `..._mqa_poet.sh`; the key appeared in 9 scripts and the plan's verify step required the whole tree clean.)*
+
+**Vendored — local-impl (no-TE/no-apex) bug fixes (Task-8 triage, user-approved):** added `HAVE_TE` guards so the `local` path doesn't crash on TE-stub `None` symbols. The reference only ran the TE path, so these were latent:
+- `poet_torch_huawei/megatron/core/transformer/transformer_layer.py` — `_get_sandwich_norm_impl()` now falls back to `WrappedTorchNorm` when `not HAVE_TE`.
+- `poet_torch_huawei/megatron/core/poet_adapter/adapter.py` — `_get_te_linear_classes()` returns `()` when `not HAVE_TE` (was `(None, None)` → `isinstance` TypeError).
+- `poet_torch_huawei/megatron/core/transformer/moe/moe_utils.py` — `RouterGatingLinearFunction` fwd/bwd guard `te_general_gemm` use on `HAVE_TE` (was `NameError`).
+
+**Dev config + launcher triage edits (Task-8, committed in `3e003e0`):**
+- `DeepSeek-3Bv2-sandwich-mqa-poet-dev.yaml` — set `--transformer-impl local`, `--num-layers 4`, `--moe-layer-freq ([0]*1+[1]*3)`, `--num-experts 8`, `--moe-router-topk 2`, `--poet-merge-interval 20` (Task 5); plus triage: disabled TE/apex fusions (`--moe-permute-fusion false`, `--moe-router-fusion false`, `--no-gradient-accumulation-fusion`, `--no-masked-softmax-fusion`, `--no-persist-layer-norm`) and set `--no-save-optim true`.
+- `train_DeepSeek_dev_mock_1gpu.sh` — launch via `python -m torch.distributed.run` (bare `torchrun` escaped to `~/.local` system py3.10); export `CUDA_HOME=/is/software/nvidia/cuda-12.9` for the legacy fused-kernels nvcc probe.
+
+### Files — DELETED
+None.
+
+### Environment changes (NOT tracked in the repo)
+- **`pip install pybind11` into the `poet` conda env** (py3.12) so Megatron's dataset C++ helper (`megatron/core/datasets/Makefile` → `python3 -m pybind11 --includes`) compiles. Required for any run; re-do if the env is rebuilt.
+- Build artifact `poet_torch_huawei/megatron/core/datasets/helpers_cpp.cpython-312-*.so` is generated at runtime and git-ignored (`*.so`).
+
+### Deviations from the original plan
+The plan assumed `--transformer-impl local` would cleanly avoid Transformer Engine. It did for the *spec*, but the reference's **local path had latent bugs** (only the TE path was ever exercised). Root-caused and fixed via systematic debugging:
+1. Env plumbing — pybind11 install, `CUDA_HOME`, `python -m torch.distributed.run` (the plan's `torchrun` resolved to `~/.local/bin/torchrun` / system py3.10).
+2. TE/apex-only fusions disabled in the dev YAML (the plan's triage anticipated masked-softmax/persist-LN; the MoE-permute/router-fusion and gradient-accum-fusion were additional).
+3. Three `HAVE_TE`-guard fixes in the vendored tree (user-approved, since the plan said "do not edit megatron").
+4. `.pre-commit-config.yaml` exclusion (the plan didn't foresee the hooks acting on the vendor drop).
+
+### Known issue for the full 8-GPU run (Task 9, not done)
+POET's merge-then-reinitialize resets some params' Adam `step`, so the distributed optimizer ends with **heterogeneous step counts**. Saving optimizer state then trips `assert len(steps) == 1` in `distrib_optimizer.state_dict()` (non-apex/TE path). The smoke works around this with `--no-save-optim` (model still saves); **a real run that checkpoints optimizer state after a merge will hit this and needs a proper fix.**
