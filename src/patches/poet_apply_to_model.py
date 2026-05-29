@@ -19,6 +19,11 @@ from src.patches._registry import register_patch
 _TARGET = ("megatron.training.training.get_model",)
 logger = logging.getLogger(__name__)
 
+# Manual switch for the per-parameter dump emitted after POET wraps the model
+# (name / shape / requires_grad / numel / derived block_size). Flip to False to
+# silence it on real runs; the one-line trainable/frozen summary always logs.
+_DUMP_POET_PARAMS = True
+
 
 @register_patch(name="poet_apply_to_model", targets=_TARGET)
 def apply() -> None:
@@ -53,22 +58,22 @@ def apply() -> None:
         # Per-parameter dump (name | shape | requires_grad) so the
         # block_count -> param-count mapping is inspectable from a
         # single-GPU smoke run. Rank-0 only to avoid 8x spam on real runs.
-        import math
-
         import torch
-
-        def _block_size_from_oft_r(p):
-            # oft_R_in/oft_R_out have shape (n_blocks, n_elems) where
-            # n_elems = b*(b-1)/2 is the count of strictly-upper-triangular
-            # entries of a b x b skew block. Invert for b:
-            #   8*n_elems + 1 = (2b - 1)^2  =>  b = (1 + sqrt(8*n_elems + 1)) / 2
-            n_elems = p.shape[-1]
-            b = (1 + math.isqrt(8 * int(n_elems) + 1)) // 2
-            return b, int(p.shape[0])  # (block_size, n_blocks)
 
         is_dist = torch.distributed.is_available() and torch.distributed.is_initialized()
         rank = torch.distributed.get_rank() if is_dist else 0
-        if rank == 0:
+        if _DUMP_POET_PARAMS and rank == 0:
+            import math
+
+            def _block_size_from_oft_r(p):
+                # oft_R_in/oft_R_out have shape (n_blocks, n_elems) where
+                # n_elems = b*(b-1)/2 is the count of strictly-upper-triangular
+                # entries of a b x b skew block. Invert for b:
+                #   8*n_elems + 1 = (2b - 1)^2  =>  b = (1 + sqrt(8*n_elems + 1)) / 2
+                n_elems = p.shape[-1]
+                b = (1 + math.isqrt(8 * int(n_elems) + 1)) // 2
+                return b, int(p.shape[0])  # (block_size, n_blocks)
+
             print(
                 "[POET] ===== parameter dump "
                 "(name | shape | requires_grad | numel | block_size x n_blocks) =====",
@@ -90,7 +95,7 @@ def apply() -> None:
         trainable = sum(p.numel() for m in chunks for p in m.parameters() if p.requires_grad)
         frozen = sum(p.numel() for m in chunks for p in m.parameters() if not p.requires_grad)
         ratio = trainable / max(trainable + frozen, 1) * 100
-        if rank == 0:
+        if _DUMP_POET_PARAMS and rank == 0:
             print(
                 f"[POET] replaced {total} linears | trainable={trainable} "
                 f"frozen={frozen} ({ratio:.2f}%)",
