@@ -53,17 +53,36 @@ def apply() -> None:
         # Per-parameter dump (name | shape | requires_grad) so the
         # block_count -> param-count mapping is inspectable from a
         # single-GPU smoke run. Rank-0 only to avoid 8x spam on real runs.
+        import math
+
         import torch
+
+        def _block_size_from_oft_r(p):
+            # oft_R_in/oft_R_out have shape (n_blocks, n_elems) where
+            # n_elems = b*(b-1)/2 is the count of strictly-upper-triangular
+            # entries of a b x b skew block. Invert for b:
+            #   8*n_elems + 1 = (2b - 1)^2  =>  b = (1 + sqrt(8*n_elems + 1)) / 2
+            n_elems = p.shape[-1]
+            b = (1 + math.isqrt(8 * int(n_elems) + 1)) // 2
+            return b, int(p.shape[0])  # (block_size, n_blocks)
 
         is_dist = torch.distributed.is_available() and torch.distributed.is_initialized()
         rank = torch.distributed.get_rank() if is_dist else 0
         if rank == 0:
-            print("[POET] ===== parameter dump (name | shape | requires_grad) =====", flush=True)
+            print(
+                "[POET] ===== parameter dump "
+                "(name | shape | requires_grad | numel | block_size x n_blocks) =====",
+                flush=True,
+            )
             for m in chunks:
                 for pname, p in m.named_parameters():
+                    extra = ""
+                    if "oft_R" in pname and p.dim() == 2:
+                        block_size, n_blocks = _block_size_from_oft_r(p)
+                        extra = f" block_size={block_size} n_blocks={n_blocks}"
                     print(
                         f"[POET] {pname:<78} {tuple(p.shape)!s:<22} "
-                        f"requires_grad={p.requires_grad} numel={p.numel()}",
+                        f"requires_grad={p.requires_grad} numel={p.numel()}{extra}",
                         flush=True,
                     )
             print("[POET] ===== end parameter dump =====", flush=True)
