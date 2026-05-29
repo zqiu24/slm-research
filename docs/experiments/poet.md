@@ -25,13 +25,26 @@ parameterisations.
 - Architecture constraint: `config.transformer_impl='local'` (no fused
   TE LayerNormLinear). The `poet_unfuse_te_impl` patch flips this
   automatically when `args.poet` is set.
+- Optional fused-linear splitting (`--poet-split-qkv` / `--poet-split-fc1`,
+  config `optim.poet.split_qkv` / `split_fc1`, default off): before POET
+  wrapping, split the fused attention `linear_qkv` into separate Q/K/V
+  projections (GQA-correct de-interleave; inert for MLA) and/or the fused
+  SwiGLU `linear_fc1` into separate gate/up projections, so each sub-projection
+  gets its own independent POET orbit. Implemented in
+  [`src/optim/poet_split.py`](../../src/optim/poet_split.py). Each produced
+  sub-segment must be divisible by `block_size`/`block_count` or training
+  hard-errors at startup. Requires TP=1 (already enforced by POET) and
+  non-gated attention.
 
 ## Patches applied
 - [`poet_unfuse_te_impl`](../../src/patches/poet_unfuse_te_impl.py) —
   flip `config.transformer_impl` to `local` when POET is enabled.
 - [`poet_apply_to_model`](../../src/patches/poet_apply_to_model.py) —
   replace `*ParallelLinear` modules with `POETMegatronLinear` after
-  `get_model` returns.
+  `get_model` returns. When `--poet-split-qkv` / `--poet-split-fc1` are
+  set, runs the fused-linear split
+  ([`split_fused_linears`](../../src/optim/poet_split.py)) first, so the
+  produced Q/K/V/gate/up sub-linears are each wrapped as their own orbit.
 - [`poet_merge_step`](../../src/patches/poet_merge_step.py) — periodic
   `POETLinear.merge_then_reinitialize()` after each `train_step`.
 
@@ -68,6 +81,15 @@ See [configs/experiments/optim/poet.yaml](../../configs/experiments/optim/poet.y
   poet_apply_to_model, poet_merge_step`; `[POET] replaced N linears`;
   `[POET] merged at iteration 5` and `[POET] merged at iteration 10`;
   `patch_set_hash: <16-hex>` in `runs/<config_hash>/metadata.json`.
+- 2026-05-29: added fused-linear splitting (`--poet-split-qkv` /
+  `--poet-split-fc1`) in [`src/optim/poet_split.py`](../../src/optim/poet_split.py)
+  with CPU geometry/surgery unit tests
+  ([tests/unit/test_poet_split.py](../../tests/unit/test_poet_split.py), 12
+  tests). GPU smoke (llama3 1.2b, 8×B200, both splits on, `block_size=128`,
+  mock data): model built with `[POET split]` logs on all 52 layers
+  (`linear_qkv → q/k/v q=1536,kv=512,groups=8`; `linear_fc1 → gate/up
+  ffn=3840`), `[POET] replaced 364 linears`, 140 train steps with loss
+  decreasing 12.06 → 11.80 and 0 nan/skipped iterations.
 
 ## Runs
 - Ablation ladder: (pending)
