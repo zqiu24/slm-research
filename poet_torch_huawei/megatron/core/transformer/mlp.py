@@ -264,7 +264,14 @@ class MLP(MegatronModule):
         singleton_local_shards = (metadata or {}).get('singleton_local_shards', False)
         for name, module in self._modules.items():
             sub_sd = module.sharded_state_dict(f"{prefix}{name}.", sharded_offsets, metadata)
-            if self.config.gated_linear_unit and name == "linear_fc1":
+            # Only the FUSED linear_fc1 needs the swiglu split factory. Split
+            # gate/up halves (linear_fc1_gate / linear_fc1_up) are already
+            # separate ColumnParallelLinears and serialize verbatim.
+            if (
+                self.config.gated_linear_unit
+                and name == "linear_fc1"
+                and not getattr(self, "split_fc1", False)
+            ):
                 for k, v in sub_sd.items():
                     if k in (f"{prefix}{name}.weight", f"{prefix}{name}.bias"):
                         sub_sd[k] = apply_swiglu_sharded_factory(
@@ -275,7 +282,11 @@ class MLP(MegatronModule):
 
     def backward_dw(self):
         self.linear_fc2.backward_dw()
-        self.linear_fc1.backward_dw()
+        if getattr(self, "split_fc1", False):
+            self.linear_fc1_gate.backward_dw()
+            self.linear_fc1_up.backward_dw()
+        else:
+            self.linear_fc1.backward_dw()
 
 
 # pylint: disable=missing-function-docstring
