@@ -218,3 +218,33 @@ def test_split_qkv_inert_without_linear_qkv():
         linear_types=(nn.Linear,),
     )
     assert n == 0
+
+
+class _FakeBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.self_attention = _FakeAttention(hidden=32, num_heads=8, num_groups=2, head_dim=16)
+        self.mlp = _FakeMLP(hidden=32, ffn=16)
+
+
+def test_both_splits_compose_and_register_separate_submodules():
+    block = _FakeBlock()
+    n = ps.split_fused_linears(
+        block,
+        split_qkv=True,
+        split_fc1=True,
+        block_size=16,
+        block_count=None,
+        linear_types=(nn.Linear,),
+    )
+    assert n == 2
+    names = dict(block.named_modules())
+    assert "self_attention.linear_q" in names
+    assert "self_attention.linear_k" in names
+    assert "self_attention.linear_v" in names
+    assert "mlp.linear_fc1_gate" in names
+    assert "mlp.linear_fc1_up" in names
+    assert "self_attention.linear_qkv" not in names
+    assert "mlp.linear_fc1" not in names
+    # The interleave index is a non-persistent buffer (not a trainable param).
+    assert "_poet_qkv_interleave_index" not in dict(block.named_parameters())
