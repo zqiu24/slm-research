@@ -14,6 +14,9 @@ experiment:
   references:
     - "Hu et al. 2024 (arXiv:2404.06395) — MiniCPM"
   patches:
+    # No-op unless base.model.unfuse_qkv/unfuse_fc1 are set; lets a plain-Adam
+    # run use the (forward-equivalent) unfused architecture for sanity checks.
+    - model_unfuse_linears
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
   required_capabilities: []
 
