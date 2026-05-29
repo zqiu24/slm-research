@@ -18,7 +18,8 @@
 
 ## File structure
 
-- **Modify** [src/utils/megatron_args.py](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py) — rotary-percent config-driven; emit sandwich + 2 MoE flags.
+- **Modify** [src/utils/megatron_args.py](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py) — rotary-percent config-driven; emit sandwich + 2 MoE flags; decouple MTP from MLA.
+- **Modify** [launchers/pretrain_gpt_slm.py](/lustre/fast/fast/zqiu/slm-research/launchers/pretrain_gpt_slm.py) — register `--use-sandwich-norm` / `--attn-post-norm-scale` / `--ffn-post-norm-scale` in `add_slm_args`.
 - **Create** [src/model/sandwich_norm_ops.py](/lustre/fast/fast/zqiu/slm-research/src/model/sandwich_norm_ops.py) — pure, CPU-testable hook + scale helpers.
 - **Create** [src/model/sandwich_layer.py](/lustre/fast/fast/zqiu/slm-research/src/model/sandwich_layer.py) — `SandwichTransformerLayer` subclass.
 - **Create** [src/patches/sandwich_norm_apply.py](/lustre/fast/fast/zqiu/slm-research/src/patches/sandwich_norm_apply.py) — args + config stamp + layer-spec swap.
@@ -324,10 +325,10 @@ git commit -m "feat(sandwich): SandwichTransformerLayer with forward-hook post-n
 
 ---
 
-## Task 4: megatron_args — emit sandwich + MoE-fusion flags
+## Task 4: megatron_args — emit sandwich + MoE-fusion flags; decouple MTP from MLA
 
 **Files:**
-- Modify: [src/utils/megatron_args.py](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py) (`_model_args`: after `--disable-bias-linear` ~L77 for sandwich; MoE block ~L131 for the 2 MoE flags)
+- Modify: [src/utils/megatron_args.py](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py) (`_model_args`: sandwich after `--disable-bias-linear` ~L77; 2 MoE flags ~L131; MTP pulled out of the MLA block ~L100-105)
 - Test: [tests/unit/test_megatron_args.py](/lustre/fast/fast/zqiu/slm-research/tests/unit/test_megatron_args.py)
 
 - [ ] **Step 1: Write the failing tests**
@@ -374,6 +375,37 @@ def test_moe_router_fusion_and_layer_recompute_emitted():
     args = _model_args(OmegaConf.create({"base": {"model": model}}))
     assert "--moe-router-fusion" in args
     assert "--moe-layer-recompute" in args
+
+
+def test_mtp_emitted_without_mla():
+    # Review fix: MTP must emit for MQA (no MLA), where Huawei DeepSeek-3Bv2 uses it.
+    from src.utils.megatron_args import _model_args
+
+    model = _MIN_MODEL | {
+        "multi_latent_attention": False,
+        "mtp_num_layers": 1,
+        "mtp_loss_scaling_factor": 0.3,
+    }
+    args = _model_args(OmegaConf.create({"base": {"model": model}}))
+    assert args[args.index("--mtp-num-layers") + 1] == "1"
+    assert args[args.index("--mtp-loss-scaling-factor") + 1] == "0.3"
+    assert "--enable-experimental" in args
+
+
+def test_mtp_still_emitted_with_mla():
+    # Regression: the existing MLA path still emits MTP + experimental.
+    from src.utils.megatron_args import _model_args
+
+    model = _MIN_MODEL | {
+        "multi_latent_attention": True,
+        "q_lora_rank": 64, "kv_lora_rank": 32, "qk_head_dim": 16,
+        "qk_pos_emb_head_dim": 8, "v_head_dim": 16, "rotary_scaling_factor": 40,
+        "mscale": 1.0, "mscale_all_dim": 1.0,
+        "mtp_num_layers": 1, "mtp_loss_scaling_factor": 0.1,
+    }
+    args = _model_args(OmegaConf.create({"base": {"model": model}}))
+    assert "--mtp-num-layers" in args
+    assert "--enable-experimental" in args
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -401,29 +433,96 @@ In the MoE block, after `_maybe_bool(args, "--moe-permute-fusion", moe.permute_f
         _maybe_bool(args, "--moe-layer-recompute", moe.get("layer_recompute", False))
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 5: Decouple MTP emission from MLA**
 
-Run: `python -m pytest tests/unit/test_megatron_args.py -k "sandwich or moe_router_fusion" -v`
-Expected: PASS. Then full file. **Wait for the user.**
+Currently `--mtp-num-layers` / `--mtp-loss-scaling-factor` / `--enable-experimental` are emitted
+**only inside** the `if multi_latent_attention:` block, so the MQA family would never get MTP.
+In `_model_args`: (a) delete these two lines from the MLA `for key, flag in (...)` tuple:
 
-- [ ] **Step 6: Commit**
+```python
+            ("mtp_num_layers", "--mtp-num-layers"),
+            ("mtp_loss_scaling_factor", "--mtp-loss-scaling-factor"),
+```
+
+(b) delete the `_add(args, "--enable-experimental")` line at the end of the MLA block; (c) add a
+standalone block immediately after the MLA `if` block:
+
+```python
+    # MTP is independent of MLA (Huawei DeepSeek-3Bv2 uses MTP with MQA).
+    if model.get("mtp_num_layers", None) is not None:
+        _add(args, "--mtp-num-layers", model.mtp_num_layers)
+        _add(args, "--mtp-loss-scaling-factor", model.get("mtp_loss_scaling_factor", 0.1))
+    if (
+        bool(model.get("multi_latent_attention", False))
+        or model.get("mtp_num_layers", None) is not None
+    ):
+        _add(args, "--enable-experimental")
+```
+
+- [ ] **Step 6: Run tests to verify they pass**
+
+Run: `python -m pytest tests/unit/test_megatron_args.py -k "sandwich or moe_router_fusion or mtp" -v`
+Expected: PASS (incl. the two MTP tests). Then run the full file to confirm no regression to the
+existing MLA `deepseek_v3` emission. **Wait for the user.**
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/utils/megatron_args.py tests/unit/test_megatron_args.py
-git commit -m "feat(args): emit sandwich-norm flags + moe router-fusion/layer-recompute"
+git commit -m "feat(args): emit sandwich flags + moe router-fusion/recompute; decouple MTP from MLA"
 ```
 
 ---
 
-## Task 5: sandwich_norm_apply patch
+## Task 5: register sandwich CLI args + sandwich_norm_apply patch
 
 **Files:**
+- Modify: `launchers/pretrain_gpt_slm.py` (`add_slm_args`)
 - Create: `src/patches/sandwich_norm_apply.py`
-- Test: `tests/unit/test_patch_sandwich_norm.py`
+- Test: `tests/unit/test_pretrain_gpt_slm.py`, `tests/unit/test_patch_sandwich_norm.py`
 
-Modeled on [src/patches/ngpt_apply_spec.py](/lustre/fast/fast/zqiu/slm-research/src/patches/ngpt_apply_spec.py): register args, stamp config, swap the layer spec's `module`.
+**Review fix:** slm-custom CLI flags are registered in `add_slm_args` (where `--poet`,
+`--unfuse-qkv`, `--ngpt` live) — NOT by wrapping a Megatron-internal arg adder. So the three
+sandwich flags go there. **Review fix:** the MoE decoder is built via
+`get_gpt_decoder_block_spec` (gpt_builders.py:57), **not** `_get_transformer_layer_spec`, so the
+spec swap must cover the block spec's `.layer_specs` (and the MTP spec) — otherwise sandwich-norm
+silently never applies to this MoE model. The patch stamps config + swaps the layer class across
+all spec paths (modeled on `ngpt_apply_spec`).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing arg test**
+
+Append to `tests/unit/test_pretrain_gpt_slm.py`:
+
+```python
+def test_add_slm_args_accepts_sandwich_flags():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        ["--slm-config-path", "x.yaml", "--use-sandwich-norm",
+         "--attn-post-norm-scale", "0.03", "--ffn-post-norm-scale", "0.03"]
+    )
+    assert args.use_sandwich_norm is True
+    assert args.attn_post_norm_scale == 0.03
+    assert args.ffn_post_norm_scale == 0.03
+```
+
+- [ ] **Step 2: Register the args in add_slm_args**
+
+In `launchers/pretrain_gpt_slm.py` `add_slm_args`, after the `--unfuse-fc1` line, add:
+
+```python
+    # Sandwich-norm (architectural; applied by the sandwich_norm_apply patch).
+    group.add_argument("--use-sandwich-norm", action="store_true")
+    group.add_argument("--attn-post-norm-scale", type=float, default=1.0)
+    group.add_argument("--ffn-post-norm-scale", type=float, default=1.0)
+```
+
+- [ ] **Step 3: Run the arg test**
+
+Run: `python -m pytest tests/unit/test_pretrain_gpt_slm.py -v`
+Expected: PASS (all). **Wait for the user.**
+
+- [ ] **Step 4: Write the failing patch-registration test**
 
 Create `tests/unit/test_patch_sandwich_norm.py`:
 
@@ -457,22 +556,25 @@ def test_patch_registers_on_arguments_and_gpt_builder():
     assert any("core_transformer_config_from_args" in t for t in targets)
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 5: Run test to verify it fails**
 
 Run: `python -m pytest tests/unit/test_patch_sandwich_norm.py -v`
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Create the patch**
+- [ ] **Step 6: Create the patch**
 
 Create `src/patches/sandwich_norm_apply.py`:
 
 ```python
-"""Patch: register sandwich-norm args, stamp config, swap in SandwichTransformerLayer.
+"""Patch: stamp sandwich-norm config + swap in SandwichTransformerLayer.
 
-Mirrors src/patches/ngpt_apply_spec.py. All effects are gated on
-``args.use_sandwich_norm`` so the patch is a no-op otherwise (safe to list in
-any experiment's patches). Megatron imports happen inside apply() so importing
-this module (registration) is CPU-safe.
+Mirrors src/patches/ngpt_apply_spec.py. The CLI args (--use-sandwich-norm,
+--attn-post-norm-scale, --ffn-post-norm-scale) are registered in add_slm_args;
+this patch only (1) stamps them onto the TransformerConfig and (2) swaps the
+transformer-layer class to SandwichTransformerLayer across every spec path used
+by gpt_builder — the dense spec, the MoE decoder block spec (.layer_specs), and
+the MTP layer spec. All gated on args.use_sandwich_norm (no-op otherwise).
+Megatron imports happen inside apply() so importing this module is CPU-safe.
 """
 
 from __future__ import annotations
@@ -490,12 +592,9 @@ logger = logging.getLogger(__name__)
 
 @register_patch(name="sandwich_norm_apply", targets=_TARGET)
 def apply() -> None:
+    # ---- stamp config from args ----
     from megatron.training import arguments as _ma
 
-    # Make Megatron's parser accept the sandwich flags that megatron_args emits.
-    _register_sandwich_cli_args(_ma)
-
-    # ---- stamp config from args ----
     _orig_cfg = _ma.core_transformer_config_from_args
 
     def _wrapped_cfg(args, *a, **kw):
@@ -508,75 +607,76 @@ def apply() -> None:
 
     _ma.core_transformer_config_from_args = _wrapped_cfg
 
-    # ---- swap layer spec module ----
+    # ---- swap the layer class across all spec paths ----
     import gpt_builders as _gb
+    from megatron.core.transformer.transformer_layer import TransformerLayer
 
     from src.model.sandwich_layer import SandwichTransformerLayer
 
+    def _sandwichify(spec):
+        """Set spec.module = SandwichTransformerLayer wherever a base
+        TransformerLayer spec appears (single ModuleSpec, a list of them, or a
+        TransformerBlockSubmodules with .layer_specs)."""
+        if spec is None:
+            return spec
+        if isinstance(spec, (list, tuple)):
+            for s in spec:
+                _sandwichify(s)
+        elif hasattr(spec, "layer_specs"):
+            _sandwichify(spec.layer_specs)
+        elif getattr(spec, "module", None) is TransformerLayer:
+            spec.module = SandwichTransformerLayer
+        return spec
+
     _orig_builder = _gb.gpt_builder
+    # Names of the spec-producing functions gpt_builder calls (dense / MoE / MTP).
+    _spec_fns = ("get_gpt_decoder_block_spec", "_get_transformer_layer_spec",
+                 "get_gpt_decoder_layer_specs")
 
     def _wrapped_builder(args, *a, **kw):
         if not getattr(args, "use_sandwich_norm", False):
             return _orig_builder(args, *a, **kw)
-        orig_get_spec = _gb._get_transformer_layer_spec
+        originals = {}
+        for name in _spec_fns:
+            fn = getattr(_gb, name, None)
+            if fn is None:
+                continue
+            originals[name] = fn
 
-        def _sandwich_get_spec(use_te, config):
-            spec = orig_get_spec(use_te, config)
-            spec.module = SandwichTransformerLayer
-            return spec
+            def _make(orig):
+                def wrapped(*aa, **kk):
+                    return _sandwichify(orig(*aa, **kk))
+                return wrapped
 
-        _gb._get_transformer_layer_spec = _sandwich_get_spec
+            setattr(_gb, name, _make(fn))
         try:
             model = _orig_builder(args, *a, **kw)
         finally:
-            _gb._get_transformer_layer_spec = orig_get_spec
-        logger.info("[sandwich] applied SandwichTransformerLayer spec")
+            for name, fn in originals.items():
+                setattr(_gb, name, fn)
+        logger.info("[sandwich] swapped layer class on all spec paths (dense/MoE/MTP)")
         return model
 
     _gb.gpt_builder = _wrapped_builder
-
-
-def _register_sandwich_cli_args(_ma) -> None:
-    """Add --use-sandwich-norm / --attn-post-norm-scale / --ffn-post-norm-scale
-    to Megatron's argument parser by wrapping the network-size arg group adder.
-
-    Megatron builds its parser via a chain of ``_add_*_args(parser)`` functions
-    invoked by ``parse_args``. We wrap ``_add_network_size_args`` to also add our
-    three args, so they are recognised when megatron_args emits them.
-    """
-    if getattr(_ma, "_slm_sandwich_args_registered", False):
-        return
-    orig = _ma._add_network_size_args
-
-    def _wrapped(parser):
-        parser = orig(parser)
-        group = parser.add_argument_group(title="sandwich-norm")
-        group.add_argument("--use-sandwich-norm", action="store_true")
-        group.add_argument("--attn-post-norm-scale", type=float, default=1.0)
-        group.add_argument("--ffn-post-norm-scale", type=float, default=1.0)
-        return parser
-
-    _ma._add_network_size_args = _wrapped
-    _ma._slm_sandwich_args_registered = True
 ```
 
-> **Implementer note:** confirm the exact arg-group adder name in
-> `third_party/Megatron-LM/megatron/training/arguments.py` (`_add_network_size_args`
-> is the expected name in 0.17; if it differs, wrap whichever `_add_*_args` is
-> called by `parse_args`). Remove the stray `_orig_add` placeholder line. Verify
-> via the Task 9 smoke that `--use-sandwich-norm` parses without "unrecognized
-> arguments".
+> **Implementer note:** verify the three spec-fn names exist in
+> `third_party/Megatron-LM/gpt_builders.py` (they are imported/defined there in 0.17:
+> `get_gpt_decoder_block_spec`, `_get_transformer_layer_spec`, `get_gpt_decoder_layer_specs`).
+> The Task 9 smoke must show `[sandwich] swapped layer class ...` AND a post-norm parameter
+> (e.g. `post_self_attn_layernorm.weight`) present on every decoder layer.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **Step 7: Run test to verify it passes**
 
 Run: `python -m pytest tests/unit/test_patch_sandwich_norm.py -v`
-Expected: PASS (registration only; `apply()` is not called on CPU, so no Megatron import). **Wait for the user.**
+Expected: PASS (registration only; `apply()` is not called on CPU). **Wait for the user.**
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add src/patches/sandwich_norm_apply.py tests/unit/test_patch_sandwich_norm.py
-git commit -m "feat(sandwich): sandwich_norm_apply patch (args + config stamp + layer-spec swap)"
+git add launchers/pretrain_gpt_slm.py src/patches/sandwich_norm_apply.py \
+  tests/unit/test_pretrain_gpt_slm.py tests/unit/test_patch_sandwich_norm.py
+git commit -m "feat(sandwich): CLI args + sandwich_norm_apply patch (config stamp + MoE/MTP-aware layer swap)"
 ```
 
 ---

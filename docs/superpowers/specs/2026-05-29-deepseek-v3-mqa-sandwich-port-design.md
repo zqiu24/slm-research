@@ -73,6 +73,7 @@ score-function/expert-bias, MTP, `--untie-embeddings-and-output-weights`, bf16).
 | `--make-vocab-size-divisible-by 3232` | Confirm/emit (likely a fixed value in `megatron_args` today); expose if it differs. |
 | `--manual-gc`, `--manual-gc-interval 10`, `--cross-entropy-fusion-impl native`, `--no-rope-fusion` | Emit as fixed flags for this family (or training defaults); reconcile during planning. |
 | `--init-method-std 0.006`, `--embedding-init-method-std 0.006` | `init_method_std: 0.006` in the family; add `embedding_init_method_std` emission if missing. |
+| `--mtp-num-layers 1`, `--mtp-loss-scaling-factor 0.3` | **Currently emitted only inside the MLA block** in `_model_args`; must be decoupled so MTP emits for MQA too (with `--enable-experimental`). |
 | MoE SequentialMLP (no `--moe-grouped-gemm`) + `--moe-token-dispatcher-type alltoall` | `moe.grouped_gemm: false`, `moe.token_dispatcher_type: alltoall` in the family. (POET needs non-grouped; plain Adam runs may flip `grouped_gemm: true` for speed — left as a knob.) |
 | `--transformer-impl transformer_engine` | Family default `transformer_impl: transformer_engine` for plain runs; POET runs override to `local` (existing `poet_unfuse_te_impl` already forces this). |
 
