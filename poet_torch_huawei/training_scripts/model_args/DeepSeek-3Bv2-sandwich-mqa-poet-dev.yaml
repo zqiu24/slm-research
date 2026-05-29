@@ -28,7 +28,11 @@ MODEL_ARGS:
   --sequence-parallel: true
   --use-flash-attn: true
   --disable-bias-linear: true
-  --no-save-optim: false
+  # dev: the POET merge-then-reinitialize resets some params' Adam step, so the
+  # distributed optimizer ends with heterogeneous step counts. Saving optimizer state
+  # then hits `assert len(steps) == 1` in distrib_optimizer.state_dict() (non-apex/TE
+  # path). The smoke doesn't need optimizer state, so skip it; the model still saves.
+  --no-save-optim: true
   --no-check-for-nan-in-loss-and-grad: false
   --cross-entropy-loss-fusion: true
   --cross-entropy-fusion-impl: native
@@ -43,7 +47,13 @@ MODEL_ARGS:
   # NOTE: FP8 is NOT compatible with POET weight swap (TE caches an
   # FP8-quantized weight across forwards). Keep bf16.
   --transformer-impl: local
-  --no-masked-softmax-fusion: false
+  # dev (local impl): legacy fused softmax kernel isn't compiled and apex's
+  # fused_weight_gradient_mlp_cuda is absent, so disable both fusions (ColumnParallelLinear
+  # hard-raises if gradient_accumulation_fusion is on without apex).
+  --no-masked-softmax-fusion: true
+  --no-gradient-accumulation-fusion: true
+  # WrappedTorchNorm (torch RMSNorm under local impl) can't use the persist LN fused kernel.
+  --no-persist-layer-norm: true
   --no-rope-fusion: true
 
   # Network size
@@ -89,8 +99,11 @@ MODEL_ARGS:
   --moe-router-enable-expert-bias: true
   --moe-router-bias-update-rate: 1e-3
   --moe-router-dtype: fp32
-  --moe-permute-fusion: true
-  --moe-router-fusion: true
+  # dev (local impl, no Transformer Engine): these fused MoE ops live in TE. With TE
+  # absent they ImportError at config build / raise "install TE" at the router. Off for
+  # the smoke; the real TE run keeps them on.
+  --moe-permute-fusion: false
+  --moe-router-fusion: false
   --moe-layer-recompute: true
   --moe-token-dispatcher-type: alltoall
 

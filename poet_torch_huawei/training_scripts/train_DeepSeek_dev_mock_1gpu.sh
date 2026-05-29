@@ -11,6 +11,13 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 export PYTHONUNBUFFERED=1
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
+# Megatron's _compile_dependencies() unconditionally calls legacy fused_kernels.load(),
+# which probes `$CUDA_HOME/bin/nvcc -V` for the CUDA version. The `poet` env ships only
+# torch's bundled CUDA runtime (no nvcc) so CUDA_HOME is unset -> TypeError(None + str).
+# load() compiles nothing (its helper is unused), so a valid nvcc for the probe is enough.
+# cuda/12.9 matches torch 2.8.0+cu129. Override via env if your cluster path differs.
+export CUDA_HOME="${CUDA_HOME:-/is/software/nvidia/cuda-12.9}"
+
 # Offline W&B for a smoke (no key needed).
 export WANDB_MODE=offline
 export WANDB_PROJECT="${WANDB_PROJECT:-huawei_poet_dev}"
@@ -71,6 +78,10 @@ CHECKPOINT_LOGGING_ARGS=(
 )
 
 echo "[dev] launching DeepSeek-3B POET smoke: 1 GPU, mock data, block-size 128, 30 steps"
-torchrun "${DISTRIBUTED_ARGS[@]}" pretrain_gpt_poet.py \
+# Launch via the active env's python (poet, 3.12) — a bare `torchrun` resolves to
+# ~/.local/bin/torchrun (shebang /usr/bin/python3 = system 3.10), which escapes the
+# conda env and runs workers under the wrong interpreter. `python -m torch.distributed.run`
+# pins both the agent and workers to the poet env python validated in Task 4.
+python -m torch.distributed.run "${DISTRIBUTED_ARGS[@]}" pretrain_gpt_poet.py \
   "${MODEL_ARGS[@]}" "${TRAINING_SPECIFIC_ARGS[@]}" \
   "${POET_CLI_ARGS[@]}" "${DATA_ARGS_LIST[@]}" "${CHECKPOINT_LOGGING_ARGS[@]}"
