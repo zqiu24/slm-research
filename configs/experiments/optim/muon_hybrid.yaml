@@ -12,6 +12,7 @@ experiment:
     - "Jordan 2024 Muon blog post"
     - "Moonlight paper arXiv:2502.16982"
   patches:
+    - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
   required_capabilities: []
 
@@ -33,3 +34,11 @@ optim:
     lr: 1.0e-3
     betas: [0.9, 0.95]
     eps: 1.0e-8
+
+# Unfuse fused qkv/fc1 into separate projections (forward-equivalent; Muon
+# trains each 2D sub-weight like any other linear). Applied by the
+# model_unfuse_linears patch above.
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

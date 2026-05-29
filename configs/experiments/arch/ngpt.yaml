@@ -17,6 +17,7 @@ experiment:
     - "Loshchilov et al. 2024 (arXiv:2410.01131)"
     - "Reference: https://github.com/NVIDIA/ngpt"
   patches:
+    - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
     - ngpt_apply_spec
     - ngpt_normalize_step
     - ngpt_optimizer_setup
@@ -48,3 +49,8 @@ base:
     attention_dropout: 0.0
     hidden_dropout: 0.0
     num_query_groups: ${base.model.num_attention_heads}
+    # Unfuse fused qkv/fc1 into separate projections (applied by the
+    # model_unfuse_linears patch above). NOTE: untested with nGPT's custom
+    # layer spec + weight normalization — smoke before relying on it.
+    unfuse_qkv: true
+    unfuse_fc1: true
