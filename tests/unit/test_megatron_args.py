@@ -7,6 +7,27 @@ from omegaconf import OmegaConf
 from launchers.submit import _parse_overrides
 from src.utils.megatron_args import build_megatron_args
 
+# Minimal model dict accepted by ``_model_args`` for unit tests that exercise a
+# single emission path without composing a full Hydra config.
+_MIN_MODEL = {
+    "num_layers": 2,
+    "hidden_size": 64,
+    "ffn_hidden_size": 128,
+    "num_attention_heads": 4,
+    "num_query_groups": 4,
+    "head_dim": 16,
+    "seq_length": 128,
+    "normalization": "RMSNorm",
+    "norm_epsilon": 1e-6,
+    "positional_encoding": "rope",
+    "rotary_base": 10000,
+    "attention_dropout": 0.0,
+    "hidden_dropout": 0.0,
+    "init_method_std": 0.02,
+    "tie_embeddings": True,
+    "activation": "SwiGLU",
+}
+
 
 def _args_to_map(args: list[str]) -> dict[str, str | bool]:
     out: dict[str, str | bool] = {}
@@ -1002,3 +1023,19 @@ def test_head_resid_block_count_requires_head_aligned():
                 }
             )
         )
+
+
+def test_rotary_percent_is_config_driven():
+    from src.utils.megatron_args import _model_args
+
+    cfg = OmegaConf.create({"base": {"model": _MIN_MODEL | {"rotary_percent": 0.25}}})
+    args = _model_args(cfg)
+    assert args[args.index("--rotary-percent") + 1] == "0.25"
+
+
+def test_rotary_percent_defaults_to_one():
+    from src.utils.megatron_args import _model_args
+
+    cfg = OmegaConf.create({"base": {"model": _MIN_MODEL}})
+    args = _model_args(cfg)
+    assert args[args.index("--rotary-percent") + 1] == "1.0"

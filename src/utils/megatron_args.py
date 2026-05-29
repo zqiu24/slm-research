@@ -61,7 +61,7 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--max-position-embeddings", model.get("max_position_embeddings", model.seq_length))
     _add(args, "--position-embedding-type", model.positional_encoding)
     _add(args, "--rotary-base", model.rotary_base)
-    _add(args, "--rotary-percent", 1.0)
+    _add(args, "--rotary-percent", model.get("rotary_percent", 1.0))
     _add(args, "--attention-dropout", model.attention_dropout)
     _add(args, "--hidden-dropout", model.hidden_dropout)
     _add(args, "--normalization", model.normalization)
