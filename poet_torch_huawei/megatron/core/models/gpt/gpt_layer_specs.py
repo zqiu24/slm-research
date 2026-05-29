@@ -198,42 +198,6 @@ def get_gpt_layer_with_transformer_engine_spec(
             if use_sepllm_sparse_kernel
             else backend.core_attention()
         )
-        if poet_split_qkv:
-            return ModuleSpec(
-                module=TransformerLayer,
-                submodules=TransformerLayerSubmodules(
-                    input_layernorm=backend.layer_norm(),
-                    self_attention=ModuleSpec(
-                        module=SelfAttention,
-                        params={"attn_mask_type": AttnMaskType.causal},
-                        submodules=SelfAttentionSubmodules(
-                            linear_q=backend.column_parallel_linear(),
-                            linear_k=backend.column_parallel_linear(),
-                            linear_v=backend.column_parallel_linear(),
-                            core_attention=core_attn,
-                            linear_proj=backend.row_parallel_linear(),
-                            q_layernorm=(
-                                L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
-                            ),
-                            k_layernorm=(
-                                L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
-                            ),
-                        ),
-                    ),
-                    self_attn_bda=get_bias_dropout_add,
-                    pre_mlp_layernorm=backend.layer_norm() if num_experts else IdentityOp,
-                    mlp=mlp,
-                    mlp_bda=get_bias_dropout_add,
-                    sharded_state_dict_keys_map={
-                        "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
-                        "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
-                        "mlp.1.basic_ops.0.weight": "mlp.linear_fc1.weight",
-                        "mlp.1.basic_ops.1.bias": "mlp.linear_fc1.bias",
-                        "mlp.3.basic_ops.0.weight": "mlp.linear_fc2.weight",
-                        "mlp.3.basic_ops.1.bias": "mlp.linear_fc2.bias",
-                    },
-                ),
-            )
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
@@ -395,10 +359,7 @@ def get_gpt_layer_local_spec(
                     module=SelfAttention,
                     params={"attn_mask_type": AttnMaskType.causal},
                     submodules=SelfAttentionSubmodules(
-                        linear_qkv=None if poet_split_qkv else backend.column_parallel_linear(),
-                        linear_q=backend.column_parallel_linear() if poet_split_qkv else None,
-                        linear_k=backend.column_parallel_linear() if poet_split_qkv else None,
-                        linear_v=backend.column_parallel_linear() if poet_split_qkv else None,
+                        linear_qkv=backend.column_parallel_linear(),
                         core_attention=core_attn,
                         linear_proj=backend.row_parallel_linear(),
                         q_layernorm=(
