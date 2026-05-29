@@ -126,6 +126,10 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")
     group.add_argument("--unfuse-fc1", action="store_true")
+    # Sandwich-norm (architectural; applied by the sandwich_norm_apply patch).
+    group.add_argument("--use-sandwich-norm", action="store_true")
+    group.add_argument("--attn-post-norm-scale", type=float, default=1.0)
+    group.add_argument("--ffn-post-norm-scale", type=float, default=1.0)
     group.add_argument("--ngpt", action="store_true")
     group.add_argument(
         "--ngpt-base-scale", type=float, default=None, help="1/sqrt(hidden_size) by default"

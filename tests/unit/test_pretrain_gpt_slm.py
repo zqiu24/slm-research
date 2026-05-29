@@ -272,3 +272,22 @@ def test_add_slm_args_accepts_lie_ortho_distributed():
     off = parser.parse_args(["--slm-config-path", "x.yaml"])
     assert on.poet_lie_ortho_distributed is True
     assert off.poet_lie_ortho_distributed is False
+
+
+def test_add_slm_args_accepts_sandwich_flags():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        [
+            "--slm-config-path",
+            "x.yaml",
+            "--use-sandwich-norm",
+            "--attn-post-norm-scale",
+            "0.03",
+            "--ffn-post-norm-scale",
+            "0.03",
+        ]
+    )
+    assert args.use_sandwich_norm is True
+    assert args.attn_post_norm_scale == 0.03
+    assert args.ffn_post_norm_scale == 0.03
