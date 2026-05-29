@@ -113,3 +113,108 @@ def test_split_fc1_hard_errors_on_indivisible_segment():
             block_count=None,
             linear_types=(nn.Linear,),
         )
+
+
+class _FakeAttnConfig:
+    attention_output_gate = False
+
+
+class _FakeAttention(nn.Module):
+    """Stand-in mimicking Megatron SelfAttention attributes used by the split."""
+
+    def __init__(self, hidden=32, num_heads=8, num_groups=2, head_dim=16):
+        super().__init__()
+        self.config = _FakeAttnConfig()
+        self.world_size = 1
+        self.hidden_size_per_attention_head = head_dim
+        self.num_query_groups_per_partition = num_groups
+        self.num_attention_heads_per_partition = num_heads
+        self.q_layernorm = None
+        self.k_layernorm = None
+        q_out = num_heads * head_dim
+        kv_out = num_groups * head_dim
+        self.linear_qkv = nn.Linear(hidden, q_out + 2 * kv_out, bias=False)
+
+    # Faithful reference of Megatron's TP=1 / no-gate get_query_key_value_tensors.
+    def reference_qkv(self, hidden_states):
+        mixed, _ = self.linear_qkv(hidden_states), None
+        hd = self.hidden_size_per_attention_head
+        ng = self.num_query_groups_per_partition
+        nqhpg = self.num_attention_heads_per_partition // ng
+        mixed = mixed.view(*mixed.size()[:-1], ng, (nqhpg + 2) * hd)
+        query, key, value = torch.split(mixed, [nqhpg * hd, hd, hd], dim=-1)
+        query = query.reshape(query.size(0), -1, hd)
+        return query, key, value
+
+
+def test_split_qkv_creates_modules_and_matches_reference():
+    torch.manual_seed(0)
+    a = _FakeAttention(hidden=32, num_heads=8, num_groups=2, head_dim=16)
+    x = torch.randn(5, 32)  # [sq*b flattened-ok, hidden]; here treat as [N, hidden]
+    q_ref, k_ref, v_ref = a.reference_qkv(x)
+
+    n = ps.split_fused_linears(
+        a,
+        split_qkv=True,
+        split_fc1=False,
+        block_size=16,
+        block_count=None,
+        linear_types=(nn.Linear,),
+    )
+    assert n == 1
+    assert hasattr(a, "linear_q") and hasattr(a, "linear_k") and hasattr(a, "linear_v")
+    assert not hasattr(a, "linear_qkv")
+
+    q, k, v = a.get_query_key_value_tensors(x)
+    assert torch.allclose(q, q_ref, atol=1e-6)
+    assert torch.allclose(k, k_ref, atol=1e-6)
+    assert torch.allclose(v, v_ref, atol=1e-6)
+
+
+def test_split_qkv_mqa_contiguous():
+    torch.manual_seed(1)
+    a = _FakeAttention(hidden=32, num_heads=4, num_groups=1, head_dim=16)
+    x = torch.randn(5, 32)
+    q_ref, k_ref, _v_ref = a.reference_qkv(x)
+    ps.split_fused_linears(
+        a,
+        split_qkv=True,
+        split_fc1=False,
+        block_size=16,
+        block_count=None,
+        linear_types=(nn.Linear,),
+    )
+    q, k, _v = a.get_query_key_value_tensors(x)
+    assert torch.allclose(q, q_ref, atol=1e-6)
+    assert torch.allclose(k, k_ref, atol=1e-6)
+
+
+def test_split_qkv_hard_errors_on_indivisible_segment():
+    import pytest
+
+    # hidden=64 and q_out=128 both divide 64; kv_out=32 does NOT, so the first
+    # failing segment is linear_k. (With hidden==kv_out, no block size can fail
+    # K while passing Q, hence hidden=64 here.)
+    a = _FakeAttention(hidden=64, num_heads=8, num_groups=2, head_dim=16)
+    with pytest.raises(ValueError, match="linear_k"):
+        ps.split_fused_linears(
+            a,
+            split_qkv=True,
+            split_fc1=False,
+            block_size=64,
+            block_count=None,
+            linear_types=(nn.Linear,),
+        )
+
+
+def test_split_qkv_inert_without_linear_qkv():
+    m = nn.Module()  # MLA-like: no linear_qkv
+    n = ps.split_fused_linears(
+        m,
+        split_qkv=True,
+        split_fc1=False,
+        block_size=16,
+        block_count=None,
+        linear_types=(nn.Linear,),
+    )
+    assert n == 0

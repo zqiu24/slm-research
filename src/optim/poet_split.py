@@ -249,6 +249,109 @@ def _split_one_mlp_fc1(mlp, path, *, block_size, block_count, linear_types) -> b
 
 
 # --------------------------------------------------------------------------
+# QKV (Q / K / V) surgery
+# --------------------------------------------------------------------------
+
+
+def _split_qkv_forward(
+    self, hidden_states, key_value_states=None, output_gate=False, split_qkv=True
+):
+    """Replacement ``SelfAttention.get_query_key_value_tensors`` for TP=1,
+    non-gated attention. Calls separate Q/K/V projections, reassembles the
+    interleaved ``mixed_qkv`` (spec §6a), then runs Megatron's TP=1 post-linear
+    view/split/reshape/layernorm so downstream attention math is bit-identical.
+    """
+    assert not output_gate, "[POET split] split_qkv does not support gated attention."
+    q, _ = _split_linear_out(self.linear_q, hidden_states)
+    k, _ = _split_linear_out(self.linear_k, hidden_states)
+    v, _ = _split_linear_out(self.linear_v, hidden_states)
+    mixed = torch.cat([q, k, v], dim=-1).index_select(-1, self._poet_qkv_interleave_index)
+
+    hd = self.hidden_size_per_attention_head
+    ng = self.num_query_groups_per_partition
+    nqhpg = self.num_attention_heads_per_partition // ng
+    mixed = mixed.view(*mixed.size()[:-1], ng, (nqhpg + 2) * hd)
+    split_arg_list = [nqhpg * hd, hd, hd]
+    if not split_qkv:
+        return mixed, split_arg_list
+    query, key, value = torch.split(mixed, split_arg_list, dim=-1)
+    query = query.reshape(*query.size()[:-2], -1, hd)
+    if self.q_layernorm is not None:
+        query = self.q_layernorm(query)
+    if self.k_layernorm is not None:
+        key = self.k_layernorm(key)
+    return query, key, value
+
+
+def _split_backward_qkv_proj(self):
+    """Replacement for SelfAttention._backward_qkv_proj after linear_qkv removal.
+
+    Only relevant for Megatron's delayed-wgrad path (inactive for frozen-base
+    POET); guarded so it never errors if invoked.
+    """
+    for attr in ("linear_q", "linear_k", "linear_v"):
+        m = getattr(self, attr, None)
+        if m is not None and hasattr(m, "backward_dw"):
+            m.backward_dw()
+
+
+def _split_one_attention_qkv(attn, path, *, block_size, block_count, linear_types) -> bool:
+    qkv = getattr(attn, "linear_qkv", None)
+    if qkv is None or not isinstance(qkv, linear_types):
+        return False
+    if getattr(attn, "world_size", 1) != 1:
+        raise ValueError(
+            f"[POET split] {path}: --poet-split-qkv requires TP=1 (POET already enforces it)."
+        )
+    if getattr(attn.config, "attention_output_gate", False):
+        raise ValueError(f"[POET split] {path}: --poet-split-qkv does not support gated attention.")
+
+    hd = attn.hidden_size_per_attention_head
+    ng = attn.num_query_groups_per_partition
+    nah = attn.num_attention_heads_per_partition
+    q_out, kv_out = qkv_segment_out_dims(nah, ng, hd)
+    out_f, in_f = qkv.weight.shape
+    if q_out + 2 * kv_out != out_f:
+        raise ValueError(
+            f"[POET split] {path}.linear_qkv out dim {out_f} != q+2kv "
+            f"({q_out}+2*{kv_out}); unexpected layout (gated attention?)."
+        )
+    validate_divisible(
+        path, "linear_q", in_f=in_f, out_f=q_out, block_size=block_size, block_count=block_count
+    )
+    validate_divisible(
+        path, "linear_k", in_f=in_f, out_f=kv_out, block_size=block_size, block_count=block_count
+    )
+    validate_divisible(
+        path, "linear_v", in_f=in_f, out_f=kv_out, block_size=block_size, block_count=block_count
+    )
+
+    q_rows, k_rows, v_rows = qkv_deinterleave_row_indices(nah, ng, hd)
+    attn.linear_q = _make_sub_linear(qkv, q_rows)
+    attn.linear_k = _make_sub_linear(qkv, k_rows)
+    attn.linear_v = _make_sub_linear(qkv, v_rows)
+    attn.register_buffer(
+        "_poet_qkv_interleave_index",
+        # The model is already on its compute device when the split runs (get_model
+        # calls .cuda() before returning), so pin the index there to avoid a
+        # device mismatch in the forward's index_select.
+        qkv_interleave_index(nah, ng, hd).to(qkv.weight.device),
+        persistent=False,
+    )
+    del attn.linear_qkv
+    attn.get_query_key_value_tensors = types.MethodType(_split_qkv_forward, attn)
+    attn._backward_qkv_proj = types.MethodType(_split_backward_qkv_proj, attn)
+    logger.info(
+        "[POET split] %s.linear_qkv -> q/k/v (q=%d, kv=%d, groups=%d)",
+        path,
+        q_out,
+        kv_out,
+        ng,
+    )
+    return True
+
+
+# --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 
@@ -270,6 +373,18 @@ def split_fused_linears(
     types_ = _column_linear_types() if linear_types is None else tuple(linear_types)
     n = 0
     for name, mod in list(model.named_modules()):
+        if (
+            split_qkv
+            and hasattr(mod, "linear_qkv")
+            and _split_one_attention_qkv(
+                mod,
+                name or "<root>",
+                block_size=block_size,
+                block_count=block_count,
+                linear_types=types_,
+            )
+        ):
+            n += 1
         if (
             split_fc1
             and hasattr(mod, "linear_fc1")
