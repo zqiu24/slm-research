@@ -1183,6 +1183,7 @@ def core_transformer_config_from_args(args, config_class=None):
     kw_args['num_layers_in_last_pipeline_stage']= args.decoder_last_pipeline_num_layers
     kw_args['fp8_param'] = args.fp8_param_gather
     kw_args['poet_split_qkv'] = bool(getattr(args, 'use_poet', False))
+    kw_args['poet_split_fc1'] = bool(getattr(args, 'use_poet', False))
     if args.swiglu:
         kw_args['activation_func'] = F.silu
         kw_args['gated_linear_unit'] = True
