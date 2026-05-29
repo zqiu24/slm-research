@@ -45,3 +45,11 @@ optim:
     mup_alpha: 1.0
     merge_period: 200       # 0 disables periodic merge
     scale: 1.0              # LR multiplier for the POET linear group
+    # Split fused linears into separate POET orbits (only meaningful under POET).
+    # split_qkv: fused attention linear_qkv -> separate Q / K / V projections
+    #   (GQA-correct de-interleave; inert for MLA, which has no fused linear_qkv).
+    # split_fc1: fused SwiGLU linear_fc1 -> separate gate / up projections.
+    # Each produced sub-segment must be divisible by block_size/block_count or
+    # training hard-errors at startup.
+    split_qkv: false
+    split_fc1: false
