@@ -1,0 +1,150 @@
+# DeepSeek-3B v2 (sandwich-norm + MQA) with POET reparameterization.
+#
+# * Baseline: DeepSeek-3Bv2-sandwich-mqa.yaml
+# * POET integration: Megatron / TE parallel linears in the decoder (attention,
+#   dense FFN, routed expert SequentialMLP, shared expert) are reparameterized as
+#   W_eff = R_out @ W_0 @ R_in. GroupedGEMM expert weights are fused Parameters
+#   and stay off that path; we disable grouped GEMM and set --poet-wrap-moe-experts.
+#
+# Dimension check for ``--poet-block-size 128`` and TP=1 (moe FFN 896 needs 128
+# not 256 so expert RowParallel dims divide block_size):
+#   * hidden = 1280            -> 1280 / 128 = 10     OK
+#   * ffn    = 7168            -> 7168 / 128 = 56    OK
+#   * qkv_out = (16+2*1)*384   = 6912 -> OK
+#   * proj_in = 16*384         = 6144 -> OK
+#   * experts (896 / SwiGLU)   vs 128 -> OK
+#   * shared_ffn = 1792        -> OK
+#
+# If you change dims, re-check divisibility versus --poet-block-size (consider 64/32).
+
+MODEL_ARGS:
+  # Distributed args
+  --use-distributed-optimizer: true
+  --overlap-grad-reduce: true
+  --overlap-param-gather: true
+
+  # Training args
+  --use-mcore-models: true
+  --sequence-parallel: true
+  --use-flash-attn: true
+  --disable-bias-linear: true
+  # dev: the POET merge-then-reinitialize resets some params' Adam step, so the
+  # distributed optimizer ends with heterogeneous step counts. Saving optimizer state
+  # then hits `assert len(steps) == 1` in distrib_optimizer.state_dict() (non-apex/TE
+  # path). The smoke doesn't need optimizer state, so skip it; the model still saves.
+  --no-save-optim: true
+  --no-check-for-nan-in-loss-and-grad: false
+  --cross-entropy-loss-fusion: true
+  --cross-entropy-fusion-impl: native
+  --manual-gc: true
+  --manual-gc-interval: 10
+
+  # Transformer Engine args
+  # POET adapter supports TE parallel linears via the weight-space
+  # ("poet") variant: W_eff is materialized per forward and self.weight is
+  # temporarily rebound so TE's fused LN + GEMM + TP-comm path stays intact.
+  # Cayley uses the Triton kernel (torch.ops.poet.cayley) automatically.
+  # NOTE: FP8 is NOT compatible with POET weight swap (TE caches an
+  # FP8-quantized weight across forwards). Keep bf16.
+  --transformer-impl: local
+  # dev (local impl): legacy fused softmax kernel isn't compiled and apex's
+  # fused_weight_gradient_mlp_cuda is absent, so disable both fusions (ColumnParallelLinear
+  # hard-raises if gradient_accumulation_fusion is on without apex).
+  --no-masked-softmax-fusion: true
+  --no-gradient-accumulation-fusion: true
+  # WrappedTorchNorm (torch RMSNorm under local impl) can't use the persist LN fused kernel.
+  --no-persist-layer-norm: true
+  --no-rope-fusion: true
+
+  # Network size
+  --num-layers: 4
+  --hidden-size: 1280
+  --ffn-hidden-size: 7168
+  --num-attention-heads: 16
+  --max-position-embeddings: 4096
+  --position-embedding-type: rope
+  --rotary-base: 10000
+  --make-vocab-size-divisible-by: 3232
+  --normalization: RMSNorm
+  --norm-epsilon: 1e-6
+  --swiglu: true
+  --untie-embeddings-and-output-weights: true
+  --use-sandwich-norm: true
+  --attn-post-norm-scale: 0.03
+  --ffn-post-norm-scale: 0.03
+
+  # Regularization
+  --attention-dropout: 0.0
+  --hidden-dropout: 0.0
+  --clip-grad: 1.0
+  # POET paper recommends weight_decay=0 on oft_R; we keep the global
+  # weight_decay for any non-POET trainable params (router bias, norms, ...).
+  --weight-decay: 0.1
+  --qk-layernorm: true
+
+  # Optimizer
+  --adam-beta1: 0.9
+  --adam-beta2: 0.95
+
+  # MoE: SequentialMLP (omit --moe-grouped-gemm) + routed expert wrapping.
+  --num-experts: 8
+  --moe-layer-freq: ([0]*1+[1]*3)
+  --moe-ffn-hidden-size: 896
+  --moe-shared-expert-intermediate-size: 1792
+  --moe-router-load-balancing-type: seq_aux_loss
+  --moe-router-topk: 2
+  --moe-aux-loss-coeff: 1e-4
+  --moe-router-topk-scaling-factor: 2.5
+  --moe-router-score-function: sigmoid
+  --moe-router-enable-expert-bias: true
+  --moe-router-bias-update-rate: 1e-3
+  --moe-router-dtype: fp32
+  # dev (local impl, no Transformer Engine): these fused MoE ops live in TE. With TE
+  # absent they ImportError at config build / raise "install TE" at the router. Off for
+  # the smoke; the real TE run keeps them on.
+  --moe-permute-fusion: false
+  --moe-router-fusion: false
+  --moe-layer-recompute: true
+  --moe-token-dispatcher-type: alltoall
+
+  # MQA
+  --group-query-attention: true
+  --num-query-groups: 1
+  --kv-channels: 384
+  --rotary-percent: 0.25
+
+  # MTP (also  excluded from POET wrapping by default).
+  --mtp-num-layers: 1
+  --mtp-loss-scaling-factor: 0.3
+
+  # Initialization (standard).
+  --init-method-std: 0.006
+  --embedding-init-method-std: 0.006
+
+  # Logging
+  --log-timers-to-tensorboard: true
+  --log-memory-to-tensorboard: true
+  --log-num-zeros-in-grad: false
+  --log-params-norm: true
+  --log-validation-ppl-to-tensorboard: true
+  --log-throughput: true
+  --log-interval: 1
+
+  # Mixed precision
+  --bf16: true
+  --distributed-timeout-minutes: 3000
+  --num-dataset-builder-threads: 8
+
+  # --------------------------------------------------------------------
+  # POET / POET-X specific flags (consumed by pretrain_gpt_poet.py).
+  # TE path is wired via the adapter's weight-swap forward; variant is
+  # forced to "poet" for TE regardless of the --poet-variant flag.
+  # --------------------------------------------------------------------
+  --use-poet: true
+  --poet-wrap-moe-experts: true
+  --poet-block-size: 128
+  --poet-merge-interval: 20
+  # Set to true to enable POET-X memory-efficient path (requires Triton).
+  # --poet-mem-efficient: true
+  # Set to true to enable POET-XQ INT8 quantized base weights (requires Triton).
+  # --poet-quantize: true

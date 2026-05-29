@@ -61,4 +61,12 @@ runs
 
 # Local scratch (node keep-alive loop, etc.)
 hold.py
-poet_torch_huawei
+# huawei vendored POET stack — ignore runtime outputs only; the source tree
+# is now tracked, so do NOT blanket-ignore the whole directory (that would
+# silently drop new files added under it during development).
+poet_torch_huawei/runs_dev/
+poet_torch_huawei/**/__pycache__/
+poet_torch_huawei/**/*.pyc
+poet_torch_huawei/**/wandb/
+poet_torch_huawei/**/*.log
+poet_torch_huawei/training_scripts/**/data_cache/

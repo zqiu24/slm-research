@@ -50,4 +50,5 @@ python -m launchers.train_megatron \
   "cluster=h100_de" \
   "experiment=arch/ngpt" \
   "training.global_batch_size=512" \
+  "training.save_enabled=false" \
   "$@"
