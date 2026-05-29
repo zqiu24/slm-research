@@ -37,12 +37,18 @@ logger = logging.getLogger(__name__)
 def _get_sandwich_norm_impl():
     """Lazy import to avoid circular dependency at module load time."""
     try:
-        from megatron.core.extensions.transformer_engine import TENorm
+        from megatron.core.extensions.transformer_engine import HAVE_TE, TENorm
 
-        return TENorm
+        # TENorm imports cleanly even without Transformer Engine (it is a stub whose
+        # __new__ raises ImportError at *instantiation*). Guard on HAVE_TE so the
+        # local impl (no TE) falls back to WrappedTorchNorm instead of erroring during
+        # model build, which is what this function's fallback already intends.
+        if HAVE_TE:
+            return TENorm
+        raise ImportError("Transformer Engine is not available")
     except ImportError:
         logger.warning(
-            "TENorm import failed, falling back to WrappedTorchNorm for sandwich post norms. "
+            "TENorm unavailable, falling back to WrappedTorchNorm for sandwich post norms. "
             "This may fail if persist_layer_norm or sequence_parallel is enabled."
         )
         from megatron.core.transformer.torch_norm import WrappedTorchNorm

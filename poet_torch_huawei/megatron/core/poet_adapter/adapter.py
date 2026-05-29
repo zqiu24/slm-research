@@ -523,10 +523,17 @@ def _get_te_linear_classes() -> Tuple[type, ...]:
     """
     try:
         from megatron.core.extensions.transformer_engine import (
+            HAVE_TE,
             TELayerNormColumnParallelLinear,
             TELinear,
         )
     except ImportError:
+        return ()
+    # The TE class names import even without Transformer Engine (they resolve to
+    # ``None`` stubs), so the ImportError guard above never fires under the local
+    # impl. Check HAVE_TE so we return an empty tuple instead of ``(None, None)``,
+    # which would crash ``isinstance(mod, te_classes)`` in install_poet_in_model.
+    if not HAVE_TE:
         return ()
     return (TELinear, TELayerNormColumnParallelLinear)
 
