@@ -13,9 +13,13 @@ Megatron linear types are discovered lazily.
 
 from __future__ import annotations
 
+import copy
 import logging
+import types
+from collections.abc import Iterable
 
 import torch
+import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
@@ -105,3 +109,177 @@ def validate_divisible(
             f"not divisible by {label}={divisor}. Choose a compatible "
             f"block_size/block_count, or disable splitting this layer."
         )
+
+
+# --------------------------------------------------------------------------
+# Shared helpers
+# --------------------------------------------------------------------------
+
+
+def _column_linear_types(extra: Iterable[type] = ()) -> tuple[type, ...]:
+    """Megatron column-parallel linear types, discovered lazily (empty on CPU),
+    unioned with any ``extra`` types (tests pass ``nn.Linear``)."""
+    types_: tuple[type, ...] = ()
+    try:
+        from megatron.core.tensor_parallel.layers import ColumnParallelLinear
+
+        types_ += (ColumnParallelLinear,)
+    except Exception:
+        pass
+    try:
+        from megatron.core.extensions.transformer_engine import TEColumnParallelLinear
+
+        types_ += (TEColumnParallelLinear,)
+    except Exception:
+        pass
+    return types_ + tuple(extra)
+
+
+def _split_linear_out(module, x):
+    """Call a linear that may return a tensor (``nn.Linear``) or a
+    ``(output, bias)`` tuple (Megatron / POET). Returns ``(output, bias)``."""
+    r = module(x)
+    if isinstance(r, tuple):
+        return r[0], (r[1] if len(r) > 1 else None)
+    return r, None
+
+
+def _make_sub_linear(src: nn.Module, rows: torch.Tensor) -> nn.Module:
+    """Build a typed copy of ``src`` whose weight/bias are the rows ``rows`` of
+    ``src``. The copy keeps ``src``'s class and config so the unsplit POET
+    walker recognises and wraps it; only weight/bias/shape are sliced.
+
+    The copy's own ``forward`` is never used in production (it is replaced by a
+    POET module), but it is correct for ``nn.Linear`` in tests.
+    """
+    # ProcessGroup-bearing attrs on a real Megatron linear are not
+    # deepcopy-able; detach them across the copy and restore on both objects.
+    # This is the highest-risk spot vs. the real Megatron build — validated by
+    # the Task 9 GPU smoke. (No-op for nn.Linear in CPU tests.)
+    _pg_attrs = ("tp_group", "process_group", "pg_collection", "explicit_expert_comm")
+    _saved = {}
+    for attr in _pg_attrs:
+        if attr in getattr(src, "__dict__", {}):
+            _saved[attr] = src.__dict__[attr]
+            src.__dict__[attr] = None
+    try:
+        sub = copy.deepcopy(src)
+    finally:
+        for attr, val in _saved.items():
+            src.__dict__[attr] = val
+            sub.__dict__[attr] = val
+    w = src.weight.data.index_select(0, rows.to(src.weight.device)).clone()
+    sub.weight = nn.Parameter(w, requires_grad=src.weight.requires_grad)
+    has_bias = getattr(src, "bias", None) is not None and src.bias.numel() > 0
+    if has_bias:
+        b = src.bias.data.index_select(0, rows.to(src.bias.device)).clone()
+        sub.bias = nn.Parameter(b, requires_grad=src.bias.requires_grad)
+    else:
+        sub.bias = None
+    out_f = rows.numel()
+    # Best-effort fix of Megatron size bookkeeping (absent on nn.Linear).
+    for attr in ("out_features", "output_size", "output_size_per_partition"):
+        if hasattr(sub, attr):
+            setattr(sub, attr, out_f)
+    return sub
+
+
+# --------------------------------------------------------------------------
+# FC1 (gate / up) surgery
+# --------------------------------------------------------------------------
+
+
+def _split_mlp_forward(self, hidden_states, per_token_scale=None, **kwargs):
+    """Replacement ``MLP.forward`` calling separate gate/up projections.
+
+    Mirrors Megatron's non-fused gated ``glu()`` path
+    (megatron/core/transformer/mlp.py). Does not use the fused
+    ``bias_swiglu_impl`` kernel; numerically identical for SwiGLU.
+    """
+    gate, gate_bias = _split_linear_out(self.linear_fc1_gate, hidden_states)
+    up, up_bias = _split_linear_out(self.linear_fc1_up, hidden_states)
+    if gate_bias is not None:
+        gate = gate + gate_bias
+    if up_bias is not None:
+        up = up + up_bias
+    clamp = getattr(self.config, "activation_func_clamp_value", None)
+    if clamp is not None:
+        gate = gate.clamp(min=None, max=clamp)
+        up = up.clamp(min=-clamp, max=clamp)
+    offset = getattr(self.config, "glu_linear_offset", 0.0)
+    intermediate = self.config.activation_func(gate) * (up + offset)
+    if per_token_scale is not None:
+        od = intermediate.dtype
+        intermediate = (intermediate * per_token_scale.unsqueeze(-1)).to(od)
+    out = self.linear_fc2(intermediate)
+    if isinstance(out, tuple):
+        return out[0], (out[1] if len(out) > 1 else None)
+    return out, None
+
+
+def _split_one_mlp_fc1(mlp, path, *, block_size, block_count, linear_types) -> bool:
+    fc1 = getattr(mlp, "linear_fc1", None)
+    if fc1 is None or not isinstance(fc1, linear_types):
+        return False
+    if not getattr(mlp.config, "gated_linear_unit", False):
+        raise ValueError(f"[POET split] {path}: --poet-split-fc1 requires a gated (SwiGLU) MLP.")
+    out_f, in_f = fc1.weight.shape
+    if out_f % 2 != 0:
+        raise ValueError(f"[POET split] {path}.linear_fc1 out dim {out_f} is not even.")
+    ffn = out_f // 2
+    validate_divisible(
+        path,
+        "linear_fc1_gate",
+        in_f=in_f,
+        out_f=ffn,
+        block_size=block_size,
+        block_count=block_count,
+    )
+    validate_divisible(
+        path, "linear_fc1_up", in_f=in_f, out_f=ffn, block_size=block_size, block_count=block_count
+    )
+    gate_rows = torch.arange(0, ffn, dtype=torch.long)
+    up_rows = torch.arange(ffn, 2 * ffn, dtype=torch.long)
+    mlp.linear_fc1_gate = _make_sub_linear(fc1, gate_rows)
+    mlp.linear_fc1_up = _make_sub_linear(fc1, up_rows)
+    del mlp.linear_fc1
+    mlp.forward = types.MethodType(_split_mlp_forward, mlp)
+    logger.info("[POET split] %s.linear_fc1 -> gate/up (ffn=%d)", path, ffn)
+    return True
+
+
+# --------------------------------------------------------------------------
+# Entry point
+# --------------------------------------------------------------------------
+
+
+def split_fused_linears(
+    model: nn.Module,
+    *,
+    split_qkv: bool,
+    split_fc1: bool,
+    block_size: int,
+    block_count: int | None,
+    linear_types: Iterable[type] | None = None,
+) -> int:
+    """Split fused linears in-place; returns the number of fused linears split.
+
+    ``linear_types`` overrides the recognised column-parallel linear classes
+    (tests pass ``(nn.Linear,)``); defaults to Megatron's column-parallel types.
+    """
+    types_ = _column_linear_types() if linear_types is None else tuple(linear_types)
+    n = 0
+    for name, mod in list(model.named_modules()):
+        if (
+            split_fc1
+            and hasattr(mod, "linear_fc1")
+            and _split_one_mlp_fc1(
+                mod,
+                name or "<root>",
+                block_size=block_size,
+                block_count=block_count,
+                linear_types=types_,
+            )
+        ):
+            n += 1
+    return n

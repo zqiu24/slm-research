@@ -1,6 +1,7 @@
 """Tests for POET fused-layer splitting (geometry + surgery)."""
 
 import torch
+import torch.nn as nn
 
 from src.optim import poet_split as ps
 
@@ -52,3 +53,63 @@ def test_validate_divisible_ok():
     ps.validate_divisible(
         "attn", "linear_q", in_f=1280, out_f=6144, block_size=256, block_count=None
     )
+
+
+class _FakeConfig:
+    def __init__(self):
+        self.gated_linear_unit = True
+        self.activation_func = torch.nn.functional.silu
+        self.activation_func_clamp_value = None
+        self.glu_linear_offset = 0.0
+
+
+class _FakeMLP(nn.Module):
+    """Stand-in mimicking Megatron MLP's attributes used by the split path."""
+
+    def __init__(self, hidden=8, ffn=16):
+        super().__init__()
+        self.config = _FakeConfig()
+        self.linear_fc1 = nn.Linear(hidden, 2 * ffn, bias=False)  # [gate; up]
+        self.linear_fc2 = nn.Linear(ffn, hidden, bias=False)
+
+
+def test_split_fc1_creates_separate_modules_and_matches_fused():
+    torch.manual_seed(0)
+    m = _FakeMLP(hidden=8, ffn=16)
+    x = torch.randn(3, 8)
+
+    # Reference: fused forward (silu(gate) * up) -> fc2.
+    fused = m.linear_fc1(x)
+    gate_ref, up_ref = torch.chunk(fused, 2, dim=-1)
+    ref = m.linear_fc2(torch.nn.functional.silu(gate_ref) * up_ref)
+
+    n = ps.split_fused_linears(
+        m,
+        split_qkv=False,
+        split_fc1=True,
+        block_size=8,
+        block_count=None,
+        linear_types=(nn.Linear,),
+    )
+    assert n == 1
+    assert hasattr(m, "linear_fc1_gate") and hasattr(m, "linear_fc1_up")
+    assert not hasattr(m, "linear_fc1")
+    assert isinstance(m.linear_fc1_gate, nn.Linear)
+
+    out, _out_bias = m.forward(x)
+    assert torch.allclose(out, ref, atol=1e-6)
+
+
+def test_split_fc1_hard_errors_on_indivisible_segment():
+    import pytest
+
+    m = _FakeMLP(hidden=8, ffn=20)  # ffn 20 not divisible by 8
+    with pytest.raises(ValueError, match="linear_fc1_gate"):
+        ps.split_fused_linears(
+            m,
+            split_qkv=False,
+            split_fc1=True,
+            block_size=8,
+            block_count=None,
+            linear_types=(nn.Linear,),
+        )
