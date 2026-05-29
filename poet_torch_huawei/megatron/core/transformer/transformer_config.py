@@ -163,6 +163,11 @@ class TransformerConfig(ModelParallelConfig):
     poet_split_qkv: bool = False
     """Build self-attention Q, K and V projections as separate modules for POET/POET-X."""
 
+    poet_split_fc1: bool = False
+    """Build the SwiGLU MLP gate and up projections as separate modules for POET/POET-X
+    (so each branch gets its own frozen weight, oft_R, and rotations instead of one fused
+    block-diagonal rotation entangling gate and up). Only meaningful with gated_linear_unit."""
+
     gated_linear_unit: bool = False
     """Use a gated linear unit for the first linear layer in the MLP."""
 
