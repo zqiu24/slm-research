@@ -40,3 +40,27 @@ def test_add_slm_args_accepts_poet_flags():
     assert args.poet_block_size == 256
     assert args.poet_merge_period == 200
     assert args.poet_scale == 1.5
+
+
+def test_add_slm_args_accepts_split_flags():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        [
+            "--slm-config-path",
+            "x.yaml",
+            "--poet",
+            "--poet-split-qkv",
+            "--poet-split-fc1",
+        ]
+    )
+    assert args.poet_split_qkv is True
+    assert args.poet_split_fc1 is True
+
+
+def test_split_flags_default_false():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
+    assert args.poet_split_qkv is False
+    assert args.poet_split_fc1 is False
