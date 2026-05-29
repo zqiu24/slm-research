@@ -1039,3 +1039,93 @@ def test_rotary_percent_defaults_to_one():
     cfg = OmegaConf.create({"base": {"model": _MIN_MODEL}})
     args = _model_args(cfg)
     assert args[args.index("--rotary-percent") + 1] == "1.0"
+
+
+def test_sandwich_norm_flags_emitted_when_enabled():
+    from src.utils.megatron_args import _model_args
+
+    model = _MIN_MODEL | {
+        "use_sandwich_norm": True,
+        "attn_post_norm_scale": 0.03,
+        "ffn_post_norm_scale": 0.03,
+    }
+    args = _model_args(OmegaConf.create({"base": {"model": model}}))
+    assert "--use-sandwich-norm" in args
+    assert args[args.index("--attn-post-norm-scale") + 1] == "0.03"
+    assert args[args.index("--ffn-post-norm-scale") + 1] == "0.03"
+
+
+def test_sandwich_norm_flags_omitted_by_default():
+    from src.utils.megatron_args import _model_args
+
+    args = _model_args(OmegaConf.create({"base": {"model": _MIN_MODEL}}))
+    assert "--use-sandwich-norm" not in args
+    assert "--attn-post-norm-scale" not in args
+
+
+def test_moe_router_fusion_and_layer_recompute_emitted():
+    from src.utils.megatron_args import _model_args
+
+    moe = {
+        "enabled": True,
+        "num_experts": 8,
+        "layer_freq": "([1]*2)",
+        "ffn_hidden_size": 128,
+        "shared_expert_intermediate_size": 128,
+        "router_load_balancing_type": "seq_aux_loss",
+        "router_topk": 2,
+        "token_dispatcher_type": "alltoall",
+        "enable_deepep": False,
+        "router_pre_softmax": False,
+        "grouped_gemm": False,
+        "aux_loss_coeff": 1e-4,
+        "router_topk_scaling_factor": 2.5,
+        "router_score_function": "sigmoid",
+        "router_enable_expert_bias": True,
+        "router_bias_update_rate": 1e-3,
+        "router_dtype": "fp32",
+        "permute_fusion": True,
+        "router_fusion": True,
+        "layer_recompute": True,
+    }
+    model = _MIN_MODEL | {"moe": moe}
+    args = _model_args(OmegaConf.create({"base": {"model": model}}))
+    assert "--moe-router-fusion" in args
+    assert "--moe-layer-recompute" in args
+
+
+def test_mtp_emitted_without_mla():
+    # Review fix: MTP must emit for MQA (no MLA), where Huawei DeepSeek-3Bv2 uses it.
+    from src.utils.megatron_args import _model_args
+
+    model = _MIN_MODEL | {
+        "multi_latent_attention": False,
+        "mtp_num_layers": 1,
+        "mtp_loss_scaling_factor": 0.3,
+    }
+    args = _model_args(OmegaConf.create({"base": {"model": model}}))
+    assert args[args.index("--mtp-num-layers") + 1] == "1"
+    assert args[args.index("--mtp-loss-scaling-factor") + 1] == "0.3"
+    assert "--enable-experimental" in args
+
+
+def test_mtp_still_emitted_with_mla():
+    # Regression: the existing MLA path still emits MTP + experimental.
+    from src.utils.megatron_args import _model_args
+
+    model = _MIN_MODEL | {
+        "multi_latent_attention": True,
+        "q_lora_rank": 64,
+        "kv_lora_rank": 32,
+        "qk_head_dim": 16,
+        "qk_pos_emb_head_dim": 8,
+        "v_head_dim": 16,
+        "rotary_scaling_factor": 40,
+        "mscale": 1.0,
+        "mscale_all_dim": 1.0,
+        "mtp_num_layers": 1,
+        "mtp_loss_scaling_factor": 0.1,
+    }
+    args = _model_args(OmegaConf.create({"base": {"model": model}}))
+    assert "--mtp-num-layers" in args
+    assert "--enable-experimental" in args

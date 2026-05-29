@@ -76,6 +76,13 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--attention-backend", model.get("attention_backend", "flash"))
     _add(args, "--swiglu")
     _add(args, "--disable-bias-linear")
+    # Sandwich-norm (post-attn / post-MLP norm before the residual add). The
+    # architecture is applied by the ``sandwich_norm_apply`` patch; here we only
+    # emit the flags it reads off the parsed args.
+    if bool(model.get("use_sandwich_norm", False)):
+        args.append("--use-sandwich-norm")
+        _add(args, "--attn-post-norm-scale", model.get("attn_post_norm_scale", 1.0))
+        _add(args, "--ffn-post-norm-scale", model.get("ffn_post_norm_scale", 1.0))
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch when listed in experiment.patches.
     if bool(model.get("unfuse_qkv", False)):
@@ -99,10 +106,17 @@ def _model_args(cfg: DictConfig) -> list[str]:
             ("rotary_scaling_factor", "--rotary-scaling-factor"),
             ("mscale", "--mscale"),
             ("mscale_all_dim", "--mscale-all-dim"),
-            ("mtp_num_layers", "--mtp-num-layers"),
-            ("mtp_loss_scaling_factor", "--mtp-loss-scaling-factor"),
         ):
             _add(args, flag, model[key])
+
+    # MTP is independent of MLA (Huawei DeepSeek-3Bv2 uses MTP with MQA).
+    if model.get("mtp_num_layers", None) is not None:
+        _add(args, "--mtp-num-layers", model.mtp_num_layers)
+        _add(args, "--mtp-loss-scaling-factor", model.get("mtp_loss_scaling_factor", 0.1))
+    if (
+        bool(model.get("multi_latent_attention", False))
+        or model.get("mtp_num_layers", None) is not None
+    ):
         _add(args, "--enable-experimental")
 
     moe = model.get("moe", {})
@@ -130,6 +144,8 @@ def _model_args(cfg: DictConfig) -> list[str]:
         _add(args, "--moe-router-bias-update-rate", moe.router_bias_update_rate)
         _add(args, "--moe-router-dtype", moe.router_dtype)
         _maybe_bool(args, "--moe-permute-fusion", moe.permute_fusion)
+        _maybe_bool(args, "--moe-router-fusion", moe.get("router_fusion", False))
+        _maybe_bool(args, "--moe-layer-recompute", moe.get("layer_recompute", False))
 
     return args
 
