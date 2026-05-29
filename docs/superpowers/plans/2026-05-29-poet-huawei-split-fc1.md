@@ -22,7 +22,7 @@ poet_torch_huawei/
 ├── megatron/training/arguments.py                     # MODIFY — derive poet_split_fc1 from use_poet (Task 2)
 ├── megatron/core/transformer/mlp.py                   # MODIFY — __init__ split build (T3), forward split path (T4), sharded_state_dict + backward_dw guard (T5)
 ├── megatron/core/poet_adapter/adapter.py              # MODIFY — _name_matches dot-bound (T6), divisibility hard-error in _try_attach + _try_attach_te (T7)
-├── megatron/core/models/gpt/gpt_layer_specs.py        # MODIFY — drop redundant qkv spec scaffolding (T9, final)
+├── megatron/core/models/gpt/gpt_layer_specs.py        # MODIFY — drop redundant qkv spec scaffolding, BOTH local (:398) + dead TE (:201) paths (T9, final)
 └── tests_poet/                                        # NEW dir (lives with the vendored stack, run under PYTHONPATH=poet_torch_huawei)
     └── test_adapter_unit.py                           # NEW — CPU unit tests for _name_matches (T6) + divisibility raise (T7)
 ```
@@ -662,12 +662,18 @@ git commit -m "fix(huawei): split-fc1 smoke triage — <one line: what changed a
 
 Only start this **after** Task 8 passes. The vendored attention already reads `config.poet_split_qkv` in `__init__` and falls back to `submodules.linear_qkv` when `submodules.linear_q` is None ([attention.py:892-895](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/megatron/core/transformer/attention.py#L892-L895)). So the spec-level scaffolding in `gpt_layer_specs.py` is redundant: removing it leaves qkv purely config-driven (matching fc1) with identical behavior.
 
+**There are TWO `poet_split_qkv` emission sites in `gpt_layer_specs.py`, not one** — verified by grep:
+- **`get_gpt_layer_local_spec`** ([:398-401](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py#L398-L401)) — a `None if poet_split_qkv else ...` ternary. **This is the LIVE path** (Step 1).
+- **`get_gpt_layer_with_transformer_engine_spec`** ([:201-222](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py#L201-L222)) — a separate `if poet_split_qkv: return ModuleSpec(...)` early-return block. **This is DEAD on the huawei stack** (Step 2).
+
+**Why only the local path is live:** `pretrain_gpt.py` computes `use_te = (args.transformer_impl == "transformer_engine")` ([pretrain_gpt.py:121](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/pretrain_gpt.py#L121)), and `get_gpt_decoder_block_spec` routes to `get_gpt_layer_local_spec` when `use_te=False` ([gpt_layer_specs.py:534+](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py#L534)). The huawei stack has no Transformer Engine and runs `--transformer-impl local`, so `use_te` is always False and the TE spec function (incl. its line-201 block) is never invoked. We still neutralize it (Step 2) so the source isn't left internally inconsistent — but it cannot affect the smoke.
+
 **Files:**
-- Modify: `poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py:398-401`
+- Modify: `poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py:398-401` (live path) and `:201-222` (dead TE path)
 
-- [ ] **Step 1: Revert the qkv spec branch to the plain fused emission**
+- [ ] **Step 1: Revert the LIVE (local) qkv spec branch to the plain fused emission**
 
-In [gpt_layer_specs.py:398-401](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py#L398-L401), the current code is:
+In [gpt_layer_specs.py:398-401](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py#L398-L401) (inside `get_gpt_layer_local_spec`), the current code is:
 ```python
                         linear_qkv=None if poet_split_qkv else backend.column_parallel_linear(),
                         linear_q=backend.column_parallel_linear() if poet_split_qkv else None,
@@ -680,7 +686,47 @@ Replace with the unconditional fused spec (attention's `__init__` does the split
 ```
 Leave the `poet_split_qkv` parameter on the spec functions in place for now (harmless; removing the param threading across ~6 sites is out of scope and risks unrelated churn). The behavioral change is only this emission.
 
-- [ ] **Step 2: Syntax check**
+- [ ] **Step 2: Neutralize the DEAD (TE) qkv split block for source consistency**
+
+In `get_gpt_layer_with_transformer_engine_spec`, lines [201-222](/lustre/fast/fast/zqiu/slm-research/poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py#L201-L222) are a separate `if poet_split_qkv:` early-return that builds a split-qkv `ModuleSpec`. This block is **never executed on the huawei stack** (no TE → `use_te=False` → this function isn't called), but leaving it makes the source inconsistent with the new config-driven model (and would silently re-introduce spec-level split behavior for anyone who later runs the TE path). The current block is:
+```python
+        if poet_split_qkv:
+            return ModuleSpec(
+                module=TransformerLayer,
+                submodules=TransformerLayerSubmodules(
+                    input_layernorm=backend.layer_norm(),
+                    self_attention=ModuleSpec(
+                        module=SelfAttention,
+                        params={"attn_mask_type": AttnMaskType.causal},
+                        submodules=SelfAttentionSubmodules(
+                            linear_q=backend.column_parallel_linear(),
+                            linear_k=backend.column_parallel_linear(),
+                            linear_v=backend.column_parallel_linear(),
+                            core_attention=core_attn,
+                            linear_proj=backend.row_parallel_linear(),
+                            q_layernorm=(
+                                L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                            ),
+                            k_layernorm=(
+                                L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                            ),
+                        ),
+                    ),
+                    self_attn_bda=get_bias_dropout_add,
+                    pre_mlp_layernorm=backend.layer_norm() if num_experts else IdentityOp,
+                    mlp=mlp,
+                    mlp_bda=get_bias_dropout_add,
+                    sharded_state_dict_keys_map={
+                        ...  # (the existing TE key-remap dict — leave its contents unchanged if you keep the block)
+                    },
+                ),
+            )
+```
+**Delete this entire `if poet_split_qkv:` block** (the full early-return, from the `if poet_split_qkv:` line through its closing `)`), so the TE spec function falls through to its normal fused `linear_qkv=...` path below. Do NOT hand-retype the `sharded_state_dict_keys_map` contents — remove the whole block as one unit. The TE path then emits a fused `linear_qkv` just like the local path, and qkv split is driven solely by `attention.__init__` reading `config.poet_split_qkv`.
+
+> If deleting the block feels risky (it carries a TE-specific `sharded_state_dict_keys_map` you'd rather not lose), the acceptable fallback is to leave it **as-is** and instead add a one-line comment above it: `# NOTE: dead on no-TE stacks; qkv split is config-driven in attention.__init__`. The smoke is unaffected either way. Pick deletion for true consistency; pick the comment if minimizing churn in unused TE code matters more.
+
+- [ ] **Step 3: Syntax check**
 
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research/poet_torch_huawei
@@ -688,7 +734,7 @@ python -m py_compile megatron/core/models/gpt/gpt_layer_specs.py && echo "gpt_la
 ```
 Expected: `gpt_layer_specs.py compiles`.
 
-- [ ] **Step 3: Re-run the smoke to confirm qkv still splits (user, `poet` node)**
+- [ ] **Step 4: Re-run the smoke to confirm qkv still splits (user, `poet` node)**
 
 ```bash
 SAVE_CKPT=0 codexlog poet_huawei_split_fc1_qkv bash /lustre/fast/fast/zqiu/slm-research/scripts/train_poet_huawei.sh dev
@@ -697,12 +743,12 @@ Verify in `/lustre/home/zqiu/log/poet_huawei_split_fc1_qkv.log`:
 - `linear_q`, `linear_k`, `linear_v` still appear in the wrapped inventory (4 each), **zero** `linear_qkv`.
 - Wrapped count still **100**; step-0 loss unchanged; merge at 20; clean exit.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research
 git add poet_torch_huawei/megatron/core/models/gpt/gpt_layer_specs.py
-git commit -m "refactor(huawei): drop redundant poet_split_qkv spec scaffolding (config-driven in attention)"
+git commit -m "refactor(huawei): drop redundant poet_split_qkv spec scaffolding (both local + TE paths; config-driven in attention)"
 ```
 
 ---
@@ -719,7 +765,7 @@ git commit -m "refactor(huawei): drop redundant poet_split_qkv spec scaffolding 
 - §5.7 divisibility hard error (both paths) → Task 7 (TDD).
 - §6 checkpoint swiglu-factory guard → Task 5 (+ `backward_dw`, which the spec didn't enumerate but is required since split mode has no `self.linear_fc1`).
 - §7 acceptance gates (router-out, split-effect, count 72→100, step-0 parity, merge/clean-exit, divisibility crash) → Task 8 (+ the CPU divisibility-raise test in Task 7).
-- User decision: qkv cleanup as final isolated task → Task 9.
+- User decision: qkv cleanup as final isolated task → Task 9 (covers BOTH emission sites: the live local-spec ternary at :398 and the dead TE-spec block at :201; the latter is unreachable under `--transformer-impl local` but neutralized for source consistency).
 
 **Deviation from spec, with cause:** the spec's §5.3/§5.4 assumed spec-builder threading (mirroring qkv). During planning we confirmed the MoE specs live in a separate file (`moe_module_specs.py`) and routed-expert submodules come from a config-less `grouped_mlp_modules` — so the user chose the "inside MLP" locus, which produces the identical model graph from one file. The spec's intent (separate gate/up `ColumnParallelLinear`s, separate orbits, all three MLP kinds) is fully met; only the implementation locus changed. `experts.py` needs no edit because SequentialMLP routed experts serialize through `MLP.sharded_state_dict` (Task 5), and GroupedMLP (the only `experts.py` `sharded_state_dict`) is never the `MLP` class.
 
