@@ -57,5 +57,5 @@ python -m launchers.train_megatron \
   "experiment=optim/adam" \
   "training.global_batch_size=512" \
   "base.model.transformer_impl=local" \
-  "training.save_enabled=false" \
+  "training.save_enabled=true" \
   "$@"
