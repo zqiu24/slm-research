@@ -18,6 +18,19 @@
 
 ---
 
+## Runtime context & risks (review findings)
+
+- **Post-DDP timing (load-bearing).** `megatron.training.training.get_model` wraps the model in `Float16Module` and then `DistributedDataParallel` *before returning* (third_party/Megatron-LM/megatron/training/training.py: `Float16Module` ~L1416, `DDP(...)` ~L1495, `return model` L1512). The `poet_apply_to_model` wrapper — and therefore the split — runs on the **already-wrapped, already-on-CUDA** model. This is the *same* position the existing `replace_linears_with_poet` runs in, so the split inherits its proven contract:
+  - Deleting the fused base weight and freezing the split sub-weights is fine: base weights are `requires_grad=False` post-POET and never reduced by DDP (existing POET already orphans every replaced base weight this way).
+  - The new `oft_R` params are added after DDP built its grad buffers, so DDP never reduces them — they are synced manually by the existing `_sync_oft_R_grads_across_dp` / `_flush_poet_caches_for_step` in [src/optim/poet.py](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py#L214), which iterate live POET layers (the split sub-linears are ordinary POET layers, so they are covered with no extra work).
+  - **Consequence for `split_fused_linears`:** it walks `model.named_modules()`, which descends through `DDP → Float16Module → decoder → layers → self_attention/mlp` and reaches the fused linears exactly as the existing walker does. No special unwrapping needed. (Fix applied: the interleave-index buffer is created on `qkv.weight.device` because the model is already on CUDA.)
+- **Simplified forwards drop some fused/offload paths.** The patched `MLP.forward` skips `bias_swiglu_impl`, fp8 activation store, and CPU-offload of activations; the patched `get_query_key_value_tensors` skips `offload_qkv_linear` offloading. All numerically equivalent; only perf/memory micro-opts are lost, and only on the split path. Acceptable for a research feature.
+- **torch.compile.** Per-instance method patches may interact with `torch.compile`/dynamo (the Huawei adapter raised recompile caps for the same reason). POET runs `transformer_impl=local` and is typically eager; if a compiled path is enabled later, recompile-limit bumps may be needed. Out of scope here; flag for the smoke (Task 9).
+- **MoE scope.** `split_fc1` matches every `MLP` whose `linear_fc1` is a real column-parallel linear — i.e. the dense MLP, shared experts, and `SequentialMLP` routed experts. Grouped-GEMM experts (`GroupedMLP`/`TEGroupedMLP`) have no such linear and are untouched (same as POET wrapping). For MoE, `block_size` must divide `moe_ffn_hidden_size` or the Task-4 hard error fires at startup (e.g. `moe_ffn_hidden_size=896` needs `block_size` dividing 896, not 256).
+- **`_make_sub_linear` is the top production-risk spot** (deepcopy of a real Megatron linear). Process-group attrs are detached across the copy; validated by the Task 9 GPU smoke.
+
+---
+
 ## File structure
 
 - **Modify** [launchers/pretrain_gpt_slm.py](/lustre/fast/fast/zqiu/slm-research/launchers/pretrain_gpt_slm.py) — register two store-true args.
@@ -776,12 +789,14 @@ def test_split_qkv_mqa_contiguous():
 def test_split_qkv_hard_errors_on_indivisible_segment():
     import pytest
 
-    a = _FakeAttention(hidden=32, num_heads=8, num_groups=2, head_dim=16)
-    # kv_out = 2*16 = 32 (ok by 16) but force a bad block_size for the K segment.
+    # hidden=64 and q_out=128 both divide 64; kv_out=32 does NOT, so the first
+    # failing segment is linear_k. (With hidden==kv_out, no block size can fail
+    # K while passing Q, hence hidden=64 here.)
+    a = _FakeAttention(hidden=64, num_heads=8, num_groups=2, head_dim=16)
     with pytest.raises(ValueError, match="linear_k"):
         ps.split_fused_linears(
             a, split_qkv=True, split_fc1=False,
-            block_size=48, block_count=None, linear_types=(nn.Linear,),
+            block_size=64, block_count=None, linear_types=(nn.Linear,),
         )
 
 
@@ -891,7 +906,10 @@ def _split_one_attention_qkv(
     attn.linear_v = _make_sub_linear(qkv, v_rows)
     attn.register_buffer(
         "_poet_qkv_interleave_index",
-        qkv_interleave_index(nah, ng, hd),
+        # The model is already on its compute device when the split runs (get_model
+        # calls .cuda() before returning), so pin the index there to avoid a
+        # device mismatch in the forward's index_select.
+        qkv_interleave_index(nah, ng, hd).to(qkv.weight.device),
         persistent=False,
     )
     del attn.linear_qkv
