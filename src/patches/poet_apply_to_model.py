@@ -50,9 +50,33 @@ def apply() -> None:
                 mup_alpha=mup_alpha,
                 cache_mode=cache_mode,
             )
+        # Per-parameter dump (name | shape | requires_grad) so the
+        # block_count -> param-count mapping is inspectable from a
+        # single-GPU smoke run. Rank-0 only to avoid 8x spam on real runs.
+        import torch
+
+        is_dist = torch.distributed.is_available() and torch.distributed.is_initialized()
+        rank = torch.distributed.get_rank() if is_dist else 0
+        if rank == 0:
+            print("[POET] ===== parameter dump (name | shape | requires_grad) =====", flush=True)
+            for m in chunks:
+                for pname, p in m.named_parameters():
+                    print(
+                        f"[POET] {pname:<78} {tuple(p.shape)!s:<22} "
+                        f"requires_grad={p.requires_grad} numel={p.numel()}",
+                        flush=True,
+                    )
+            print("[POET] ===== end parameter dump =====", flush=True)
+
         trainable = sum(p.numel() for m in chunks for p in m.parameters() if p.requires_grad)
         frozen = sum(p.numel() for m in chunks for p in m.parameters() if not p.requires_grad)
         ratio = trainable / max(trainable + frozen, 1) * 100
+        if rank == 0:
+            print(
+                f"[POET] replaced {total} linears | trainable={trainable} "
+                f"frozen={frozen} ({ratio:.2f}%)",
+                flush=True,
+            )
         logger.info(
             "[POET] replaced %d linears | trainable=%d frozen=%d (%.2f%%)",
             total,
