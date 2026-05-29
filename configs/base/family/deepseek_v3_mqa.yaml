@@ -1,0 +1,56 @@
+# @package _global_
+# DeepSeek-3Bv2 sandwich-norm + MQA, ported from the Huawei stack
+# (poet_torch_huawei/training_scripts/model_args/DeepSeek-3Bv2-sandwich-mqa-poet.yaml).
+# MQA (num_query_groups=1) + sandwich-norm — distinct from the MLA deepseek_v3 family.
+base:
+  family: deepseek_v3_mqa
+  family_version: "3bv2_sandwich_mqa"
+  reference: "Huawei DeepSeek-3Bv2 sandwich-mqa (de-vendored to first-party Megatron 0.17)"
+  model:
+    normalization: "RMSNorm"
+    norm_epsilon: 1.0e-6
+    activation: "SwiGLU"
+    positional_encoding: "rope"
+    rotary_base: 10000
+    rotary_percent: 0.25
+    qk_norm: true
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    init_method_std: 0.006
+    attention_backend: "flash"
+    multi_latent_attention: false
+    num_query_groups: 1
+    tie_embeddings: false
+    # sandwich norm (applied by the sandwich_norm_apply patch)
+    use_sandwich_norm: true
+    attn_post_norm_scale: 0.03
+    ffn_post_norm_scale: 0.03
+    # MTP
+    mtp_num_layers: 1
+    mtp_loss_scaling_factor: 0.3
+    moe:
+      enabled: true
+      num_experts: 64
+      layer_freq: "([0]*1+[1]*11)"
+      ffn_hidden_size: 896
+      shared_expert_intermediate_size: 1792
+      router_load_balancing_type: "seq_aux_loss"
+      router_topk: 6
+      token_dispatcher_type: "alltoall"
+      enable_deepep: false
+      router_pre_softmax: false
+      grouped_gemm: false
+      aux_loss_coeff: 1.0e-4
+      router_group_topk: null
+      router_num_groups: null
+      router_topk_scaling_factor: 2.5
+      router_score_function: "sigmoid"
+      router_enable_expert_bias: true
+      router_bias_update_rate: 1.0e-3
+      router_dtype: "fp32"
+      permute_fusion: true
+      router_fusion: true
+      layer_recompute: true
+  tokenizer:
+    nominal_name: "deepseek-v3"
+    nominal_vocab_size: 129280

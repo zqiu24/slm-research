@@ -1,0 +1,13 @@
+# @package _global_
+# DeepSeek-3Bv2: 12L, hidden 1280, dense ffn 7168, 16 heads, head_dim 384 (MQA),
+# MoE ffn 896 / shared 1792, seq 4096. Network size only; arch in family.
+base:
+  scale: "deepseek_3bv2"
+  non_embedding_params: 3_000_000_000
+  model:
+    num_layers: 12
+    hidden_size: 1280
+    ffn_hidden_size: 7168
+    num_attention_heads: 16
+    head_dim: 384
+    seq_length: 4096
