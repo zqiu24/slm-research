@@ -36,3 +36,13 @@ def test_megatron_args_emit_mqa_sandwich_moe():
     assert args[args.index("--moe-router-topk") + 1] == "6"
     assert args[args.index("--moe-ffn-hidden-size") + 1] == "896"
     assert "--multi-latent-attention" not in args
+
+
+def test_sandwich_patch_listed_in_experiments():
+    # poet is intentionally excluded: its poet_unfuse_te_impl patch already owns
+    # the core_transformer_config_from_args target, and the patch registry rejects
+    # two patches declaring the same target. POET+sandwich is deferred.
+    for exp in ("optim/adam", "optim/muon_hybrid"):
+        cfg = _parse_overrides([f"experiment={exp}"])
+        patches = list(cfg.experiment.patches)
+        assert "sandwich_norm_apply" in patches, exp

@@ -17,6 +17,7 @@ experiment:
     # No-op unless base.model.unfuse_qkv/unfuse_fc1 are set; lets a plain-Adam
     # run use the (forward-equivalent) unfused architecture for sanity checks.
     - model_unfuse_linears
+    - sandwich_norm_apply     # no-op unless base.model.use_sandwich_norm
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
     - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
   required_capabilities: []
