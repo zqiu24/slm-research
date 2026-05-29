@@ -141,6 +141,39 @@ def test_replace_with_block_count_skips_indivisible():
     assert isinstance(m.fc2, nn.Linear)  # skipped (13 not divisible by 4)
 
 
+def test_replace_hard_errors_on_indivisible_unfused_segment():
+    """An unfused sub-projection (e.g. linear_k) that POET can't wrap due to
+    block-size divisibility is a hard error, not a silent skip."""
+    import pytest
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_k = nn.Linear(8, 12, bias=False)  # out 12 % block 8 != 0
+
+    m = M()
+    with pytest.raises(ValueError, match="linear_k"):
+        replace_linears_with_poet(
+            m, block_size=8, init_type="none", extra_linear_types=(nn.Linear,)
+        )
+
+
+def test_replace_still_skips_indivisible_non_unfused_layer():
+    """A non-unfused layer that isn't divisible is still skipped (not raised)."""
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.some_proj = nn.Linear(8, 12, bias=False)  # 12 % 8 != 0, not unfused
+
+    m = M()
+    n = replace_linears_with_poet(
+        m, block_size=8, init_type="none", extra_linear_types=(nn.Linear,)
+    )
+    assert n == 0
+    assert isinstance(m.some_proj, nn.Linear)
+
+
 def test_block_count_validation_raises_at_layer_construction():
     """Task 8.6: a block_count that doesn't divide the layer dims raises a
     clear ValueError when the POETLinear is constructed directly."""

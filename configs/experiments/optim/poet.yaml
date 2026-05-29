@@ -5,7 +5,8 @@
 # orthogonal delta), trains only the orthogonal piece via POETAdam, and
 # periodically merges deltas + resets Adam momentum.
 #
-# Triggers patches: poet_unfuse_te_impl, poet_apply_to_model, poet_merge_step.
+# Triggers patches: model_unfuse_linears, poet_unfuse_te_impl,
+# poet_apply_to_model, poet_merge_step.
 experiment:
   name: poet
   family: optim
@@ -20,6 +21,7 @@ experiment:
   references:
     - "POET / GaLore (Zhao et al. 2024)"
   patches:
+    - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
     - poet_optimizer_setup
     - poet_unfuse_te_impl
     - poet_apply_to_model
@@ -45,13 +47,15 @@ optim:
     mup_alpha: 1.0
     merge_period: 200       # 0 disables periodic merge
     scale: 1.0              # LR multiplier for the POET linear group
-    # Split fused linears into separate POET orbits (only meaningful under POET).
-    # split_qkv: fused attention linear_qkv -> separate Q / K / V projections
-    #   (GQA-correct de-interleave; inert for MLA, which has no fused linear_qkv).
-    # split_fc1: fused SwiGLU linear_fc1 -> separate gate / up projections.
-    # Each produced sub-segment must be divisible by block_size/block_count or
-    # training hard-errors at startup. NOTE: defaulted on — for MoE, block_size
-    # must divide moe_ffn_hidden_size (e.g. 896 needs block_size dividing 896,
-    # not 256), or set split_fc1=false / pick a compatible block_size.
-    split_qkv: true
-    split_fc1: true
+
+# Architectural unfusing of fused linears (handled by the model_unfuse_linears
+# patch, optimizer-agnostic — lives under base.model, not optim.poet). Defaulted
+# on for POET so each Q/K/V and gate/up projection gets its own orthogonal orbit.
+# Each produced sub-segment must be divisible by poet.block_size/block_count or
+# POET hard-errors at startup (e.g. MoE moe_ffn_hidden_size=896 needs block_size
+# dividing 896, not 256). Set these false, or pick a compatible block_size, to
+# opt out. unfuse_qkv is inert for MLA (no fused linear_qkv).
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

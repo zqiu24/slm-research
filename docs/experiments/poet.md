@@ -25,26 +25,32 @@ parameterisations.
 - Architecture constraint: `config.transformer_impl='local'` (no fused
   TE LayerNormLinear). The `poet_unfuse_te_impl` patch flips this
   automatically when `args.poet` is set.
-- Optional fused-linear splitting (`--poet-split-qkv` / `--poet-split-fc1`,
-  config `optim.poet.split_qkv` / `split_fc1`, default off): before POET
-  wrapping, split the fused attention `linear_qkv` into separate Q/K/V
+- Optional fused-linear unfusing (`base.model.unfuse_qkv` / `unfuse_fc1`,
+  CLI `--unfuse-qkv` / `--unfuse-fc1`; **defaulted on for the poet
+  experiment**, off elsewhere): an *architectural*, optimizer-agnostic
+  transform that splits the fused attention `linear_qkv` into separate Q/K/V
   projections (GQA-correct de-interleave; inert for MLA) and/or the fused
-  SwiGLU `linear_fc1` into separate gate/up projections, so each sub-projection
-  gets its own independent POET orbit. Implemented in
-  [`src/optim/poet_split.py`](../../src/optim/poet_split.py). Each produced
-  sub-segment must be divisible by `block_size`/`block_count` or training
-  hard-errors at startup. Requires TP=1 (already enforced by POET) and
-  non-gated attention.
+  SwiGLU `linear_fc1` into separate gate/up projections. Implemented in
+  [`src/model/unfuse_linears.py`](../../src/model/unfuse_linears.py) and applied
+  at model-build time by the `model_unfuse_linears` patch (pre-DDP). Under POET,
+  each sub-projection gets its own independent orbit; under plain Adam it is an
+  equivalent-architecture refactor (forward-preserving, modulo fp). Requires
+  TP=1 and non-gated attention; `unfuse_fc1` requires a gated (SwiGLU) MLP. When
+  POET is on, each produced sub-segment must be divisible by
+  `block_size`/`block_count` or POET hard-errors at startup.
 
 ## Patches applied
+- [`model_unfuse_linears`](../../src/patches/model_unfuse_linears.py) —
+  (optimizer-agnostic) at `model_provider` build time, unfuse the fused
+  `linear_qkv` / `linear_fc1` into separate Q/K/V and gate/up projections when
+  `--unfuse-qkv` / `--unfuse-fc1` are set
+  ([`unfuse_fused_linears`](../../src/model/unfuse_linears.py)). Runs before POET
+  wrapping (pre-DDP), so POET picks up the unfused sub-linears.
 - [`poet_unfuse_te_impl`](../../src/patches/poet_unfuse_te_impl.py) —
   flip `config.transformer_impl` to `local` when POET is enabled.
 - [`poet_apply_to_model`](../../src/patches/poet_apply_to_model.py) —
-  replace `*ParallelLinear` modules with `POETMegatronLinear` after
-  `get_model` returns. When `--poet-split-qkv` / `--poet-split-fc1` are
-  set, runs the fused-linear split
-  ([`split_fused_linears`](../../src/optim/poet_split.py)) first, so the
-  produced Q/K/V/gate/up sub-linears are each wrapped as their own orbit.
+  replace `*ParallelLinear` modules (fused or unfused) with `POETMegatronLinear`
+  after `get_model` returns; an indivisible unfused segment is a hard error.
 - [`poet_merge_step`](../../src/patches/poet_merge_step.py) — periodic
   `POETLinear.merge_then_reinitialize()` after each `train_step`.
 
@@ -77,19 +83,24 @@ See [configs/experiments/optim/poet.yaml](../../configs/experiments/optim/poet.y
       --dry-run
   ```
 
-  Expected: `Registered patches: poet_unfuse_te_impl,
+  Expected: `Registered patches: model_unfuse_linears, poet_unfuse_te_impl,
   poet_apply_to_model, poet_merge_step`; `[POET] replaced N linears`;
   `[POET] merged at iteration 5` and `[POET] merged at iteration 10`;
   `patch_set_hash: <16-hex>` in `runs/<config_hash>/metadata.json`.
 - 2026-05-29: added fused-linear splitting (`--poet-split-qkv` /
-  `--poet-split-fc1`) in [`src/optim/poet_split.py`](../../src/optim/poet_split.py)
-  with CPU geometry/surgery unit tests
-  ([tests/unit/test_poet_split.py](../../tests/unit/test_poet_split.py), 12
-  tests). GPU smoke (llama3 1.2b, 8×B200, both splits on, `block_size=128`,
-  mock data): model built with `[POET split]` logs on all 52 layers
+  `--poet-split-fc1`) with CPU geometry/surgery unit tests. GPU smoke
+  (llama3 1.2b, 8×B200, both splits on, `block_size=128`, mock data): model
+  built with split logs on all 52 layers
   (`linear_qkv → q/k/v q=1536,kv=512,groups=8`; `linear_fc1 → gate/up
   ffn=3840`), `[POET] replaced 364 linears`, 140 train steps with loss
   decreasing 12.06 → 11.80 and 0 nan/skipped iterations.
+- 2026-05-29: generalized the split into an optimizer-agnostic **unfuse**
+  transform — moved to [`src/model/unfuse_linears.py`](../../src/model/unfuse_linears.py)
+  + new `model_unfuse_linears` patch (hooks `model_provider`, pre-DDP); args
+  renamed to `--unfuse-qkv` / `--unfuse-fc1` under `base.model.*` (default on
+  for the poet experiment). The POET-side divisibility hard error now lives in
+  `replace_linears_with_poet`. Tests:
+  [tests/unit/test_unfuse_linears.py](../../tests/unit/test_unfuse_linears.py).
 
 ## Runs
 - Ablation ladder: (pending)

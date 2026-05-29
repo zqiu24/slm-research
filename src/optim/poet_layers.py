@@ -24,6 +24,13 @@ from src.optim import poet_cache as _poet_cache
 
 logger = logging.getLogger(__name__)
 
+# Leaf names produced by ``src.model.unfuse_linears`` when a fused linear is
+# unfused. A non-divisible layer with one of these names is a hard error rather
+# than a silent skip (see ``replace_linears_with_poet``).
+_UNFUSED_SEGMENT_NAMES = frozenset(
+    {"linear_q", "linear_k", "linear_v", "linear_fc1_gate", "linear_fc1_up"}
+)
+
 
 class POETMegatronLinear(nn.Module):
     """Wraps a :class:`POETLinear` to match Megatron's parallel-linear
@@ -154,6 +161,16 @@ def replace_linears_with_poet(
                 # block_count (when set) takes precedence over block_size.
                 divisor = block_count if block_count is not None else block_size
                 if in_f % divisor != 0 or out_f % divisor != 0:
+                    # An unfused sub-projection (from src.model.unfuse_linears)
+                    # that POET can't wrap is a hard error: the user asked for it
+                    # to be POET-ised, so fail fast rather than silently skip.
+                    if name in _UNFUSED_SEGMENT_NAMES:
+                        label = "block_count" if block_count is not None else "block_size"
+                        raise ValueError(
+                            f"[POET] unfused segment {full} dims (in={in_f}, out={out_f}) "
+                            f"not divisible by {label}={divisor}. Pick a compatible "
+                            f"block_size/block_count, or disable unfusing this layer."
+                        )
                     logger.info(
                         "[POET] skip %s: dims (%d, %d) not divisible by %s=%d",
                         full,

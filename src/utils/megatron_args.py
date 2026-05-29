@@ -75,6 +75,12 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--attention-backend", model.get("attention_backend", "flash"))
     _add(args, "--swiglu")
     _add(args, "--disable-bias-linear")
+    # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
+    # the ``model_unfuse_linears`` patch when listed in experiment.patches.
+    if bool(model.get("unfuse_qkv", False)):
+        args.append("--unfuse-qkv")
+    if bool(model.get("unfuse_fc1", False)):
+        args.append("--unfuse-fc1")
     if not bool(model.tie_embeddings):
         _add(args, "--untie-embeddings-and-output-weights")
 
@@ -250,8 +256,6 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 "--adam-eps",
                 optim.eps,
             ]
-            + (["--poet-split-qkv"] if poet.get("split_qkv", False) else [])
-            + (["--poet-split-fc1"] if poet.get("split_fc1", False) else [])
         )
 
     if kind == "ngpt_adamw":

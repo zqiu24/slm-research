@@ -42,25 +42,24 @@ def test_add_slm_args_accepts_poet_flags():
     assert args.poet_scale == 1.5
 
 
-def test_add_slm_args_accepts_split_flags():
+def test_add_slm_args_accepts_unfuse_flags():
     parser = argparse.ArgumentParser()
     add_slm_args(parser)
     args = parser.parse_args(
         [
             "--slm-config-path",
             "x.yaml",
-            "--poet",
-            "--poet-split-qkv",
-            "--poet-split-fc1",
+            "--unfuse-qkv",
+            "--unfuse-fc1",
         ]
     )
-    assert args.poet_split_qkv is True
-    assert args.poet_split_fc1 is True
+    assert args.unfuse_qkv is True
+    assert args.unfuse_fc1 is True
 
 
-def test_split_flags_default_false():
+def test_unfuse_flags_default_false():
     parser = argparse.ArgumentParser()
     add_slm_args(parser)
-    args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
-    assert args.poet_split_qkv is False
-    assert args.poet_split_fc1 is False
+    args = parser.parse_args(["--slm-config-path", "x.yaml"])
+    assert args.unfuse_qkv is False
+    assert args.unfuse_fc1 is False

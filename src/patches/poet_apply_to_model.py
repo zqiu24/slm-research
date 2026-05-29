@@ -3,6 +3,11 @@
 Targets ``megatron.training.training.get_model``. Mirrors the fork-2
 ``model_provider.py`` customisation that called ``apply_poet_to_model``
 immediately after ``model_builder(...)`` returned.
+
+Unfusing fused linears (qkv / fc1) is handled separately and earlier by the
+``model_unfuse_linears`` patch (at ``model_provider`` time); by the time this
+runs, the model already has whatever (fused or unfused) linears it will have,
+and POET simply wraps each eligible one.
 """
 
 from __future__ import annotations
@@ -35,21 +40,6 @@ def apply() -> None:
         mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
         cache_mode = getattr(args, "poet_cache_mode", "none")
         chunks = model if isinstance(model, list) else [model]
-
-        split_qkv = getattr(args, "poet_split_qkv", False)
-        split_fc1 = getattr(args, "poet_split_fc1", False)
-        if split_qkv or split_fc1:
-            from src.optim.poet_split import split_fused_linears
-
-            for m in chunks:
-                split_fused_linears(
-                    m,
-                    split_qkv=split_qkv,
-                    split_fc1=split_fc1,
-                    block_size=block,
-                    block_count=block_count,
-                )
-
         total = 0
         for m in chunks:
             total += replace_linears_with_poet(

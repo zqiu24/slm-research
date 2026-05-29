@@ -1,11 +1,22 @@
-"""Split fused parallel linears into separate POET sub-projections.
+"""Unfuse fused parallel linears into separate sub-projections.
 
-Runs *before* ``replace_linears_with_poet`` (inside the ``poet_apply_to_model``
-wrapper). Splitting produces ordinary parallel-linear sub-modules, which the
-existing POET walker then wraps with one independent orbit each.
+This is a purely **architectural** transform — it does not depend on POET (or
+any optimizer). It replaces a fused attention ``linear_qkv`` with separate
+Q / K / V projections, and/or a fused SwiGLU ``linear_fc1`` with separate
+gate / up projections, then patches the owning module's forward (per instance)
+to call them. The forward output is reconstructed identically, so the model is
+mathematically equivalent to the fused one (modulo floating-point reduction
+order).
 
-Supported under POET's constraints only: TP=1, ``transformer_impl='local'``,
-non-gated attention. MLA has no fused ``linear_qkv`` so ``split_qkv`` is inert.
+Consumers:
+  * POET wraps each sub-projection in its own orthogonal orbit (the main use).
+  * Plain Adam (etc.) trains them like any other weight — equivalent to the
+    fused model.
+
+Constraints (architectural): TP=1, non-gated attention; the MLP must be gated
+(SwiGLU) for ``unfuse_fc1``. MLA has no fused ``linear_qkv`` so ``unfuse_qkv``
+is inert there. POET-specific block-size divisibility is enforced separately by
+the POET wrap, not here.
 
 This module is import-safe on CPU (no Megatron import at module load); the
 Megatron linear types are discovered lazily.
@@ -87,30 +98,6 @@ def qkv_interleave_index(
     return idx
 
 
-def validate_divisible(
-    module_path: str,
-    seg_name: str,
-    *,
-    in_f: int,
-    out_f: int,
-    block_size: int,
-    block_count: int | None,
-) -> None:
-    """Hard-error if a split sub-segment isn't POET-divisible.
-
-    ``block_count`` (when set) takes precedence over ``block_size``, matching
-    the unsplit walker's divisor precedence.
-    """
-    divisor = block_count if block_count is not None else block_size
-    label = "block_count" if block_count is not None else "block_size"
-    if in_f % divisor != 0 or out_f % divisor != 0:
-        raise ValueError(
-            f"[POET split] {module_path}.{seg_name} dims (in={in_f}, out={out_f}) "
-            f"not divisible by {label}={divisor}. Choose a compatible "
-            f"block_size/block_count, or disable splitting this layer."
-        )
-
-
 # --------------------------------------------------------------------------
 # Shared helpers
 # --------------------------------------------------------------------------
@@ -135,7 +122,7 @@ def _column_linear_types(extra: Iterable[type] = ()) -> tuple[type, ...]:
     return types_ + tuple(extra)
 
 
-def _split_linear_out(module, x):
+def _linear_out(module, x):
     """Call a linear that may return a tensor (``nn.Linear``) or a
     ``(output, bias)`` tuple (Megatron / POET). Returns ``(output, bias)``."""
     r = module(x)
@@ -146,16 +133,17 @@ def _split_linear_out(module, x):
 
 def _make_sub_linear(src: nn.Module, rows: torch.Tensor) -> nn.Module:
     """Build a typed copy of ``src`` whose weight/bias are the rows ``rows`` of
-    ``src``. The copy keeps ``src``'s class and config so the unsplit POET
-    walker recognises and wraps it; only weight/bias/shape are sliced.
+    ``src``. The copy keeps ``src``'s class and config so any downstream walker
+    (e.g. POET) recognises it; only weight/bias/shape are sliced.
 
-    The copy's own ``forward`` is never used in production (it is replaced by a
-    POET module), but it is correct for ``nn.Linear`` in tests.
+    The copy's own ``forward`` is used directly under plain training (and is
+    correct for ``nn.Linear`` in tests); under POET it is later replaced by a
+    POET module.
     """
     # ProcessGroup-bearing attrs on a real Megatron linear are not
     # deepcopy-able; detach them across the copy and restore on both objects.
-    # This is the highest-risk spot vs. the real Megatron build — validated by
-    # the Task 9 GPU smoke. (No-op for nn.Linear in CPU tests.)
+    # (No-op for nn.Linear in CPU tests.) This is the highest-risk spot vs. the
+    # real Megatron build — validated by the GPU smoke.
     _pg_attrs = ("tp_group", "process_group", "pg_collection", "explicit_expert_comm")
     _saved = {}
     for attr in _pg_attrs:
@@ -189,15 +177,15 @@ def _make_sub_linear(src: nn.Module, rows: torch.Tensor) -> nn.Module:
 # --------------------------------------------------------------------------
 
 
-def _split_mlp_forward(self, hidden_states, per_token_scale=None, **kwargs):
+def _unfused_mlp_forward(self, hidden_states, per_token_scale=None, **kwargs):
     """Replacement ``MLP.forward`` calling separate gate/up projections.
 
     Mirrors Megatron's non-fused gated ``glu()`` path
     (megatron/core/transformer/mlp.py). Does not use the fused
     ``bias_swiglu_impl`` kernel; numerically identical for SwiGLU.
     """
-    gate, gate_bias = _split_linear_out(self.linear_fc1_gate, hidden_states)
-    up, up_bias = _split_linear_out(self.linear_fc1_up, hidden_states)
+    gate, gate_bias = _linear_out(self.linear_fc1_gate, hidden_states)
+    up, up_bias = _linear_out(self.linear_fc1_up, hidden_states)
     if gate_bias is not None:
         gate = gate + gate_bias
     if up_bias is not None:
@@ -217,34 +205,23 @@ def _split_mlp_forward(self, hidden_states, per_token_scale=None, **kwargs):
     return out, None
 
 
-def _split_one_mlp_fc1(mlp, path, *, block_size, block_count, linear_types) -> bool:
+def _unfuse_one_mlp_fc1(mlp, path, *, linear_types) -> bool:
     fc1 = getattr(mlp, "linear_fc1", None)
     if fc1 is None or not isinstance(fc1, linear_types):
         return False
     if not getattr(mlp.config, "gated_linear_unit", False):
-        raise ValueError(f"[POET split] {path}: --poet-split-fc1 requires a gated (SwiGLU) MLP.")
+        raise ValueError(f"[unfuse] {path}: --unfuse-fc1 requires a gated (SwiGLU) MLP.")
     out_f, in_f = fc1.weight.shape
     if out_f % 2 != 0:
-        raise ValueError(f"[POET split] {path}.linear_fc1 out dim {out_f} is not even.")
+        raise ValueError(f"[unfuse] {path}.linear_fc1 out dim {out_f} is not even.")
     ffn = out_f // 2
-    validate_divisible(
-        path,
-        "linear_fc1_gate",
-        in_f=in_f,
-        out_f=ffn,
-        block_size=block_size,
-        block_count=block_count,
-    )
-    validate_divisible(
-        path, "linear_fc1_up", in_f=in_f, out_f=ffn, block_size=block_size, block_count=block_count
-    )
     gate_rows = torch.arange(0, ffn, dtype=torch.long)
     up_rows = torch.arange(ffn, 2 * ffn, dtype=torch.long)
     mlp.linear_fc1_gate = _make_sub_linear(fc1, gate_rows)
     mlp.linear_fc1_up = _make_sub_linear(fc1, up_rows)
     del mlp.linear_fc1
-    mlp.forward = types.MethodType(_split_mlp_forward, mlp)
-    logger.info("[POET split] %s.linear_fc1 -> gate/up (ffn=%d)", path, ffn)
+    mlp.forward = types.MethodType(_unfused_mlp_forward, mlp)
+    logger.info("[unfuse] %s.linear_fc1 -> gate/up (ffn=%d)", path, ffn)
     return True
 
 
@@ -253,19 +230,19 @@ def _split_one_mlp_fc1(mlp, path, *, block_size, block_count, linear_types) -> b
 # --------------------------------------------------------------------------
 
 
-def _split_qkv_forward(
+def _unfused_qkv_forward(
     self, hidden_states, key_value_states=None, output_gate=False, split_qkv=True
 ):
     """Replacement ``SelfAttention.get_query_key_value_tensors`` for TP=1,
     non-gated attention. Calls separate Q/K/V projections, reassembles the
-    interleaved ``mixed_qkv`` (spec §6a), then runs Megatron's TP=1 post-linear
+    interleaved ``mixed_qkv``, then runs Megatron's TP=1 post-linear
     view/split/reshape/layernorm so downstream attention math is bit-identical.
     """
-    assert not output_gate, "[POET split] split_qkv does not support gated attention."
-    q, _ = _split_linear_out(self.linear_q, hidden_states)
-    k, _ = _split_linear_out(self.linear_k, hidden_states)
-    v, _ = _split_linear_out(self.linear_v, hidden_states)
-    mixed = torch.cat([q, k, v], dim=-1).index_select(-1, self._poet_qkv_interleave_index)
+    assert not output_gate, "[unfuse] unfuse_qkv does not support gated attention."
+    q, _ = _linear_out(self.linear_q, hidden_states)
+    k, _ = _linear_out(self.linear_k, hidden_states)
+    v, _ = _linear_out(self.linear_v, hidden_states)
+    mixed = torch.cat([q, k, v], dim=-1).index_select(-1, self._unfuse_qkv_interleave_index)
 
     hd = self.hidden_size_per_attention_head
     ng = self.num_query_groups_per_partition
@@ -283,11 +260,11 @@ def _split_qkv_forward(
     return query, key, value
 
 
-def _split_backward_qkv_proj(self):
+def _unfused_backward_qkv_proj(self):
     """Replacement for SelfAttention._backward_qkv_proj after linear_qkv removal.
 
-    Only relevant for Megatron's delayed-wgrad path (inactive for frozen-base
-    POET); guarded so it never errors if invoked.
+    Only relevant for Megatron's delayed-wgrad path; guarded so it never errors
+    if invoked.
     """
     for attr in ("linear_q", "linear_k", "linear_v"):
         m = getattr(self, attr, None)
@@ -295,16 +272,14 @@ def _split_backward_qkv_proj(self):
             m.backward_dw()
 
 
-def _split_one_attention_qkv(attn, path, *, block_size, block_count, linear_types) -> bool:
+def _unfuse_one_attention_qkv(attn, path, *, linear_types) -> bool:
     qkv = getattr(attn, "linear_qkv", None)
     if qkv is None or not isinstance(qkv, linear_types):
         return False
     if getattr(attn, "world_size", 1) != 1:
-        raise ValueError(
-            f"[POET split] {path}: --poet-split-qkv requires TP=1 (POET already enforces it)."
-        )
+        raise ValueError(f"[unfuse] {path}: --unfuse-qkv requires TP=1.")
     if getattr(attn.config, "attention_output_gate", False):
-        raise ValueError(f"[POET split] {path}: --poet-split-qkv does not support gated attention.")
+        raise ValueError(f"[unfuse] {path}: --unfuse-qkv does not support gated attention.")
 
     hd = attn.hidden_size_per_attention_head
     ng = attn.num_query_groups_per_partition
@@ -313,36 +288,27 @@ def _split_one_attention_qkv(attn, path, *, block_size, block_count, linear_type
     out_f, in_f = qkv.weight.shape
     if q_out + 2 * kv_out != out_f:
         raise ValueError(
-            f"[POET split] {path}.linear_qkv out dim {out_f} != q+2kv "
+            f"[unfuse] {path}.linear_qkv out dim {out_f} != q+2kv "
             f"({q_out}+2*{kv_out}); unexpected layout (gated attention?)."
         )
-    validate_divisible(
-        path, "linear_q", in_f=in_f, out_f=q_out, block_size=block_size, block_count=block_count
-    )
-    validate_divisible(
-        path, "linear_k", in_f=in_f, out_f=kv_out, block_size=block_size, block_count=block_count
-    )
-    validate_divisible(
-        path, "linear_v", in_f=in_f, out_f=kv_out, block_size=block_size, block_count=block_count
-    )
 
     q_rows, k_rows, v_rows = qkv_deinterleave_row_indices(nah, ng, hd)
     attn.linear_q = _make_sub_linear(qkv, q_rows)
     attn.linear_k = _make_sub_linear(qkv, k_rows)
     attn.linear_v = _make_sub_linear(qkv, v_rows)
     attn.register_buffer(
-        "_poet_qkv_interleave_index",
-        # The model is already on its compute device when the split runs (get_model
-        # calls .cuda() before returning), so pin the index there to avoid a
-        # device mismatch in the forward's index_select.
+        "_unfuse_qkv_interleave_index",
+        # Pin to the weight's device so the forward's index_select matches the
+        # model's device after any later .cuda()/.to() (the index moves with the
+        # module since it is a registered buffer).
         qkv_interleave_index(nah, ng, hd).to(qkv.weight.device),
         persistent=False,
     )
     del attn.linear_qkv
-    attn.get_query_key_value_tensors = types.MethodType(_split_qkv_forward, attn)
-    attn._backward_qkv_proj = types.MethodType(_split_backward_qkv_proj, attn)
+    attn.get_query_key_value_tensors = types.MethodType(_unfused_qkv_forward, attn)
+    attn._backward_qkv_proj = types.MethodType(_unfused_backward_qkv_proj, attn)
     logger.info(
-        "[POET split] %s.linear_qkv -> q/k/v (q=%d, kv=%d, groups=%d)",
+        "[unfuse] %s.linear_qkv -> q/k/v (q=%d, kv=%d, groups=%d)",
         path,
         q_out,
         kv_out,
@@ -356,16 +322,14 @@ def _split_one_attention_qkv(attn, path, *, block_size, block_count, linear_type
 # --------------------------------------------------------------------------
 
 
-def split_fused_linears(
+def unfuse_fused_linears(
     model: nn.Module,
     *,
-    split_qkv: bool,
-    split_fc1: bool,
-    block_size: int,
-    block_count: int | None,
+    unfuse_qkv: bool,
+    unfuse_fc1: bool,
     linear_types: Iterable[type] | None = None,
 ) -> int:
-    """Split fused linears in-place; returns the number of fused linears split.
+    """Unfuse fused linears in-place; returns the number of fused linears split.
 
     ``linear_types`` overrides the recognised column-parallel linear classes
     (tests pass ``(nn.Linear,)``); defaults to Megatron's column-parallel types.
@@ -374,27 +338,15 @@ def split_fused_linears(
     n = 0
     for name, mod in list(model.named_modules()):
         if (
-            split_qkv
+            unfuse_qkv
             and hasattr(mod, "linear_qkv")
-            and _split_one_attention_qkv(
-                mod,
-                name or "<root>",
-                block_size=block_size,
-                block_count=block_count,
-                linear_types=types_,
-            )
+            and _unfuse_one_attention_qkv(mod, name or "<root>", linear_types=types_)
         ):
             n += 1
         if (
-            split_fc1
+            unfuse_fc1
             and hasattr(mod, "linear_fc1")
-            and _split_one_mlp_fc1(
-                mod,
-                name or "<root>",
-                block_size=block_size,
-                block_count=block_count,
-                linear_types=types_,
-            )
+            and _unfuse_one_mlp_fc1(mod, name or "<root>", linear_types=types_)
         ):
             n += 1
     return n

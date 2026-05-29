@@ -343,17 +343,26 @@ def test_wandb_run_name_poet_block_count_overrides_block_size():
     assert _wandb_run_name(cfg) == "poet-llama3-300m-lr0.0003-bc8"
 
 
-def test_poet_argv_omits_split_flags_by_default():
-    from src.utils.megatron_args import _optimizer_args
+def test_poet_experiment_emits_unfuse_flags_by_default():
+    # The poet experiment sets base.model.unfuse_qkv/unfuse_fc1 = true.
+    cfg = _parse_overrides(["experiment=optim/poet"])
+    args = build_megatron_args(cfg)
+    assert "--unfuse-qkv" in args
+    assert "--unfuse-fc1" in args
 
-    args = _optimizer_args(_poet_cfg({"block_size": 256}))
-    assert "--poet-split-qkv" not in args
-    assert "--poet-split-fc1" not in args
+
+def test_adam_experiment_omits_unfuse_flags():
+    cfg = _parse_overrides(["experiment=optim/adam"])
+    args = build_megatron_args(cfg)
+    assert "--unfuse-qkv" not in args
+    assert "--unfuse-fc1" not in args
 
 
-def test_poet_argv_emits_split_flags_when_set():
-    from src.utils.megatron_args import _optimizer_args
-
-    args = _optimizer_args(_poet_cfg({"block_size": 256, "split_qkv": True, "split_fc1": True}))
-    assert "--poet-split-qkv" in args
-    assert "--poet-split-fc1" in args
+def test_unfuse_flags_emitted_from_base_model_for_any_experiment():
+    # Architectural: turning it on for a non-POET experiment also emits the flags.
+    cfg = _parse_overrides(
+        ["experiment=optim/adam", "base.model.unfuse_qkv=true", "base.model.unfuse_fc1=true"]
+    )
+    args = build_megatron_args(cfg)
+    assert "--unfuse-qkv" in args
+    assert "--unfuse-fc1" in args

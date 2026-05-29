@@ -47,8 +47,10 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         choices=["none", "cached_fwd", "cached_fwd_bwd"],
         default="none",
     )
-    group.add_argument("--poet-split-qkv", action="store_true")
-    group.add_argument("--poet-split-fc1", action="store_true")
+    # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
+    # the ``model_unfuse_linears`` patch at model-build time.
+    group.add_argument("--unfuse-qkv", action="store_true")
+    group.add_argument("--unfuse-fc1", action="store_true")
     group.add_argument("--ngpt", action="store_true")
     group.add_argument(
         "--ngpt-base-scale", type=float, default=None, help="1/sqrt(hidden_size) by default"
