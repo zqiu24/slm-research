@@ -50,6 +50,8 @@ optim:
     #   (GQA-correct de-interleave; inert for MLA, which has no fused linear_qkv).
     # split_fc1: fused SwiGLU linear_fc1 -> separate gate / up projections.
     # Each produced sub-segment must be divisible by block_size/block_count or
-    # training hard-errors at startup.
-    split_qkv: false
-    split_fc1: false
+    # training hard-errors at startup. NOTE: defaulted on — for MoE, block_size
+    # must divide moe_ffn_hidden_size (e.g. 896 needs block_size dividing 896,
+    # not 256), or set split_fc1=false / pick a compatible block_size.
+    split_qkv: true
+    split_fc1: true
