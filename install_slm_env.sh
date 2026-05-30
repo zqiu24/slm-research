@@ -207,11 +207,13 @@ if [ -d "$SLM_REPO/third_party/torchtitan/torchtitan" ]; then
   uv pip install --no-deps -e "${SLM_REPO}/third_party/torchtitan"
   # torchtitan-only runtime deps the slm/mcore stack does not already provide
   # (torchdata: stateful dataloader; tyro: config CLI; tabulate: metrics tables;
-  # pillow: image utils). Resolve their own sub-deps normally, but pin torch.
+  # pillow: image utils; tomli-w: launchers.train_torchtitan needs it to emit
+  # <run_dir>/torchtitan.toml — it lives in torchtitan's *dev* extras but is a
+  # hard runtime dep here). Resolve their own sub-deps normally, but pin torch.
   TT_CONSTRAINT="$(mktemp "${TMPDIR}/tt-constraint.XXXXXX")"
   printf 'torch==2.11.0\n' > "$TT_CONSTRAINT"
   uv pip install --constraint "$TT_CONSTRAINT" \
-    "torchdata>=0.8.0" tyro tabulate pillow
+    "torchdata>=0.8.0" tyro tabulate pillow tomli-w
   rm -f "$TT_CONSTRAINT"
 else
   echo "WARN: $SLM_REPO/third_party/torchtitan is empty; skipping torchtitan." >&2
