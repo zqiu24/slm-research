@@ -51,7 +51,13 @@ class _FixedVocabTokenizer:
 
 
 def _build_gpt_dataset(
-    path: str, seq_len: int, num_samples: int, seed: int, vocab_size: int, path_to_cache=None
+    path: str,
+    seq_len: int,
+    num_samples: int,
+    seed: int,
+    vocab_size: int,
+    path_to_cache=None,
+    split: str = "100,0,0",
 ):
     from megatron.core.datasets.blended_megatron_dataset_builder import (
         BlendedMegatronDatasetBuilder,
@@ -62,15 +68,18 @@ def _build_gpt_dataset(
     # each call uses a private cache dir — the parity gate needs two independent
     # fresh builds to be bit-identical, not merely equal-via-shared-cache.
     np.random.seed(int(seed))
-    # Build a single-split GPTDataset; field names track the vendored mcore pin
-    # (docs/torchtitan_api_notes.md cross-checks these against the source). With
-    # path_to_cache=None Megatron caches next to the data prefix (production); the
-    # parity path passes a private dir so the two builds never race on one file.
+    # Build the GPTDataset; field names track the vendored mcore pin
+    # (docs/torchtitan_api_notes.md cross-checks these against the source). `split`
+    # defaults to the train-only "100,0,0" used by the parity path; build_dataloader
+    # passes the resolved data.split (e.g. "99,1,0") so real runs partition documents
+    # exactly like the Megatron path. With path_to_cache=None Megatron caches next to
+    # the data prefix; build_dataloader passes runs/_data_cache/<name> so the index is
+    # persisted (and the parity path passes a private dir to avoid races).
     config = GPTDatasetConfig(
         random_seed=seed,
         sequence_length=seq_len,
         blend=([path], None),
-        split="100,0,0",
+        split=split,
         path_to_cache=path_to_cache,
         tokenizer=_FixedVocabTokenizer(vocab_size),
         reset_position_ids=False,
@@ -125,6 +134,18 @@ def build_dataloader(*, dp_world_size, dp_rank, tokenizer, job_config):
     seq_len = job_config.training.seq_len
     local_bs = job_config.training.local_batch_size  # per-DP-rank batch size
     num_samples = job_config.training.steps * job_config.training.global_batch_size
-    ds = _build_gpt_dataset(path, seq_len, num_samples, seed, vocab_size)
+    # Match the Megatron path's data pipeline: same train/val/test split and a
+    # persistent on-disk index cache keyed by dataset name (megatron_args.py uses
+    # --data-cache-path runs/_data_cache/<name>), so the GPTDataset index is built
+    # once and reused across runs instead of rebuilt on every launch.
+    ds = _build_gpt_dataset(
+        path,
+        seq_len,
+        num_samples,
+        seed,
+        vocab_size,
+        path_to_cache=f"runs/_data_cache/{slm.data.name}",
+        split=str(slm.data.split),
+    )
     # ParallelAwareDataloader(dataset, dp_rank, dp_world_size, **kwargs) — verified §4.
     return ParallelAwareDataloader(ds, dp_rank, dp_world_size, batch_size=local_bs)
