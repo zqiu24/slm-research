@@ -60,6 +60,10 @@ def _training_block(cfg: DictConfig) -> dict:
         "steps": steps,
         "mixed_precision_param": "bfloat16",  # M1 baseline; Float8 is a follow-on
         "max_norm": float(cfg.training.get("clip_grad", 1.0) or 1.0),
+        # Coordinates the slm_megatron_indexed dataloader (Task 9) reads; the data
+        # path/seed are also re-read from SLM_RESOLVED_CONFIG at train time.
+        "dataset": "slm_megatron_indexed",
+        "dataset_path": str(cfg.data.path),
     }
 
 

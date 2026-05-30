@@ -50,13 +50,16 @@ def _slm_spec_from(base, cfg):
     Task 9 additionally sets build_dataloader_fn here. TrainSpec field names are
     the verified ones (docs/torchtitan_api_notes.md §2).
     """
+    from src.titan_ext.dataloader import build_dataloader as _dataloader
     from src.titan_ext.model_flavor import build_slm_flavor, pick_template
 
     model_args = dict(base.model_args)  # copy native flavor mapping
     if str(cfg.base.family) in _SLM_FLAVOR_FAMILIES:
         template = pick_template(model_args)
         model_args[f"slm_{cfg.base.scale}"] = build_slm_flavor(template, _dims_from(cfg))
-    return dataclasses.replace(base, model_args=model_args)
+    # Swap torchtitan's stock (C4) dataloader for the Megatron-indexed one so the
+    # torchtitan backend reads the same .bin/.idx corpus (api notes §2/§4, M2).
+    return dataclasses.replace(base, model_args=model_args, build_dataloader_fn=_dataloader)
 
 
 def _register() -> None:
