@@ -31,6 +31,36 @@ These reuse the slm wrappers — the only backend-specific change is
 `--backend torchtitan`. `codexlog <name> <cmd>` is the repo's run-logger; drop it
 if you launch directly.
 
+**GPU count.** These are tiny `300m` / `seq_len=256` smoke runs; the gate only
+needs a healthy, decreasing loss curve, not throughput. Parallelism resolves to
+TP=1 / PP=1 with FSDP2 (`data_parallel_shard_degree=-1`) sharding over whatever
+ranks `torchrun` launches — so **1 GPU is sufficient**. `cluster=h100_de` sets
+`gpus_per_node: 4` by default; override `cluster.gpus_per_node=N` to use fewer.
+
+### 1-GPU variant (simplest — recommended for the gate)
+
+```bash
+# llama3 (dense) on torchtitan, single GPU
+codexlog titan_health_llama3 \
+  scripts/train_adam.sh llama3 --backend torchtitan base/scale=300m \
+    cluster.gpus_per_node=1 training_regime=ablation_20x seed=7 training.train_iters=200
+
+# qwen3 (dense) on torchtitan, single GPU
+codexlog titan_health_qwen3 \
+  scripts/train_adam.sh llama3 --backend torchtitan base/family=qwen3 base/scale=300m \
+    cluster.gpus_per_node=1 training_regime=ablation_20x seed=7 training.train_iters=200
+
+# deepseek_v3 (MoE + MLA) on torchtitan, single GPU — wired last; runs a
+# torchtitan-native flavor in M1 (base.model.titan_flavor, default debugmodel). A
+# proper slm-sized deepseek flavor + [parallelism].expert_parallel_degree mapping
+# is a follow-on. (Drop cluster.gpus_per_node=1 if you want expert parallel later.)
+codexlog titan_health_dsv3 \
+  scripts/train_adam.sh deepseek_v3 --backend torchtitan \
+    cluster.gpus_per_node=1 training_regime=ablation_20x seed=7 training.train_iters=200
+```
+
+### 4-GPU variant (full `h100_de` node, FSDP2 over 4 ranks)
+
 ```bash
 # llama3 (dense) on torchtitan
 codexlog titan_health_llama3 \
