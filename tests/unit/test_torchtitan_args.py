@@ -26,12 +26,17 @@ def test_returns_toml_dict_and_override_list():
 
 
 def test_model_block_selects_slm_spec_and_flavor():
-    # [model] TOML carries only name+flavor; dims live in the registered flavor
-    # (asserted in Task 8's build_slm_flavor test), not here.
-    toml, _ = build_torchtitan_config(_cfg())
+    # [model] TOML carries name+flavor (+ hf_assets_path); dims live in the
+    # registered flavor (asserted in Task 8's build_slm_flavor test), not here.
+    cfg = _cfg()
+    toml, _ = build_torchtitan_config(cfg)
     model = toml["model"]
     assert model["name"] == "slm_llama3"
     assert model["flavor"] == "slm_300m"
+    # hf_assets_path must forward the data manifest's HF tokenizer dir so
+    # torchtitan's build_hf_tokenizer can load tokenizer.json — the ./assets/tokenizer
+    # default was deprecated in PR #1540 and crashes the run if left unset.
+    assert model["hf_assets_path"] == str(cfg.data.tokenizer_model)
 
 
 def test_training_block_uses_resolved_values():

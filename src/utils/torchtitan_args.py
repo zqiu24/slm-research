@@ -45,10 +45,24 @@ def _model_block(cfg: DictConfig) -> dict:
         # deepseek_v3 M1: pick a torchtitan-native flavor (overridable per scale
         # via base.model.titan_flavor); a full deepseek dims-mapper is a follow-on.
         flavor = str(cfg.base.model.get("titan_flavor", "debugmodel"))
-    return {
+    block = {
         "name": f"slm_{family}",  # slm-registered clone of torchtitan's native model
         "flavor": flavor,
     }
+    # torchtitan builds a HF tokenizer at Trainer.__init__ from model.hf_assets_path
+    # (v0.2.2: HuggingFaceTokenizer loads <path>/tokenizer.json; the old
+    # ./assets/tokenizer default was deprecated in PR #1540, so leaving it unset
+    # crashes the run). Point it at the SAME HF tokenizer dir the slm/Megatron data
+    # pipeline used to pre-tokenize this corpus (cfg.data.tokenizer_model) so vocab
+    # and special tokens match the Megatron-indexed data.
+    tokenizer_dir = cfg.data.get("tokenizer_model", None)
+    if not tokenizer_dir:
+        raise ValueError(
+            "torchtitan needs a HF tokenizer directory: set data.tokenizer_model "
+            "(forwarded to torchtitan's model.hf_assets_path)."
+        )
+    block["hf_assets_path"] = str(tokenizer_dir)
+    return block
 
 
 def _training_block(cfg: DictConfig) -> dict:
