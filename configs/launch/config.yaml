@@ -13,6 +13,12 @@ defaults:
 
 seed: 42
 
+# Training backend. `megatron` (default) drives third_party/Megatron-LM via
+# launchers.train_megatron; `torchtitan` drives third_party/torchtitan via
+# launchers.train_torchtitan. Part of the resolved config so it is archived
+# and shows up in the per-run name.
+backend: megatron
+
 wandb:
   # null -> wandb uses the logged-in account's default (personal) namespace.
   # Set a team slug here (or override wandb.entity=<team>) once it's accessible.

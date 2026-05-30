@@ -86,6 +86,7 @@ def _append_launch_metadata(path: Path, cfg: DictConfig, *, seed: int, job_id: s
         "seed": seed,
         "git_sha": cfg._derived.get("git_sha"),
         "megatron_sha": cfg._derived.get("megatron_sha"),
+        "torchtitan_sha": cfg._derived.get("torchtitan_sha"),
         "patch_set_hash": cfg._derived.get("patch_set_hash"),
         "dataset_hash": cfg._derived.get("dataset_hash"),
         "launch_timestamp_utc": cfg._derived.get("launch_timestamp_utc"),
