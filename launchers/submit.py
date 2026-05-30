@@ -180,6 +180,10 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
         cfg._derived.megatron_sha = submodule_sha("third_party/Megatron-LM", cwd=REPO_ROOT)
     except Exception:
         cfg._derived.megatron_sha = "unpinned"
+    try:
+        cfg._derived.torchtitan_sha = submodule_sha("third_party/torchtitan", cwd=REPO_ROOT)
+    except Exception:
+        cfg._derived.torchtitan_sha = "unpinned"
 
     # 9. Config diff from champion
     champion_cfg = _load_champion_for(str(cfg.base.family), str(cfg.base.scale))
@@ -189,8 +193,10 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
     # 10. Run identity — a readable, timestamped name (one fresh dir per launch).
     now = datetime.now(UTC)
     cfg._derived.launch_timestamp_utc = now.isoformat()
+    backend = str(cfg.get("backend", "megatron"))
+    backend_seg = "" if backend == "megatron" else f"-{backend}"
     run_name = (
-        f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}"
+        f"{cfg.experiment.name}-{cfg.base.family}-{cfg.base.scale}{backend_seg}"
         f"-s{cfg.seed}-{now.strftime('%Y%m%dT%H%M%SZ')}"
     )
     cfg._derived.run_name = run_name
