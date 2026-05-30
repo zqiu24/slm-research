@@ -11,6 +11,10 @@ def test_wandb_env_matches_run_identity():
             "experiment=optim/adam",
             "backend=torchtitan",
             "wandb.project=pretrain-ablations-300m",
+            # Permit a dirty tree: resolve_config stamps git_sha and would raise
+            # GitDirty on a shared (non-slm-*) project name otherwise. This test
+            # only checks W&B identity mapping, not git cleanliness.
+            "allow_dirty=true",
         ]
     )
     resolve_config(cfg)

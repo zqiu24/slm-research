@@ -7,7 +7,11 @@ set -euo pipefail
 # the venv-bundled 9.19.0). All three are load-bearing for training to
 # pass `import transformer_engine` and the first forward step.
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
+# Skip the CUDA env loader when only printing the resolved command — dry-print
+# needs no GPU, and the loader derefs $HOME under `set -u` (fails in a clean env).
+if [[ "${SLM_DRYRUN_PRINT:-0}" != "1" ]]; then
+  source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
+fi
 
 ARCH="${1:-llama3}"
 if [[ "${ARCH}" == "llama3" || "${ARCH}" == "deepseek_v3" || "${ARCH}" == "deepseek_v3_3b" ]]; then
