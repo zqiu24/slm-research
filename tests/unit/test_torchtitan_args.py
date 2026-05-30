@@ -51,6 +51,25 @@ def test_training_block_uses_resolved_values():
     assert toml["debug"]["seed"] == int(cfg.seed)
 
 
+def test_training_steps_override_is_honored():
+    # An explicit training.steps must win over the token-budget derivation, else a
+    # short smoke run builds the FULL multi-billion-sample dataset index (the
+    # dataloader's num_samples = steps * global_batch_size).
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "experiment=optim/adam",
+            "cluster=h100_de",
+            "backend=torchtitan",
+            "training.steps=20",
+        ]
+    )
+    resolve_config(cfg)
+    toml, _ = build_torchtitan_config(cfg)
+    assert toml["training"]["steps"] == 20
+
+
 def test_optimizer_is_adamw_with_betas():
     cfg = _cfg()
     toml, _ = build_torchtitan_config(cfg)

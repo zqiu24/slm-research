@@ -67,7 +67,15 @@ def _model_block(cfg: DictConfig) -> dict:
 
 def _training_block(cfg: DictConfig) -> dict:
     seq_len = int(cfg.base.model.seq_length)
-    steps = int(cfg.training.total_tokens) // seq_len
+    # Honor an explicit training.steps (e.g. `training.steps=20` smoke runs); else
+    # derive the full schedule from the token budget. steps feeds BOTH the LR
+    # schedule AND the dataloader's num_samples (= steps * global_batch_size), so an
+    # ignored override makes a 20-step smoke build the FULL multi-billion-sample
+    # GPTDataset index — rank 0 grinds past the distributed barrier timeout while the
+    # other ranks wait. The Megatron path likewise derives train-samples from
+    # total_tokens and ignores `steps`, so this knob is torchtitan-path convenience.
+    steps_override = cfg.training.get("steps", None)
+    steps = int(steps_override) if steps_override else int(cfg.training.total_tokens) // seq_len
     return {
         "seq_len": seq_len,
         "global_batch_size": int(cfg.training.global_batch_size),
