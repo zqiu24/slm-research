@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 try:
@@ -91,7 +92,8 @@ def main() -> None:
         cfg.backend = "torchtitan"
     resolve_config(cfg)
     for note in unmapped_megatron_knobs(cfg):  # warn-and-skip Megatron-only knobs
-        print(f"[torchtitan] skipping {note}")
+        # stderr, so --dry-run stdout stays pure JSON (mirrors train_megatron).
+        print(f"[torchtitan] skipping {note}", file=sys.stderr)
     archive = archive_resolved_config(cfg)
     _write_toml(cfg)
     cmd = build_torchrun_command(cfg)
