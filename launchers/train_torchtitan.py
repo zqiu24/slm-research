@@ -80,6 +80,26 @@ def build_torchrun_command(cfg) -> list[str]:
     return cmd
 
 
+def wandb_env_for(cfg) -> dict:
+    """W&B identity env for torchtitan runs.
+
+    torchtitan's [metrics] block has only `enable_wandb` (no project/run-name
+    field, verified in docs/torchtitan_api_notes.md §1), so project + run name are
+    set via env. Using the same WANDB_PROJECT/WANDB_NAME as the Megatron path
+    lands both backends on one dashboard.
+    """
+    env = {
+        "WANDB_PROJECT": str(cfg.wandb.project),
+        "WANDB_NAME": str(cfg._derived.run_name),
+    }
+    if bool(cfg.cluster.get("wandb_offline", False)):
+        env["WANDB_MODE"] = "offline"
+    entity = cfg.wandb.get("entity", None)
+    if entity:
+        env["WANDB_ENTITY"] = str(entity)
+    return env
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("overrides", nargs="*")
@@ -121,6 +141,9 @@ def main() -> None:
     env["SLM_RESOLVED_CONFIG"] = os.fspath(
         Path(REPO_ROOT) / cfg._derived.run_dir / "resolved_config.yaml"
     )
+    # Same W&B project/run-name as the Megatron path so both backends aggregate
+    # on one dashboard (torchtitan reads these from env, not TOML).
+    env.update(wandb_env_for(cfg))
     subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=True)
 
 
