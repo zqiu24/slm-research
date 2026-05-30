@@ -45,7 +45,11 @@ def test_training_block_uses_resolved_values():
     training = toml["training"]
     assert training["seq_len"] == int(cfg.base.model.seq_length)
     assert training["global_batch_size"] == int(cfg.training.global_batch_size)
-    assert training["steps"] == int(cfg.training.total_tokens) // int(cfg.base.model.seq_length)
+    # optimizer steps = total samples / global batch; total samples (sequences) =
+    # total_tokens // seq_len, matching the Megatron path's --train-samples.
+    assert training["steps"] == int(cfg.training.total_tokens) // (
+        int(cfg.base.model.seq_length) * int(cfg.training.global_batch_size)
+    )
     # VERIFIED against v0.2.2: seed is [debug].seed, NOT [training].seed
     # (docs/torchtitan_api_notes.md §1).
     assert toml["debug"]["seed"] == int(cfg.seed)
