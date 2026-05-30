@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Bootstrap a uv env for slm-research on a CUDA host.
 #
-# Creates a sibling uv project that has slm-research + Megatron-LM installed
-# editable, pointing back at this repo. Many sibling envs can share one
-# slm-research clone.
+# Creates a sibling uv project that has slm-research + Megatron-LM +
+# torchtitan installed editable, pointing back at this repo. Many sibling
+# envs can share one slm-research clone.
 #
 # Usage (run from a GPU node, from a directory OUTSIDE the slm-research repo):
 #
@@ -185,6 +185,37 @@ if [ -d /lustre/fast/fast/zqiu/software/cu13/apex ]; then
     uv pip install -v --no-build-isolation /lustre/fast/fast/zqiu/software/cu13/apex
 else
   echo "WARN: /lustre/fast/fast/zqiu/software/cu13/apex not found; skipping apex." >&2
+fi
+
+# --- torchtitan (vendored under third_party/, editable) -------------------
+# PyTorch-native trainer; run as `python -m torchtitan.train` (see
+# third_party/torchtitan/run_train.sh), so the package must be importable —
+# install it editable pointing at the submodule.
+#
+# CRITICAL — must NOT disturb the pinned stack: torchtitan's README recommends
+# a PyTorch *nightly*, and several of its declared deps (torchdata in
+# particular) pull `torch` transitively. A naive resolve could therefore try
+# to move our EXACT torch==2.11.0 pin and break every ABI-bound CUDA extension
+# built above (TransformerEngine, flash-attn, apex, DeepEP). Two safeguards:
+#   1. install torchtitan itself with --no-deps (its other runtime deps —
+#      tensorboard, wandb, datasets, tokenizers, safetensors, einops, fsspec —
+#      are already provided by slm-research + Megatron-LM[mlm,dev] above);
+#   2. install only the genuinely-new runtime deps under a torch constraint,
+#      so any attempt to replace the cu13 torch fails LOUDLY instead of
+#      silently upgrading it.
+if [ -d "$SLM_REPO/third_party/torchtitan/torchtitan" ]; then
+  uv pip install --no-deps -e "${SLM_REPO}/third_party/torchtitan"
+  # torchtitan-only runtime deps the slm/mcore stack does not already provide
+  # (torchdata: stateful dataloader; tyro: config CLI; tabulate: metrics tables;
+  # pillow: image utils). Resolve their own sub-deps normally, but pin torch.
+  TT_CONSTRAINT="$(mktemp "${TMPDIR}/tt-constraint.XXXXXX")"
+  printf 'torch==2.11.0\n' > "$TT_CONSTRAINT"
+  uv pip install --constraint "$TT_CONSTRAINT" \
+    "torchdata>=0.8.0" tyro tabulate pillow
+  rm -f "$TT_CONSTRAINT"
+else
+  echo "WARN: $SLM_REPO/third_party/torchtitan is empty; skipping torchtitan." >&2
+  echo "      Run: git -C $SLM_REPO submodule update --init --recursive" >&2
 fi
 
 # --- git hooks (installed into the slm-research clone, not the env) -------
