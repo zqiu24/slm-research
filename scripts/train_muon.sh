@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# torchtitan is AdamW-only in milestone 1; reject --backend torchtitan here so the
+# same flag fails fast on this non-AdamW wrapper (see scripts/train_adam.sh).
+case " $* " in
+  *" --backend torchtitan "*|*" --backend=torchtitan "*)
+    echo "This optimizer is not yet supported on torchtitan (milestone 1 is AdamW only)." >&2
+    exit 2 ;;
+esac
+
 # Auto-source the cluster env loader so the user doesn't have to remember.
 # Provides: cuda/13.2 on PATH (nvcc), LD_PRELOAD=libcublasLt.so.13 (TE
 # symbol fix), and the older system cudnn-9.10.2 unloaded (torch wants
