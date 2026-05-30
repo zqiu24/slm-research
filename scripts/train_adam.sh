@@ -37,6 +37,26 @@ case "${ARCH}" in
     ;;
 esac
 
+# Extract --backend {megatron,torchtitan} (default megatron) from the passthrough
+# args, route to the matching launcher, and inject backend=<value> so it lands in
+# the resolved config (and the run name / torchtitan_sha).
+BACKEND="megatron"
+NEWARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --backend) BACKEND="$2"; shift 2 ;;
+    --backend=*) BACKEND="${1#*=}"; shift ;;
+    *) NEWARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${NEWARGS[@]}"
+
+case "${BACKEND}" in
+  megatron)   LAUNCHER="launchers.train_megatron"; BACKEND_OVERRIDE=() ;;
+  torchtitan) LAUNCHER="launchers.train_torchtitan"; BACKEND_OVERRIDE=("backend=torchtitan") ;;
+  *) echo "Unknown backend: ${BACKEND}. Use megatron or torchtitan." >&2; exit 2 ;;
+esac
+
 # Only inject the scale default if the user did not pass base/scale=...
 USER_SET_SCALE="no"
 for arg in "$@"; do
@@ -50,12 +70,18 @@ if [[ "${USER_SET_SCALE}" == "no" && -n "${DEFAULT_SCALE}" ]]; then
   SCALE_ARGS=("base/scale=${DEFAULT_SCALE}")
 fi
 
-python -m launchers.train_megatron \
+RUN=(python -m "${LAUNCHER}" \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
+  "${BACKEND_OVERRIDE[@]}" \
   "cluster=h100_de" \
   "experiment=optim/adam" \
   "training.global_batch_size=512" \
   "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
-  "$@"
+  "$@")
+if [[ "${SLM_DRYRUN_PRINT:-0}" == "1" ]]; then
+  printf '%s ' "${RUN[@]}"; echo
+else
+  "${RUN[@]}"
+fi

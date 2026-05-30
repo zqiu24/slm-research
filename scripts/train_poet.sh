@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# torchtitan is AdamW-only in milestone 1; reject --backend torchtitan here so the
+# same flag fails fast on this non-AdamW wrapper (see scripts/train_adam.sh).
+case " $* " in
+  *" --backend torchtitan "*|*" --backend=torchtitan "*)
+    echo "This optimizer is not yet supported on torchtitan (milestone 1 is AdamW only)." >&2
+    exit 2 ;;
+esac
+
 # Auto-source the cluster env loader so the user doesn't have to remember.
 # Provides: cuda/13.2 on PATH (nvcc), LD_PRELOAD=libcublasLt.so.13 (TE
 # symbol fix), and the older system cudnn-9.10.2 unloaded (torch wants
@@ -19,7 +27,7 @@ fi
 case "${ARCH}" in
   llama3)
     FAMILY="llama3"
-    DEFAULT_SCALE=""                # inherit launch config default (1_2b)
+    DEFAULT_SCALE="300m"            # smallest dense scale; override with base/scale=...
     ;;
   deepseek_v3)
     FAMILY="deepseek_v3"
@@ -31,11 +39,14 @@ case "${ARCH}" in
     ;;
 esac
 
-# Only inject the scale default if the user did not pass base/scale=...
+# Inject debug defaults unless overridden on the command line:
+#   scale=300m (smallest dense scale), seq_length=256 (short ctx for fast debug).
 USER_SET_SCALE="no"
+USER_SET_SEQ="no"
 for arg in "$@"; do
   case "${arg}" in
     base/scale=*) USER_SET_SCALE="yes" ;;
+    base.model.seq_length=*) USER_SET_SEQ="yes" ;;
   esac
 done
 
@@ -44,9 +55,15 @@ if [[ "${USER_SET_SCALE}" == "no" && -n "${DEFAULT_SCALE}" ]]; then
   SCALE_ARGS=("base/scale=${DEFAULT_SCALE}")
 fi
 
+SEQ_ARGS=()
+if [[ "${USER_SET_SEQ}" == "no" ]]; then
+  SEQ_ARGS=("base.model.seq_length=256")
+fi
+
 python -m launchers.train_megatron \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
+  "${SEQ_ARGS[@]}" \
   "cluster=h100_de" \
   "experiment=optim/poet" \
   "training.global_batch_size=512" \
