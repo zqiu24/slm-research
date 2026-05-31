@@ -32,14 +32,18 @@ def test_run_name_torchtitan_prefix():
     )
 
 
-def test_poet_name_includes_oft_scale():
-    # POET run name carries the oft_R LR multiplier (optim.poet.scale) so scale
-    # sweeps are distinguishable; explicit override keeps this robust to the
-    # yaml default. The block parameterization + lr segments are still present.
-    name = wandb_base_name(_cfg("experiment=optim/poet", "optim.poet.scale=0.5"))
-    assert name.endswith("-scale0.5")
-    assert name.startswith("poet-llama3-300m-lr")
-    assert "-bc" in name or "-bs" in name
+def test_poet_name_order_is_block_lr_scale():
+    # POET segment order: <exp>-<family>-<scale>-<block>-lr<lr>-scale<v> (block
+    # BEFORE lr). Explicit overrides keep this robust to the yaml defaults.
+    name = wandb_base_name(
+        _cfg(
+            "experiment=optim/poet",
+            "optim.lr=0.001",
+            "optim.poet.block_count=4",
+            "optim.poet.scale=0.05",
+        )
+    )
+    assert name == "poet-llama3-300m-bc4-lr0.001-scale0.05"
 
 
 def test_poet_scale_formatting_is_compact():

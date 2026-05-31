@@ -22,12 +22,14 @@
 
 ### Changed — POET run name carries oft_R scale
 
-- **POET run names now include the oft_R LR multiplier** (`src/utils/wandb_naming.py`):
-  `wandb_base_name` appends a `-scale<v>` segment (`optim.poet.scale`, formatted
-  with `:g`) after the block parameterization, e.g.
-  `poet-llama3-300m-lr0.001-bc4-scale0.05`, so POET scale sweeps are
-  distinguishable on the W&B dashboard. Only the canonical W&B run name changes;
-  the on-disk run-dir name (`exp-family-scale-s<seed>-<ts>`) is unchanged.
+- **POET run names now include the oft_R LR multiplier and order the POET
+  segments as `<block>-lr<lr>-scale<v>`** (`src/utils/wandb_naming.py`):
+  `wandb_base_name` emits the block parameterization before the LR and trails it
+  with a `-scale<v>` segment (`optim.poet.scale`, `:g`-formatted), i.e.
+  `...-<bc|bs>-lr<lr>-scale<v>`, e.g. `poet-llama3-300m-bc4-lr0.001-scale0.05`,
+  so POET block/scale sweeps are distinguishable on the W&B dashboard. Only the
+  canonical W&B run name changes; the on-disk run-dir name
+  (`exp-family-scale-s<seed>-<ts>`) is unchanged.
 
 ### Added — unified W&B logging
 
