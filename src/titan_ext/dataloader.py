@@ -117,6 +117,29 @@ def build_megatron_indexed_batches(
     return batches
 
 
+def _collate_megatron_to_titan(samples):
+    """Collate Megatron GPTDataset samples into torchtitan's ``(input_dict, labels)``.
+
+    torchtitan's training loop unpacks each batch as ``input_dict, labels = batch``
+    (``train.py`` ``batch_generator``) and reads ``input_dict["input"]`` as the model
+    input (``post_dataloading_process``). GPTDataset.__getitem__ instead returns a
+    per-sample dict of already-shifted ``torch.long`` tensors (``tokens`` = text[:-1],
+    ``labels`` = text[1:]) plus ``attention_mask``/``loss_mask``/``position_ids``.
+    Without this collate the default DataLoader collate batches that into a 5-key
+    dict and the unpack raises "too many values to unpack (expected 2)".
+
+    We map ``tokens -> {"input": ...}`` and pass ``labels`` through, dropping the
+    extra keys: torchtitan's llama3 builds its own causal mask + RoPE positions, and
+    with ``eod_mask_loss=False`` the loss_mask is all-ones so torchtitan's
+    ``labels != IGNORE_INDEX`` token count matches the Megatron path's masked loss.
+    """
+    import torch
+
+    tokens = torch.stack([s["tokens"] for s in samples])
+    labels = torch.stack([s["labels"] for s in samples])
+    return {"input": tokens}, labels
+
+
 def build_dataloader(*, dp_world_size, dp_rank, tokenizer, job_config):
     """TrainSpec build_dataloader_fn. VERIFIED signature (api notes §2/§4):
     (dp_world_size, dp_rank, tokenizer, job_config). `tokenizer` is unused — the
@@ -148,4 +171,8 @@ def build_dataloader(*, dp_world_size, dp_rank, tokenizer, job_config):
         split=str(slm.data.split),
     )
     # ParallelAwareDataloader(dataset, dp_rank, dp_world_size, **kwargs) — verified §4.
-    return ParallelAwareDataloader(ds, dp_rank, dp_world_size, batch_size=local_bs)
+    # collate_fn reshapes Megatron's per-sample dict into torchtitan's required
+    # (input_dict, labels) 2-tuple (see _collate_megatron_to_titan).
+    return ParallelAwareDataloader(
+        ds, dp_rank, dp_world_size, batch_size=local_bs, collate_fn=_collate_megatron_to_titan
+    )

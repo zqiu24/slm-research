@@ -38,3 +38,8 @@
   doesn't trip torchtitan's 300s default and crash the other ranks at the
   startup barrier. The torchtitan path always cold-builds (different cache hash
   than Megatron), so the 5-min default was insufficient on real corpora.
+- `collate_fn=_collate_megatron_to_titan` reshapes each Megatron `GPTDataset`
+  sample-dict into torchtitan's required `(input_dict, labels)` 2-tuple
+  (`{"input": tokens}`, pre-shifted `labels`), dropping the unused
+  attention_mask/loss_mask/position_ids. Without it the first training step
+  crashed in `batch_generator` with `too many values to unpack (expected 2)`.

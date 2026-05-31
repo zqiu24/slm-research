@@ -178,6 +178,13 @@ and `register_train_spec("slm_<family>", <new spec>)`.
 - `train.py` calls `build_dataloader_fn(dp_world_size=..., dp_rank=...,
   tokenizer=..., job_config=...)` (keyword), so `build_dataloader(*,
   dp_world_size, dp_rank, tokenizer, job_config)` is signature-compatible.
+- **Batch contract (load-bearing):** `train.py` `batch_generator` does
+  `input_dict, labels = batch`, and `post_dataloading_process` reads
+  `input_dict["input"]` as the model input (extra keys → `extra_inputs`, fed to
+  the forward). So each batch MUST be a 2-tuple `({"input": LongTensor[bs,seq]},
+  LongTensor[bs,seq])`. Megatron's GPTDataset yields a per-sample dict, so we
+  pass `collate_fn=_collate_megatron_to_titan` to reshape it (drops Megatron's
+  attention_mask/loss_mask/position_ids — llama3 builds its own mask + RoPE).
 
 ## 5. LR scheduler component
 
