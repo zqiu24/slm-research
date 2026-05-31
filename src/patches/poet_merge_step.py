@@ -10,12 +10,34 @@ from inside the training loop body. We instead wrap ``train_step``, which
 receives ``(forward_step_func, data_iterator, model, optimizer,
 opt_param_scheduler, config, forward_backward_func, iteration=None)`` —
 ``model`` is the 3rd positional arg, ``iteration`` the 8th kwarg/positional.
+
+Merge correctness across the Megatron optimizer (the GaLore reference is plain
+PyTorch AdamW, so it has none of this):
+
+* The merge folds the current rotation ``R(oft_R)`` into the *frozen* base
+  weight and zeros the **bf16 model** ``oft_R``. In a mixed-precision / sharded
+  optimizer the parameter the optimizer actually steps is the **fp32 master**
+  copy, not the bf16 model tensor. If only the model tensor is zeroed, the next
+  ``optimizer.step()`` copies the still-nonzero master back into the model and
+  ``oft_R`` *springs back to its pre-merge value* — re-applying the rotation a
+  second time on top of the already-merged weight → huge recurring loss spike
+  every ``poet_merge_period`` steps. So we must zero the master VALUE too.
+* The post-merge Adam-momentum reset must also reach those masters. The plain
+  ``Float16OptimizerWithFloat16Params`` exposes ``float16_groups`` /
+  ``fp32_from_float16_groups``; the ``DistributedOptimizer`` (used whenever
+  ``distributed_optimizer: true``, e.g. cluster=h100_de) instead exposes
+  ``model_float16_groups`` / ``shard_fp32_from_float16_groups`` (sharded
+  masters). The reset must handle BOTH layouts, or it silently resets zero
+  params on the distributed path.
+
+``_reset_vanilla_oft_state`` below handles both for the default Megatron-Adam
+path (``optim.poet.use_poet_adam=false``). The custom POETAdam path resets its
+own momentum; it does not yet zero the master value (tracked separately).
 """
 
 from __future__ import annotations
 
 import logging
-import os
 
 from src.patches._registry import register_patch
 
@@ -51,29 +73,73 @@ def apply() -> None:
             logger.warning("[POET] merge step skipped: model not found in train_step args")
             return ret
         _run_merge(model, dist, iteration)
-        # Vanilla A/B path: POETAdam isn't in the loop to reset momentum, so do
-        # it here (same cadence as the weight merge).
-        if os.environ.get("POET_VANILLA_OPT") == "1":
+        # Megatron-Adam path (default): POETAdam isn't in the loop to reset
+        # momentum, so do it here (same cadence as the weight merge). The custom
+        # POETAdam path (optim.poet.use_poet_adam=true) resets momentum itself,
+        # so skip it there.
+        if not getattr(opts, "poet_use_poet_adam", False):
             optimizer = args[3] if len(args) >= 4 else kwargs.get("optimizer")
             if optimizer is not None:
-                _reset_vanilla_momentum(optimizer, model, iteration)
+                _reset_vanilla_oft_state(optimizer, model, iteration)
         return ret
 
     _mt.train_step = _wrapped
 
 
-def _reset_vanilla_momentum(optimizer, model, iteration: int) -> None:
-    """POETAdam-faithful momentum reset for the ``POET_VANILLA_OPT`` path.
+def _iter_model_master_pairs(opt):
+    """Yield ``(model_param, master_param)`` for one inner Megatron optimizer.
 
-    POETAdam reset only its oft_R branch (exp_avg / exp_avg_sq / step), leaving
-    the embedding/norm Adam state untouched. We reproduce that exactly: zero the
-    Adam state for the oft_R params ONLY.
+    Covers every mixed-precision layout so the same caller works on single-GPU
+    and multi-GPU runs:
 
-    The stock bf16 optimizer keys its Adam state by the fp32 *master* params, not
-    the model's bf16 oft_R tensors, so we map model->master via the optimizer's
-    parallel ``float16_groups`` / ``fp32_from_float16_groups`` lists (state is
-    keyed by the master). Falls back to ``fp32_from_fp32_groups`` and, for an
-    FP32Optimizer, to the model params directly.
+    * ``Float16OptimizerWithFloat16Params`` (distributed_optimizer=false, e.g.
+      cluster=dev / single GPU): ``float16_groups`` <-> ``fp32_from_float16_groups``;
+      master is a full fp32 copy.
+    * ``DistributedOptimizer`` (distributed_optimizer=true, e.g. cluster=h100_de;
+      also used at DP=1): ``model_float16_groups`` <-> ``shard_fp32_from_float16_groups``;
+      master is *this rank's* fp32 shard of the param.
+    * ``FP32Optimizer``: no float16 groups — the optimizer steps the model param
+      directly, so model IS master.
+
+    ``master_param`` may equal ``model_param`` (fp32 path) and is never None.
+    """
+    # (1) plain mixed-precision, then (2) distributed (sharded) layout.
+    f16 = getattr(opt, "float16_groups", None)
+    m32 = getattr(opt, "fp32_from_float16_groups", None)
+    if f16 is None or m32 is None:
+        f16 = getattr(opt, "model_float16_groups", None)
+        m32 = getattr(opt, "shard_fp32_from_float16_groups", None)
+
+    if f16 is not None and m32 is not None:
+        for f16_grp, master_grp in zip(f16, m32, strict=False):
+            for model_p, master_p in zip(f16_grp, master_grp, strict=False):
+                if master_p is not None:
+                    yield model_p, master_p
+        return
+
+    # FP32Optimizer: master == model.
+    torch_opt = getattr(opt, "optimizer", None)
+    if torch_opt is not None:
+        for group in torch_opt.param_groups:
+            for p in group["params"]:
+                yield p, p
+
+
+def _reset_vanilla_oft_state(optimizer, model, iteration: int) -> None:
+    """POETAdam-faithful per-merge reset for the Megatron-Adam POET path (default).
+
+    For the oft_R params ONLY (leaving embedding/norm state untouched), this:
+
+    * zeros the fp32 *master* value so it matches the merge's zeroed bf16 model
+      tensor and cannot spring back on the next optimizer step (which would
+      re-apply the just-merged rotation a second time -> loss spike);
+    * zeros the master's Adam moments (``exp_avg`` / ``exp_avg_sq`` / per-param
+      and per-group ``step``) so the post-merge restart gets fresh momentum and
+      bias correction.
+
+    Both single-GPU (plain Float16 optimizer, full master) and multi-GPU
+    (DistributedOptimizer, sharded master) are covered by
+    ``_iter_model_master_pairs``.
     """
     import torch
 
@@ -85,7 +151,7 @@ def _reset_vanilla_momentum(optimizer, model, iteration: int) -> None:
         if "oft_R" in name and p.requires_grad
     }
 
-    def _zero(master_param, torch_opt) -> int:
+    def _zero_moments(master_param, torch_opt) -> int:
         st = torch_opt.state.get(master_param)
         if not st:
             return 0
@@ -101,30 +167,50 @@ def _reset_vanilla_momentum(optimizer, model, iteration: int) -> None:
         return 1
 
     inner = getattr(optimizer, "chained_optimizers", None) or [optimizer]
-    n = 0
+    n_val = 0
+    oft_master_ids = set()
+    seen_opts = []
+
     for opt in inner:
         torch_opt = getattr(opt, "optimizer", None)
         if torch_opt is None:
             continue
-        f16 = getattr(opt, "float16_groups", None)
-        fp32_master = getattr(opt, "fp32_from_float16_groups", None)
-        if f16 is not None and fp32_master is not None:
-            # bf16/fp16 optimizer: Adam state lives on the fp32 master copies.
-            for f16_grp, master_grp in zip(f16, fp32_master, strict=False):
-                for model_p, master_p in zip(f16_grp, master_grp, strict=False):
-                    if id(model_p) in oft_ids:
-                        n += _zero(master_p, torch_opt)
-            for grp in getattr(opt, "fp32_from_fp32_groups", None) or []:
-                for p in grp:
-                    if id(p) in oft_ids:
-                        n += _zero(p, torch_opt)
-        else:
-            # FP32Optimizer: Adam state is keyed by the model params directly.
-            for group in torch_opt.param_groups:
-                for p in group["params"]:
-                    if id(p) in oft_ids:
-                        n += _zero(p, torch_opt)
-    logger.info("[POET] vanilla momentum reset (oft_R only) at iter %d (%d params)", iteration, n)
+        if torch_opt not in seen_opts:
+            seen_opts.append(torch_opt)
+        for model_p, master_p in _iter_model_master_pairs(opt):
+            if id(model_p) not in oft_ids:
+                continue
+            oft_master_ids.add(id(master_p))
+            # Zero the fp32 master VALUE (no-op if master IS the model tensor,
+            # which the merge already zeroed).
+            if master_p is not model_p:
+                master_p.detach().zero_()
+            n_val += 1
+            _zero_moments(master_p, torch_opt)
+
+    # This Megatron Adam stores ``step`` PER param-group (not per-param), so the
+    # per-param reset above doesn't refresh bias correction. Reset the group-level
+    # step for any group holding oft_R masters so t -> 0 and the post-merge
+    # restart gets fresh bias correction.
+    n_groups = 0
+    for torch_opt in seen_opts:
+        for group in torch_opt.param_groups:
+            if "step" not in group:
+                continue
+            if not any(id(p) in oft_master_ids for p in group["params"]):
+                continue
+            if torch.is_tensor(group["step"]):
+                group["step"].zero_()
+            else:
+                group["step"] = 0
+            n_groups += 1
+
+    logger.info(
+        "[POET] oft_R reset at iter %d: zeroed value+momentum for %d masters (%d group-steps)",
+        iteration,
+        n_val,
+        n_groups,
+    )
 
 
 def _run_merge(model, dist, iteration: int) -> None:

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed — POET merge loss spike
+
+- **POET merge-and-reinitialize no longer spikes the loss every
+  `poet_merge_period` steps** (`src/patches/poet_merge_step.py`). On Megatron's
+  mixed-precision optimizers the merge folds the rotation into the frozen weight
+  and zeros the **bf16 model** `oft_R`, but the optimizer steps the **fp32
+  master** copy — which was left nonzero, so the next `optimizer.step()` copied
+  the stale master back and re-applied the just-merged rotation a second time (a
+  huge recurring spike the plain-PyTorch GaLore reference never has).
+  `_reset_vanilla_oft_state` now also zeros the master *value* (not just the Adam
+  moments), and discovers masters on **both** layouts via
+  `_iter_model_master_pairs`: `float16_groups`/`fp32_from_float16_groups`
+  (single-GPU `Float16OptimizerWithFloat16Params`) and
+  `model_float16_groups`/`shard_fp32_from_float16_groups` (multi-GPU
+  `DistributedOptimizer`, where the prior id-based reset silently matched 0
+  params). Verified on 8-GPU `h100_de` and single-GPU `dev`: loss descends
+  smoothly through every merge.
+
 ### Added — unified W&B logging
 
 - **Unified W&B metric keys across backends** (`src/utils/wandb_metrics.py`):
