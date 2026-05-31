@@ -128,6 +128,33 @@ def _metrics_block(cfg: DictConfig) -> dict:
     }
 
 
+def _validation_block(cfg: DictConfig) -> dict | None:
+    """``[validation]`` block mirroring the Megatron eval cadence so the torchtitan
+    backend logs ``validation_metrics/loss`` (-> ``val/loss``) on the SAME corpus.
+
+    Maps the same knobs ``megatron_args`` reads (``training.eval_interval`` ->
+    ``freq``, ``training.eval_iters`` -> ``steps``); returns ``None`` (eval off)
+    when either is <= 0. ``dataset``/``dataset_path`` are informational only — the
+    ``src.titan_ext`` monkeypatch builds the Megatron-indexed val split from
+    ``SLM_RESOLVED_CONFIG`` regardless. ``local_batch_size`` is per-DP-rank and
+    sizes the val split (steps * local_bs * dp); override via
+    ``training.eval_local_batch_size`` (default 8).
+    """
+    eval_interval = int(cfg.training.get("eval_interval", 500) or 0)
+    eval_iters = int(cfg.training.get("eval_iters", 32) or 0)
+    if eval_interval <= 0 or eval_iters <= 0:
+        return None
+    return {
+        "enable": True,
+        "dataset": "slm_megatron_indexed",
+        "dataset_path": str(cfg.data.path),
+        "freq": eval_interval,
+        "steps": eval_iters,
+        "local_batch_size": int(cfg.training.get("eval_local_batch_size", 8)),
+        "seq_len": int(cfg.base.model.seq_length),
+    }
+
+
 def _comm_block(cfg: DictConfig) -> dict:
     # The slm_megatron_indexed dataloader builds its per-run sample/shuffle index on
     # rank 0 while the other ranks wait at a torch.distributed.barrier(). A COLD build
@@ -201,5 +228,11 @@ def build_torchtitan_config(cfg: DictConfig) -> tuple[dict, list[str]]:
     toml["lr_scheduler"] = lr_scheduler_block(
         OmegaConf.to_container(cfg.scheduler, resolve=True), total_steps=toml["training"]["steps"]
     )
+    # [validation] mirrors the Megatron eval cadence (omitted when eval is off);
+    # src.titan_ext monkeypatches torchtitan's val dataloader to the Megatron-indexed
+    # val split so val/loss is comparable across backends.
+    validation = _validation_block(cfg)
+    if validation is not None:
+        toml["validation"] = validation
     overrides: list[str] = []  # dataloader (Task 9) appends here
     return toml, overrides

@@ -111,6 +111,29 @@ def test_comm_init_timeout_is_overridable_from_cluster():
     assert toml["comm"]["init_timeout_seconds"] == 7200
 
 
+def test_validation_block_mirrors_megatron_eval_cadence():
+    # torchtitan eval is enabled by default, mirroring the Megatron path's
+    # eval_interval/eval_iters, so it logs validation_metrics/loss (-> val/loss)
+    # on the same corpus. The titan_ext monkeypatch supplies the val-split loader.
+    cfg = _cfg()
+    toml, _ = build_torchtitan_config(cfg)
+    val = toml["validation"]
+    assert val["enable"] is True
+    assert val["freq"] == int(cfg.training.get("eval_interval", 500))
+    assert val["steps"] == int(cfg.training.get("eval_iters", 32))
+    assert val["seq_len"] == int(cfg.base.model.seq_length)
+
+
+def test_validation_block_omitted_when_eval_disabled():
+    from omegaconf import OmegaConf
+
+    cfg = _cfg()
+    OmegaConf.set_struct(cfg, False)  # resolved cfg is struct-locked; allow editing
+    cfg.training.eval_interval = 0
+    toml, _ = build_torchtitan_config(cfg)
+    assert "validation" not in toml
+
+
 def test_rejects_non_adamw_optimizer():
     cfg = _parse_overrides(["base/family=llama3", "experiment=optim/poet", "backend=torchtitan"])
     resolve_config(cfg)

@@ -15,6 +15,8 @@ See docs/superpowers/specs/2026-05-31-unified-wandb-logging-design.md.
 
 from __future__ import annotations
 
+import math
+
 # The cross-backend comparison set: keys both backends converge on. (perf/* and
 # train/tokens_seen are *computed* in the megatron interceptor, not renamed.)
 CORE_CANONICAL = frozenset(
@@ -79,3 +81,21 @@ def normalize(metrics: dict | None, backend: str) -> dict:
     "torchtitan"; any other value is a pass-through no-op.
     """
     return {_canonical_key(k, backend): v for k, v in (metrics or {}).items()}
+
+
+def with_derived(metrics: dict | None) -> dict:
+    """Add derived canonical metrics to an already-normalized dict.
+
+    Currently derives ``val/ppl = exp(min(20, val/loss))`` (perplexity) whenever
+    ``val/loss`` is present — mirroring Megatron's own clamp
+    (``training.py`` ``math.exp(min(20, loss))``). Megatron logs validation PPL
+    only to TensorBoard and torchtitan doesn't emit it at all, so deriving it here
+    gives both backends a perplexity curve from the canonical ``val/loss``.
+
+    Pure; idempotent (skips if ``val/ppl`` already set); no-op when ``val/loss``
+    is absent. Call AFTER :func:`normalize`.
+    """
+    metrics = dict(metrics or {})
+    if "val/loss" in metrics and "val/ppl" not in metrics:
+        metrics["val/ppl"] = math.exp(min(20.0, float(metrics["val/loss"])))
+    return metrics

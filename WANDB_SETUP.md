@@ -768,6 +768,17 @@ native names (passthrough). See
 | `train/tokens_seen` | cumulative tokens | tokens | computed (consumed_samples × seq_len) | `n_tokens_seen` |
 | `perf/step_time_s` | wall-time per iteration | seconds | computed (perf-counter window) | `time_metrics/end_to_end(s)` |
 | `val/loss` | validation loss | nats | `lm loss validation` | `validation_metrics/loss` |
+| `val/ppl` | validation perplexity | — | derived `exp(min(20, val/loss))` | derived `exp(min(20, val/loss))` |
+
+**Eval.** Both backends run validation on the **same held-out split** of the
+corpus (the middle fraction of `data.split`) and log `val/loss`. On Megatron this
+is its built-in eval (`eval_interval`/`eval_iters`); on torchtitan, `[validation]`
+is emitted by `torchtitan_args` (mirroring `eval_interval`→`freq`,
+`eval_iters`→`steps`) and `src/titan_ext` monkeypatches torchtitan's validation
+dataloader to the Megatron-indexed val split (the native `Validator` otherwise
+hardcodes a C4 raw-text loader). `val/ppl` is **derived** from `val/loss` for both
+backends (`with_derived`), because Megatron logs val PPL only to TensorBoard and
+torchtitan doesn't emit it at all.
 
 **Throughput is intentionally NOT normalized.** Megatron's native `throughput`
 is **TFLOP/s/GPU**; torchtitan's `throughput(tps)` is tokens/sec normalized by

@@ -58,6 +58,7 @@ def _build_gpt_dataset(
     vocab_size: int,
     path_to_cache=None,
     split: str = "100,0,0",
+    which: str = "train",
 ):
     from megatron.core.datasets.blended_megatron_dataset_builder import (
         BlendedMegatronDatasetBuilder,
@@ -86,9 +87,14 @@ def _build_gpt_dataset(
         reset_attention_mask=False,
         eod_mask_loss=False,
     )
-    builder = BlendedMegatronDatasetBuilder(GPTDataset, [num_samples, 0, 0], lambda: True, config)
-    train, _, _ = builder.build()
-    return train
+    # `which` picks the split to materialize: "train" requests num_samples from the
+    # train range ([n,0,0]); "valid" requests them from the validation range
+    # ([0,n,0]) — the same middle fraction of `split` Megatron evals on. Sizes for
+    # the unused splits are 0, so only the requested dataset is built.
+    sizes = {"train": [num_samples, 0, 0], "valid": [0, num_samples, 0]}[which]
+    builder = BlendedMegatronDatasetBuilder(GPTDataset, sizes, lambda: True, config)
+    train, valid, _ = builder.build()
+    return {"train": train, "valid": valid}[which]
 
 
 def build_megatron_indexed_batches(
@@ -203,3 +209,91 @@ def build_dataloader(*, dp_world_size, dp_rank, tokenizer, job_config):
         collate_fn=_collate_megatron_to_titan,
         **_perf_loader_kwargs(num_workers),
     )
+
+
+def _num_val_samples(steps: int, local_bs: int, dp_world_size: int) -> int:
+    """Total validation samples to materialize so the dataloader yields >= `steps`
+    global batches (Validator divides the summed loss by num_steps, so it must run
+    at least one step). `steps<=0` ("consume all") falls back to a finite cap to
+    avoid the cross-rank hang torchtitan warns about for validation.steps=-1."""
+    n_steps = int(steps) if int(steps) > 0 else 50
+    return n_steps * int(local_bs) * int(dp_world_size)
+
+
+def build_validation_dataloader(*, dp_world_size, dp_rank, tokenizer, job_config, infinite=False):
+    """Replacement for torchtitan's ``build_text_validation_dataloader``.
+
+    Builds the VALIDATION split of the SAME megatron ``GPTDataset`` the training
+    path uses (same ``data.split`` middle fraction, same seed/vocab/tokenization),
+    so the torchtitan backend's ``validation_metrics/loss`` is computed on the same
+    held-out documents as the Megatron backend's eval — directly comparable on one
+    dashboard. Installed via a titan_ext monkeypatch (``apply_titan_validation_
+    dataloader_patch``) because the vendored ``Validator.__init__`` hardcodes the
+    C4-style ``build_text_validation_dataloader`` with no TrainSpec hook.
+
+    Signature matches the upstream builder (keyword args from ``Validator.__init__``).
+    ``tokenizer``/``infinite`` are accepted for compatibility but unused: the corpus
+    is pre-tokenized .bin/.idx, and the split is sized to exactly cover
+    ``validation.steps`` batches (the Validator breaks at ``num_steps >= steps``).
+    """
+    import os
+
+    from omegaconf import OmegaConf
+    from torchtitan.components.dataloader import ParallelAwareDataloader
+
+    slm = OmegaConf.load(os.environ["SLM_RESOLVED_CONFIG"])
+    path, seed = str(slm.data.path), int(slm.seed)
+    vocab_size = int(slm.base.tokenizer.nominal_vocab_size)
+    seq_len = int(job_config.validation.seq_len)
+    local_bs = int(job_config.validation.local_batch_size)
+    num_val_samples = _num_val_samples(job_config.validation.steps, local_bs, dp_world_size)
+    ds = _build_gpt_dataset(
+        path,
+        seq_len,
+        num_val_samples,
+        seed,
+        vocab_size,
+        path_to_cache=f"runs/_data_cache/{slm.data.name}",
+        split=str(slm.data.split),
+        which="valid",
+    )
+    num_workers = int(slm.data.get("num_workers", 2))
+    return ParallelAwareDataloader(
+        ds,
+        dp_rank,
+        dp_world_size,
+        batch_size=local_bs,
+        collate_fn=_collate_megatron_to_titan,
+        **_perf_loader_kwargs(num_workers),
+    )
+
+
+def apply_titan_validation_dataloader_patch() -> bool:
+    """Point torchtitan's ``Validator`` at the Megatron-indexed validation split.
+
+    Replaces ``torchtitan.components.validate.build_text_validation_dataloader``
+    (the name ``Validator.__init__`` calls) with :func:`build_validation_dataloader`
+    so ``[validation].enable`` runs eval on the same corpus as training instead of
+    the C4 raw-text HF default. Idempotent; returns True if patched (or already),
+    False if torchtitan is not importable (CPU unit-test env).
+    """
+    try:
+        import torchtitan.components.validate as _v
+    except Exception:
+        return False
+
+    if getattr(_v.build_text_validation_dataloader, "_slm_val_patched", False):
+        return True
+
+    def _patched(dp_world_size, dp_rank, tokenizer, job_config, infinite=False):
+        return build_validation_dataloader(
+            dp_world_size=dp_world_size,
+            dp_rank=dp_rank,
+            tokenizer=tokenizer,
+            job_config=job_config,
+            infinite=infinite,
+        )
+
+    _patched._slm_val_patched = True
+    _v.build_text_validation_dataloader = _patched
+    return True

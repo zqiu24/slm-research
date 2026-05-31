@@ -129,17 +129,18 @@ def _wrap_titan_wandb_log(orig_log):
 
     Runs ``src.utils.wandb_metrics.normalize(metrics, "torchtitan")`` BEFORE the
     upstream body (which applies any ``tag/`` prefix and calls ``wandb.log``), so
-    e.g. ``loss_metrics/global_avg_loss`` -> ``train/loss``. Backend-specific keys
+    e.g. ``loss_metrics/global_avg_loss`` -> ``train/loss``, and derives
+    ``val/ppl`` from ``val/loss`` for the validation log. Backend-specific keys
     (mfu(%), tflops, memory/*) pass through. Guarded: a transform failure falls
     back to the original metrics, never crashing training.
     """
     import contextlib
 
-    from src.utils.wandb_metrics import normalize
+    from src.utils.wandb_metrics import normalize, with_derived
 
     def _log(self, metrics, step, *args, **kwargs):
         with contextlib.suppress(Exception):
-            metrics = normalize(metrics, "torchtitan")
+            metrics = with_derived(normalize(metrics, "torchtitan"))
         return orig_log(self, metrics, step, *args, **kwargs)
 
     setattr(_log, _WANDB_WRAP_FLAG, True)

@@ -102,5 +102,17 @@ def _patch_metrics() -> None:
     apply_titan_wandb_normalize()
 
 
+def _patch_validation() -> None:
+    # Point torchtitan's Validator at the Megatron-indexed validation split so
+    # [validation].enable evals on the same corpus as training (comparable to the
+    # Megatron backend's eval). Must run before Trainer init builds the Validator;
+    # titan_ext is imported via experimental.custom_import at startup. No-ops if
+    # torchtitan is absent (CPU unit-test env).
+    from src.titan_ext.dataloader import apply_titan_validation_dataloader_patch
+
+    apply_titan_validation_dataloader_patch()
+
+
 _register()
 _patch_metrics()
+_patch_validation()

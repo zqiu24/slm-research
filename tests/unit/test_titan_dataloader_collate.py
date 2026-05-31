@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import torch
 
-from src.titan_ext.dataloader import _collate_megatron_to_titan, _perf_loader_kwargs
+from src.titan_ext.dataloader import (
+    _collate_megatron_to_titan,
+    _num_val_samples,
+    _perf_loader_kwargs,
+    apply_titan_validation_dataloader_patch,
+)
 
 
 def _sample(seq_len: int, fill: int) -> dict:
@@ -65,3 +70,21 @@ def test_perf_loader_kwargs_drops_worker_only_args_when_zero():
     # prefetch_factor/persistent_workers are invalid without workers — must be absent.
     kw = _perf_loader_kwargs(0)
     assert kw == {"num_workers": 0, "pin_memory": True}
+
+
+def test_num_val_samples_sizes_for_steps_batches():
+    # The validation split must yield >= validation.steps global batches, else the
+    # Validator divides the summed loss by num_steps==0. Size = steps*local_bs*dp.
+    assert _num_val_samples(32, 8, 4) == 32 * 8 * 4
+    assert _num_val_samples(10, 1, 1) == 10
+
+
+def test_num_val_samples_caps_consume_all_to_finite():
+    # steps=-1 ("consume all") would hang across ranks; fall back to a finite cap.
+    assert _num_val_samples(-1, 8, 4) == 50 * 8 * 4
+    assert _num_val_samples(0, 2, 1) == 50 * 2
+
+
+def test_apply_titan_validation_patch_noops_without_torchtitan():
+    # CPU unit-test env has no torchtitan -> returns False, never raises.
+    assert apply_titan_validation_dataloader_patch() in (True, False)

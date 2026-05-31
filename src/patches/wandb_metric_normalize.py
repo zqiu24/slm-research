@@ -62,13 +62,14 @@ def _extra_metrics(consumed_samples, seq_length, iteration, now, last):
 
 
 def _wrap_wandb_log(orig_log):
-    """Return a ``wandb.log`` wrapper that canonicalizes Megatron metric keys."""
-    from src.utils.wandb_metrics import normalize
+    """Return a ``wandb.log`` wrapper that canonicalizes Megatron metric keys and
+    derives ``val/ppl`` from ``val/loss`` (Megatron logs val PPL only to TB)."""
+    from src.utils.wandb_metrics import normalize, with_derived
 
     def _log(data, *args, **kwargs):
         try:
             if isinstance(data, dict):
-                data = normalize(data, "megatron")
+                data = with_derived(normalize(data, "megatron"))
         except Exception:  # logging must never crash training
             pass
         return orig_log(data, *args, **kwargs)

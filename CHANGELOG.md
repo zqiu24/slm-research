@@ -20,6 +20,17 @@
   its native throughput as a passthrough. Backend-specific extras pass through
   unchanged; no vendored-submodule edits. Design + plan in
   `docs/superpowers/{specs,plans}/2026-05-31-unified-wandb-logging*.md`.
+- **Eval/validation in W&B for both backends.** Added a derived `val/ppl`
+  (`exp(min(20, val/loss))`, via `wandb_metrics.with_derived`) so eval perplexity
+  shows alongside `val/loss` — Megatron logs val PPL only to TensorBoard and
+  torchtitan didn't emit it. Enabled **torchtitan validation**: `torchtitan_args`
+  emits a `[validation]` block mirroring the Megatron eval cadence
+  (`eval_interval`→`freq`, `eval_iters`→`steps`), and `src/titan_ext` monkeypatches
+  torchtitan's validation dataloader (`build_text_validation_dataloader`) to a
+  **val split of the same Megatron-indexed `GPTDataset`** (same `data.split`), so
+  torchtitan's `val/loss` is computed on the same held-out documents as Megatron's
+  eval. The vendored `Validator` hardcodes a C4 raw-text loader with no TrainSpec
+  hook, hence the monkeypatch (consistent with the existing `titan_ext` pattern).
 - **Removed the `log_grad_norm_extra` patch** (and its `grad-norm-clipped` /
   `grad-norm-clip-coeff` W&B/TensorBoard scalars) from all experiments
   (adam, champion, poet, ngpt, muon_hybrid, template). It was a POET grad-norm

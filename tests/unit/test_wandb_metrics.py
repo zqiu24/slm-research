@@ -1,10 +1,15 @@
 """Tests for the canonical W&B metric schema + normalize()."""
 
+import math
+
+import pytest
+
 from src.utils.wandb_metrics import (
     CORE_CANONICAL,
     MEGATRON_TO_CANONICAL,
     TITAN_TO_CANONICAL,
     normalize,
+    with_derived,
 )
 
 
@@ -73,6 +78,27 @@ def test_normalize_is_idempotent_on_canonical_input():
 def test_normalize_empty_and_none():
     assert normalize({}, "megatron") == {}
     assert normalize(None, "torchtitan") == {}
+
+
+def test_with_derived_adds_val_ppl_from_val_loss():
+    out = with_derived({"val/loss": 3.0})
+    assert out["val/loss"] == 3.0
+    assert out["val/ppl"] == pytest.approx(math.exp(3.0))
+
+
+def test_with_derived_clamps_loss_at_20():
+    # Mirrors Megatron's math.exp(min(20, loss)) so a diverged eval doesn't overflow.
+    assert with_derived({"val/loss": 999.0})["val/ppl"] == pytest.approx(math.exp(20.0))
+
+
+def test_with_derived_noop_without_val_loss():
+    assert with_derived({"train/loss": 2.0}) == {"train/loss": 2.0}
+    assert with_derived({}) == {}
+
+
+def test_with_derived_idempotent():
+    once = with_derived({"val/loss": 2.0})
+    assert with_derived(once) == once
 
 
 def test_both_backends_cover_the_core_set():
