@@ -16,8 +16,9 @@
 
 - **Megatron's W&B writer is the `wandb` module itself.** `megatron/training/global_vars.py:254` does `_GLOBAL_WANDB_WRITER = wandb`, so every `wandb_writer.log({...}, iteration)` inside `training_log` is literally `wandb.log({...}, iteration)`. To rename keys, wrap `wandb.log`.
 - **`training_log` signature** (`megatron/training/training.py:1953`): `training_log(loss_dict, total_loss_dict, learning_rate, iteration, loss_scale, report_memory_flag, skipped_iter, grad_norm, params_norm, num_zeros_in_grad, max_attention_logit, pg_collection=None, is_first_iteration=False)`. So **`iteration` is positional index 3**. (The existing `log_grad_norm_extra` patch uses `a[3]` — correct. The `training_log_wandb_tokens_seen` patch uses `args[4]` — a latent bug for this SHA; do **not** copy it.)
-- **Our runs do NOT set `--log-timers-to-tensorboard`** (`src/utils/megatron_args.py` sets `--log-throughput` only). Megatron's `iteration-time` and `throughput` W&B scalars are both gated on `log_timers_to_tensorboard`, so today Megatron logs **neither to W&B** (stdout only). Therefore `perf/step_time_s` and `perf/throughput_tps` must be **computed in the hook** on the Megatron side, not renamed.
-- **Megatron's `throughput`** (when it is logged) is **TFLOP/s/GPU**, not tokens/sec — it must never be mapped onto `perf/throughput_tps`. The schema map deliberately excludes it.
+- **Our runs do NOT set `--log-timers-to-tensorboard`** (`src/utils/megatron_args.py` sets `--log-throughput` only). Megatron's `iteration-time` and `throughput` W&B scalars are both gated on `log_timers_to_tensorboard`, so today Megatron logs **neither to W&B** (stdout only). Therefore `perf/step_time_s` must be **computed in the hook** on the Megatron side (a perf-counter window), not renamed.
+- **Throughput is NOT normalized across backends** (correctness — they are different quantities). Megatron's `throughput` is **TFLOP/s/GPU**; torchtitan's `throughput(tps)` is tokens/sec **normalized by `non_data_parallel_size`** (a per-model-parallel-group rate, `metrics.py:422-423`), whereas a Megatron-computed tokens/sec would be the **global aggregate** — these would overlay as two curves a large constant factor apart. Neither is mapped to a shared key; each backend's native throughput passes through unchanged. `perf/step_time_s` (plain wall-seconds per iteration, parallelism-independent) is the comparable perf metric instead.
+- **Native W&B metrics are gated on `iteration % args.tensorboard_log_interval == 0`** (`training.py:2052`, default `1`). The computed Megatron metrics must use the **same** gate (`tensorboard_log_interval or log_interval`, matching `training_log_wandb_tokens_seen.py:42-44`) so they log at the same cadence as the renamed ones, not 10× sparser.
 - **torchtitan's `WandBLogger.log(self, metrics, step)`** (`third_party/torchtitan/torchtitan/components/metrics.py:163`) applies an optional `tag/` prefix then calls `self.wandb.log(...)`. Wrapping this method (normalize *before* the prefix) is the clean torchtitan interception point. It sits beside the existing `MetricsProcessor.log` wrapper in `src/titan_ext/metrics.py`.
 - **The patch registry** (`src/patches/_registry.py`): `@register_patch(name=..., targets=(...))` registers a module-level `apply()`. Two patches with overlapping `targets` raise `PatchConflict`. `log_grad_norm_extra` owns `targets=("megatron.training.training.training_log",)`. Our patch also wraps `training_log`, so it must register with **`targets=()`** (the same trick `training_log_wandb_tokens_seen` uses) and rely on sorted-by-name apply order (`log_grad_norm_extra` before `wandb_metric_normalize`).
 - **Patch modules must be import-safe on CPU**: `import megatron`/`import wandb`/`import torchtitan` only *inside* functions, never at module top. `launchers.submit._register_experiment_patches(cfg)` imports each named patch on the launch node (no GPU) to compute the patch-set hash.
@@ -98,7 +99,6 @@ def test_torchtitan_core_keys_map_to_canonical():
             "grad_norm": 1.1,
             "n_tokens_seen": 4096,
             "time_metrics/end_to_end(s)": 0.5,
-            "throughput(tps)": 8000.0,
         },
         "torchtitan",
     )
@@ -109,12 +109,17 @@ def test_torchtitan_core_keys_map_to_canonical():
         "train/grad_norm": 1.1,
         "train/tokens_seen": 4096,
         "perf/step_time_s": 0.5,
-        "perf/throughput_tps": 8000.0,
     }
 
 
 def test_torchtitan_validation_loss_maps_to_val_loss():
     assert normalize({"validation_metrics/loss": 3.1}, "torchtitan") == {"val/loss": 3.1}
+
+
+def test_torchtitan_throughput_tps_is_NOT_normalized():
+    # torchtitan tps is normalized by non_data_parallel_size; a Megatron-computed
+    # tokens/sec is the global aggregate. Different quantities -> stay native.
+    assert normalize({"throughput(tps)": 8000.0}, "torchtitan") == {"throughput(tps)": 8000.0}
 
 
 def test_torchtitan_unmapped_keys_pass_through():
@@ -125,7 +130,7 @@ def test_torchtitan_unmapped_keys_pass_through():
 
 
 def test_normalize_is_idempotent_on_canonical_input():
-    canonical = {"train/loss": 2.0, "perf/throughput_tps": 8000.0}
+    canonical = {"train/loss": 2.0, "perf/step_time_s": 0.5}
     assert normalize(canonical, "megatron") == canonical
     assert normalize(canonical, "torchtitan") == canonical
 
@@ -184,8 +189,9 @@ CORE_CANONICAL = frozenset(
 )
 
 # Megatron native key -> canonical. Deliberately EXCLUDES:
-#   * "throughput"      — Megatron's is TFLOP/s/GPU, not tokens/sec (would
-#                         collide with perf/throughput_tps); stays native.
+#   * "throughput"      — Megatron's is TFLOP/s/GPU; throughput is not normalized
+#                         across backends (torchtitan's tps uses a different
+#                         normalization), so it stays native on both sides.
 #   * "iteration-time"  — gated off in our runs (no --log-timers-to-tensorboard);
 #                         step time is COMPUTED in the interceptor instead.
 # Unlisted keys pass through unchanged.
@@ -196,8 +202,11 @@ MEGATRON_TO_CANONICAL = {
     "tokens seen": "train/tokens_seen",  # robustness if the legacy patch is enabled
 }
 
-# Torchtitan native key -> canonical. Unlisted keys (mfu(%), tflops, memory/*,
-# time_metrics/data_loading*, validation_metrics/throughput(tps)) pass through.
+# Torchtitan native key -> canonical. Deliberately EXCLUDES "throughput(tps)":
+# it is tokens/sec normalized by non_data_parallel_size (a per-model-parallel-
+# group rate), not comparable to a global-aggregate tokens/sec, so it stays
+# native (like Megatron's TFLOP/s "throughput"). Other unlisted keys (mfu(%),
+# tflops, memory/*, time_metrics/data_loading*, validation_metrics/*) pass through.
 TITAN_TO_CANONICAL = {
     "loss_metrics/global_avg_loss": "train/loss",
     "loss_metrics/global_max_loss": "train/loss_max",
@@ -205,7 +214,6 @@ TITAN_TO_CANONICAL = {
     "grad_norm": "train/grad_norm",
     "n_tokens_seen": "train/tokens_seen",
     "time_metrics/end_to_end(s)": "perf/step_time_s",
-    "throughput(tps)": "perf/throughput_tps",
     "validation_metrics/loss": "val/loss",
 }
 
@@ -236,7 +244,7 @@ def normalize(metrics: dict | None, backend: str) -> dict:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/unit/test_wandb_metrics.py -v`
-Expected: PASS (10 passed).
+Expected: PASS (11 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -322,7 +330,7 @@ def test_extra_metrics_first_call_only_tokens():
     assert state == {"time": 100.0, "tokens": 10 * 2048, "iter": 10}
 
 
-def test_extra_metrics_second_call_adds_step_time_and_throughput():
+def test_extra_metrics_second_call_adds_step_time():
     mod = importlib.import_module("src.patches.wandb_metric_normalize")
     last = {"time": 100.0, "tokens": 20480, "iter": 10}  # 10 samples * 2048
     metrics, state = mod._extra_metrics(
@@ -331,17 +339,18 @@ def test_extra_metrics_second_call_adds_step_time_and_throughput():
     # tokens now = 20*2048 = 40960; dt = 10s; steps = 20-10 = 10.
     assert metrics["train/tokens_seen"] == 40960
     assert metrics["perf/step_time_s"] == pytest.approx(1.0)  # 10s / 10 steps
-    assert metrics["perf/throughput_tps"] == pytest.approx((40960 - 20480) / 10.0)
+    # Throughput is intentionally NOT emitted (not comparable across backends).
+    assert "perf/throughput_tps" not in metrics
     assert state == {"time": 110.0, "tokens": 40960, "iter": 20}
 
 
-def test_extra_metrics_zero_dt_skips_rates():
+def test_extra_metrics_zero_dt_skips_step_time():
     mod = importlib.import_module("src.patches.wandb_metric_normalize")
     last = {"time": 100.0, "tokens": 20480, "iter": 10}
     metrics, _ = mod._extra_metrics(
         consumed_samples=20, seq_length=2048, iteration=20, now=100.0, last=last
     )
-    assert metrics == {"train/tokens_seen": 40960}  # no rates when dt == 0
+    assert metrics == {"train/tokens_seen": 40960}  # no step time when dt == 0
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -368,10 +377,14 @@ Two orthogonal changes, both guarded so logging never crashes training:
 
 2. **Add computed metrics.** Our runs don't set --log-timers-to-tensorboard, so
    Megatron logs neither iteration-time nor throughput to W&B. We wrap
-   ``training_log`` to additively emit ``train/tokens_seen``,
-   ``perf/step_time_s`` and ``perf/throughput_tps`` (from
-   ``consumed_train_samples * seq_length`` and a perf-counter window) once per
-   ``log_interval``, on the W&B-logging rank only.
+   ``training_log`` to additively emit ``train/tokens_seen`` (from
+   ``consumed_train_samples * seq_length``) and ``perf/step_time_s`` (a
+   perf-counter window), on the W&B-logging rank only, gated on the SAME interval
+   as the native metrics (``tensorboard_log_interval`` or ``log_interval``).
+   Throughput is intentionally NOT emitted: Megatron's would be a global-aggregate
+   tokens/sec while torchtitan's ``throughput(tps)`` is normalized by
+   ``non_data_parallel_size`` — not comparable, so each backend keeps its native
+   throughput as a passthrough extra.
 
 Registered with ``targets=()`` so it composes with ``log_grad_norm_extra``
 (which owns ``training.training_log``). Apply order is sorted-by-name:
@@ -394,7 +407,8 @@ def _extra_metrics(consumed_samples, seq_length, iteration, now, last):
 
     Returns ``(metrics, new_state)``. ``last`` is the previous emit's state dict
     (or None on the first emit). The first emit carries only the cumulative
-    ``train/tokens_seen``; later emits add per-window step time and throughput.
+    ``train/tokens_seen``; later emits add the per-window ``perf/step_time_s``.
+    Throughput is intentionally omitted (see module docstring).
     """
     tokens = int(consumed_samples) * int(seq_length)
     metrics = {"train/tokens_seen": tokens}
@@ -403,7 +417,6 @@ def _extra_metrics(consumed_samples, seq_length, iteration, now, last):
         steps = max(1, int(iteration) - int(last["iter"]))
         if dt > 0:
             metrics["perf/step_time_s"] = dt / steps
-            metrics["perf/throughput_tps"] = (tokens - last["tokens"]) / dt
     new_state = {"time": float(now), "tokens": tokens, "iter": int(iteration)}
     return metrics, new_state
 
@@ -451,12 +464,15 @@ def apply() -> None:
                 iteration = kwargs.get("iteration")
                 if iteration is None and len(args) > 3:
                     iteration = args[3]  # training_log(loss_dict, total, lr, iteration, ...)
-                log_interval = int(getattr(opts, "log_interval", 0) or 0)
-                if (
-                    iteration is not None
-                    and log_interval
-                    and int(iteration) % log_interval == 0
-                ):
+                # Match the native-metric cadence: training_log gates its wandb
+                # block on tensorboard_log_interval (training.py:2052). Mirror the
+                # tokens_seen patch's gate so computed metrics aren't 10x sparser.
+                interval = int(
+                    getattr(opts, "tensorboard_log_interval", None)
+                    or getattr(opts, "log_interval", 0)
+                    or 0
+                )
+                if iteration is not None and interval and int(iteration) % interval == 0:
                     metrics, state["last"] = _extra_metrics(
                         getattr(opts, "consumed_train_samples", 0),
                         getattr(opts, "seq_length", 0),
@@ -561,7 +577,7 @@ In the `patches:` block, after the `log_grad_norm_extra` line, add:
 
 ```yaml
     - log_grad_norm_extra     # always-on: log post-clip grad-norm + clip-coeff
-    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time / throughput_tps
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
 ```
 
 (The first line already exists — add only the `wandb_metric_normalize` line beneath it.)
@@ -572,7 +588,7 @@ In its `patches:` block, after `log_grad_norm_extra`, add the identical line:
 
 ```yaml
     - log_grad_norm_extra     # always-on: log post-clip grad-norm + clip-coeff
-    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time / throughput_tps
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
 ```
 
 - [ ] **Step 5: Run tests to verify they pass**
@@ -757,13 +773,14 @@ native names (passthrough). See
 | `train/grad_norm` | raw (pre-clip) grad norm | — | `grad-norm` | `grad_norm` |
 | `train/tokens_seen` | cumulative tokens | tokens | computed (consumed_samples × seq_len) | `n_tokens_seen` |
 | `perf/step_time_s` | wall-time per iteration | seconds | computed (perf-counter window) | `time_metrics/end_to_end(s)` |
-| `perf/throughput_tps` | throughput | tokens/sec | computed (Δtokens / Δt) | `throughput(tps)` |
 | `val/loss` | validation loss | nats | `lm loss validation` | `validation_metrics/loss` |
 
-**Note:** Megatron's native `throughput` is **TFLOP/s/GPU** (not tokens/sec) and
-is intentionally *not* mapped to `perf/throughput_tps`; it passes through under
-its native name when `--log-timers-to-tensorboard` is enabled. TensorBoard keys
-are not normalized (W&B only).
+**Throughput is intentionally NOT normalized.** Megatron's native `throughput`
+is **TFLOP/s/GPU**; torchtitan's `throughput(tps)` is tokens/sec normalized by
+`non_data_parallel_size` (a per-model-parallel-group rate). These are different
+quantities and would not overlay, so each backend keeps its native throughput key
+as a passthrough extra; `perf/step_time_s` is the comparable perf metric.
+TensorBoard keys are not normalized (W&B only).
 ```
 
 - [ ] **Step 2: Add a CHANGELOG entry**
@@ -774,14 +791,15 @@ Under the `## Unreleased` heading in `CHANGELOG.md`, add a bullet under the most
 - **Unified W&B metric keys across backends** (`src/utils/wandb_metrics.py`):
   both backends now normalize their core training-health metrics onto one
   canonical schema (`train/loss`, `train/lr`, `train/grad_norm`,
-  `train/tokens_seen`, `perf/step_time_s`, `perf/throughput_tps`, `val/loss`) so
-  Megatron and torchtitan runs overlay on one dashboard. Applied via a registered
-  Megatron patch (`wandb_metric_normalize`, wraps `wandb.log`; also computes
-  tokens_seen / step_time / throughput, which our runs don't log to W&B) and a
-  torchtitan `WandBLogger.log` wrapper in `src/titan_ext/metrics.py`. Megatron's
-  TFLOP/s `throughput` is deliberately kept distinct from the tokens/sec
-  `perf/throughput_tps`. Backend-specific extras pass through unchanged; no
-  vendored-submodule edits. Design + plan in
+  `train/tokens_seen`, `perf/step_time_s`, `val/loss`) so Megatron and torchtitan
+  runs overlay on one dashboard. Applied via a registered Megatron patch
+  (`wandb_metric_normalize`, wraps `wandb.log`; also computes tokens_seen /
+  step_time, which our runs don't log to W&B) and a torchtitan `WandBLogger.log`
+  wrapper in `src/titan_ext/metrics.py`. Throughput is deliberately NOT normalized
+  (Megatron's `throughput` is TFLOP/s/GPU; torchtitan's `throughput(tps)` is
+  normalized by `non_data_parallel_size` — not comparable), so each backend keeps
+  its native throughput as a passthrough. Backend-specific extras pass through
+  unchanged; no vendored-submodule edits. Design + plan in
   `docs/superpowers/{specs,plans}/2026-05-31-unified-wandb-logging*.md`.
 ```
 
@@ -822,8 +840,8 @@ Expected: PASS — in particular the pre-existing `test_patch_training_log_eta`,
 
 These require GPUs / a real run and are **not** executed by the implementing agent (no working training env in the harness):
 
-1. Short Megatron smoke: `bash scripts/train_adam.sh llama3 training.steps=20 training.log_interval=5` and confirm W&B shows `train/loss`, `train/lr`, `train/grad_norm`, `train/tokens_seen`, `perf/step_time_s`, `perf/throughput_tps` (and that `lm loss` / `learning-rate` / `grad-norm` no longer appear as separate curves).
-2. Short torchtitan smoke: `bash scripts/train_adam_titan.sh llama3 training.steps=20` and confirm the same canonical keys appear, plus torchtitan extras (`mfu(%)`, `tflops`, `memory/*`).
+1. Short Megatron smoke: `bash scripts/train_adam.sh llama3 training.steps=20 training.log_interval=5` and confirm W&B shows `train/loss`, `train/lr`, `train/grad_norm`, `train/tokens_seen`, `perf/step_time_s` (and that `lm loss` / `learning-rate` / `grad-norm` no longer appear as separate curves).
+2. Short torchtitan smoke: `bash scripts/train_adam_titan.sh llama3 training.steps=20` and confirm the same canonical keys appear, plus torchtitan extras (`mfu(%)`, `tflops`, `memory/*`, native `throughput(tps)`).
 3. Overlay both runs on one W&B dashboard; confirm `train/loss` curves are directly comparable.
 
 ---
@@ -833,7 +851,7 @@ These require GPUs / a real run and are **not** executed by the implementing age
 **Spec coverage:**
 - §1 canonical schema → Task 1 (`CORE_CANONICAL`, maps) + Task 5 table. ✅
 - §2 mapping table → Task 1 (`MEGATRON_TO_CANONICAL`, `TITAN_TO_CANONICAL`, validation rule) + tests. ✅
-- §3 computed Megatron metrics → Task 2 `_extra_metrics` (tokens_seen always; step_time + throughput on later emits) + tests. ✅
+- §3 computed Megatron metrics → Task 2 `_extra_metrics` (tokens_seen always; step_time on later emits; throughput intentionally omitted as non-comparable) + tests. ✅
 - §4.1 `src/utils/wandb_metrics.py` → Task 1. ✅
 - §4.2 Megatron patch (wrap `wandb.log` + `training_log`, `targets=()`, added to adam/champion) → Tasks 2 + 3. ✅
 - §4.3 torchtitan interceptor (wrap `WandBLogger.log`, wired into `__init__`) → Task 4. ✅
