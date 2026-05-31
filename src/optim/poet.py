@@ -103,6 +103,14 @@ class POETAdam(torch.optim.Optimizer):
     def step(self, closure=None):
         ret = self.base_optimizer.step(closure)
         self.global_step_counter += 1
+        # TEMP VERIFY (POET_VERIFY=1; delete later): confirm POETAdam.step is
+        # actually invoked (Q2 — it is reached via Float16Optimizer.step_with_ready_grads).
+        if os.environ.get("POET_VERIFY", "0") == "1" and self.global_step_counter <= 3:
+            print(
+                f"[POET-VERIFY] POETAdam.step CALLED (counter={self.global_step_counter}, "
+                f"poet_merge_period={self.poet_merge_period})",
+                flush=True,
+            )
         if _pc.get_cache_mode() != "none":
             _pc.bump_poet_version()
         if self.poet_merge_period > 0 and self.global_step_counter % self.poet_merge_period == 0:
@@ -114,6 +122,11 @@ class POETAdam(torch.optim.Optimizer):
         return ret
 
     def _reset_momentum(self) -> None:
+        # TEMP VERIFY (POET_VERIFY=1; delete later): track that the merge-period
+        # reset actually zeroes the Adam step counter for oft_R params (Q2).
+        _verify = os.environ.get("POET_VERIFY", "0") == "1"
+        _n_step = 0
+        _sample_before = None
         for group in self.base_optimizer.param_groups:
             for p in group["params"]:
                 st = self.base_optimizer.state.get(p, {})
@@ -122,10 +135,23 @@ class POETAdam(torch.optim.Optimizer):
                 if "exp_avg_sq" in st:
                     st["exp_avg_sq"].zero_()
                 if "step" in st:
+                    if _verify and _sample_before is None:
+                        _s = st["step"]
+                        _sample_before = (
+                            float(_s.item()) if isinstance(_s, torch.Tensor) else float(_s)
+                        )
                     if isinstance(st["step"], torch.Tensor):
                         st["step"].zero_()
                     else:
                         st["step"] = 0
+                    _n_step += 1
+        if _verify:
+            print(
+                f"[POET-VERIFY] _reset_momentum FIRED (counter={self.global_step_counter}): "
+                f"zeroed exp_avg/exp_avg_sq/step for {_n_step} oft_R params; "
+                f"sample step {_sample_before} -> 0",
+                flush=True,
+            )
 
     # Forward any other attribute access to the base optimizer.
     def __getattr__(self, name: str) -> Any:
@@ -344,6 +370,50 @@ def _build_vanilla_poet_optimizer(
     )
 
 
+def _verify_poet_groups(chained, model_chunks) -> None:
+    """TEMP VERIFY (POET_VERIFY=1; delete later). Dump each optimizer param
+    group's lr / max_lr / weight_decay, labeling oft_R groups vs the rest, so a
+    dev run can confirm:
+      Q1 — oft_R (POET) groups have a different LR than normal params (poet_scale).
+      Q3 — which groups get weight decay.
+    """
+    if os.environ.get("POET_VERIFY", "0") != "1":
+        return
+    try:
+        rank = (
+            torch.distributed.get_rank()
+            if (torch.distributed.is_available() and torch.distributed.is_initialized())
+            else 0
+        )
+        if rank != 0:
+            return
+        id2name = {}
+        for mc in model_chunks:
+            for n, p in mc.named_parameters():
+                id2name[id(p)] = n
+        print(
+            "[POET-VERIFY] ===== optimizer param groups (lr / max_lr / weight_decay) =====",
+            flush=True,
+        )
+        for oi, opt in enumerate(chained.chained_optimizers):
+            inner = getattr(opt, "optimizer", opt)
+            for gi, g in enumerate(getattr(inner, "param_groups", [])):
+                ps = g.get("params", [])
+                names = [id2name.get(id(p), "?") for p in ps]
+                n_oft = sum(1 for nm in names if "oft_R" in nm)
+                kind = "OFT" if (ps and n_oft == len(ps)) else ("MIXED" if n_oft else "non-oft")
+                print(
+                    f"[POET-VERIFY] chain[{oi}].group[{gi}] kind={kind} "
+                    f"lr={g.get('lr')} max_lr={g.get('max_lr')} min_lr={g.get('min_lr')} "
+                    f"weight_decay={g.get('weight_decay')} wd_mult={g.get('wd_mult')} "
+                    f"nparams={len(ps)} n_oft={n_oft} sample={names[0] if names else ''}",
+                    flush=True,
+                )
+        print("[POET-VERIFY] ===== end param groups =====", flush=True)
+    except Exception as e:
+        print(f"[POET-VERIFY] group dump failed: {e}", flush=True)
+
+
 def get_megatron_poet_optimizer(
     config: Any,
     model_chunks: list,
@@ -478,4 +548,6 @@ def get_megatron_poet_optimizer(
     for p in linear_params:
         p.requires_grad = True
 
-    return ChainedOptimizer([poet_wrapped, *chained_adam.chained_optimizers])
+    chained = ChainedOptimizer([poet_wrapped, *chained_adam.chained_optimizers])
+    _verify_poet_groups(chained, model_chunks)  # TEMP VERIFY (POET_VERIFY=1; delete later)
+    return chained
