@@ -42,6 +42,10 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-mup-alpha", type=float, default=1.0)
     group.add_argument("--poet-merge-period", type=int, default=0)
     group.add_argument("--poet-scale", type=float, default=1.0)
+    # Optimizer impl: default (flag absent) uses the stock Megatron-Adam path
+    # (oft_R LR override + poet_merge_step momentum reset). Pass this flag to use
+    # the custom POETAdam + ChainedOptimizer path instead.
+    group.add_argument("--poet-use-poet-adam", action="store_true")
     group.add_argument(
         "--poet-cache-mode",
         choices=["none", "cached_fwd", "cached_fwd_bwd"],
@@ -124,6 +128,16 @@ def main() -> None:
     import pretrain_gpt as mg
     from megatron.core.enums import ModelType
     from megatron.training import inprocess_restart, pretrain, set_startup_timestamps
+
+    # Optionally re-initialize the built model to torchtitan's native llama3 init
+    # scheme so the Megatron backend reproduces a torchtitan training curve. Wraps
+    # the (possibly unfuse-wrapped) model_provider, so the re-init runs AFTER unfuse
+    # and BEFORE DDP/optimizer setup. Gated on the resolved config, not the
+    # experiment, so only configs that opt in (e.g. base/scale/300m) are affected.
+    if bool(cfg.get("base", {}).get("model", {}).get("titan_init", False)):
+        from src.model.titan_init import wrap_model_provider
+
+        mg.model_provider = wrap_model_provider(mg.model_provider)
 
     set_startup_timestamps(
         program_start=mg._PROGRAM_START_TIME,
