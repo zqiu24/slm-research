@@ -14,7 +14,6 @@ experiment:
   patches:
     - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
-    - log_grad_norm_extra     # always-on: log post-clip grad-norm + clip-coeff
   required_capabilities: []
 
 optim:

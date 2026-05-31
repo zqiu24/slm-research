@@ -26,11 +26,11 @@ Two orthogonal changes, both guarded so logging never crashes training:
    ``non_data_parallel_size`` — not comparable, so each backend keeps its native
    throughput as a passthrough extra.
 
-Registered with ``targets=()`` so it composes with ``log_grad_norm_extra``
-(which owns ``training.training_log``). Apply order is sorted-by-name:
-``log_grad_norm_extra`` (l) wraps first, ``wandb_metric_normalize`` (w) wraps the
-result. Module import is CPU-safe (megatron / wandb imported only inside
-``apply()``).
+Registered with ``targets=()`` (not the ``training_log`` symbol it monkeypatches):
+the registry's target-ownership is for *static* conflict detection, and a runtime
+``training_log`` wrapper composes fine with any other one (e.g. the legacy
+``training_log_wandb_tokens_seen``, also ``targets=()``). Module import is CPU-safe
+(megatron / wandb imported only inside ``apply()``).
 """
 
 from __future__ import annotations

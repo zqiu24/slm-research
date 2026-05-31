@@ -15,7 +15,6 @@ experiment:
     - "Hu et al. 2024 (arXiv:2404.06395) — MiniCPM"
   patches:
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
-    - log_grad_norm_extra     # always-on: log post-clip grad-norm + clip-coeff
     - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
   required_capabilities: []
 

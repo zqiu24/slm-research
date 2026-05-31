@@ -1,7 +1,11 @@
 # Unified W&B logging across Megatron and torchtitan backends — design
 
 **Date:** 2026-05-31
-**Status:** approved (design), pending implementation plan
+**Status:** approved (design), implemented.
+**Update 2026-06-01:** the `log_grad_norm_extra` patch (the `grad-norm-clipped` /
+`grad-norm-clip-coeff` POET-debug scalars) has since been **removed** from all
+experiments — only the raw grad-norm (`train/grad_norm`) is kept. Mentions of it
+below (passthrough lists, `targets=()` composition) are historical context.
 **Scope:** normalize the **W&B metric keys** emitted by the two training
 backends (`backend=megatron` via `scripts/train_adam.sh`, `backend=torchtitan`
 via `scripts/train_adam_titan.sh`) onto a single, neutral, namespaced schema, so

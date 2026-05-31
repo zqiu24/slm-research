@@ -10,6 +10,13 @@
 
 **Spec:** [docs/superpowers/specs/2026-05-31-unified-wandb-logging-design.md](/lustre/fast/fast/zqiu/slm-research/docs/superpowers/specs/2026-05-31-unified-wandb-logging-design.md)
 
+> **Update 2026-06-01 (post-implementation):** the `log_grad_norm_extra` patch
+> (the `grad-norm-clipped` / `grad-norm-clip-coeff` POET-debug scalars) has been
+> **removed** from all experiments — only the raw grad-norm (`train/grad_norm`) is
+> kept. Inline mentions of it below (Task 2/3 `targets=()` composition, the
+> passthrough example asserting `grad-norm-clipped`) are historical; the live tests
+> were updated to drop the dependency.
+
 ---
 
 ## Background an implementer needs (verified facts)

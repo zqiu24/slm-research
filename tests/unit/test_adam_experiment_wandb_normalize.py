@@ -1,5 +1,6 @@
-"""The adam/champion experiments must enable wandb_metric_normalize, and it must
-co-register with log_grad_norm_extra (both touch training_log) without conflict."""
+"""The adam/champion experiments must enable wandb_metric_normalize, and the
+logging patches must co-register without a PatchConflict (wandb_metric_normalize
+wraps training_log via a runtime monkeypatch declared with targets=())."""
 
 import sys
 from pathlib import Path
@@ -16,10 +17,8 @@ _REPO = Path(__file__).resolve().parents[2]
 def _clean():
     _reset_for_tests()
     for name in (
-        "src.patches.log_grad_norm_extra",
         "src.patches.wandb_metric_normalize",
         "src.patches.training_log_eta",
-        "src.patches.model_unfuse_linears",
     ):
         sys.modules.pop(name, None)
     yield
@@ -32,16 +31,18 @@ def test_experiment_lists_wandb_normalize(rel):
     assert "wandb_metric_normalize" in list(cfg.experiment.patches)
 
 
-def test_wandb_normalize_composes_with_grad_norm_extra():
-    # Both wrap training_log; one declares the target, the other targets=().
+def test_logging_patches_register_without_conflict():
+    # training_log_eta (wraps print_rank_last) and wandb_metric_normalize
+    # (targets=(), wraps training_log at runtime) must co-register cleanly.
     # _register_experiment_patches imports + hashes them (no apply, CPU-safe).
     from launchers.submit import _register_experiment_patches
     from src.patches import registered_patches
 
     cfg = OmegaConf.create(
-        {"experiment": {"patches": ["log_grad_norm_extra", "wandb_metric_normalize"]}}
+        {"experiment": {"patches": ["training_log_eta", "wandb_metric_normalize"]}}
     )
     h = _register_experiment_patches(cfg)
     reg = registered_patches()
-    assert "wandb_metric_normalize" in reg and "log_grad_norm_extra" in reg
+    assert "wandb_metric_normalize" in reg and "training_log_eta" in reg
+    assert reg["wandb_metric_normalize"].targets == ()
     assert len(h) == 16 and not h.startswith("noop")

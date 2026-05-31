@@ -19,8 +19,8 @@ def _clean():
 
 
 def test_patch_registers_with_empty_targets():
-    # Empty targets so it composes with log_grad_norm_extra (which owns
-    # training_log) without a PatchConflict.
+    # targets=() so the runtime training_log wrapper never raises a PatchConflict
+    # against the registry's static training_log owner.
     importlib.import_module("src.patches.wandb_metric_normalize")
     reg = registered_patches()
     assert "wandb_metric_normalize" in reg

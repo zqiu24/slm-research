@@ -13,8 +13,7 @@ experiment:
     TEMPLATE_REPLACE_ME — one paragraph hypothesis + mechanism, enough for a
     teammate to understand the intent without reading the accompanying doc.
   references: []                     # arXiv / blog links; empty list is OK
-  patches:                           # names registered under src/patches/
-    - log_grad_norm_extra            # always-on: log post-clip grad-norm + clip-coeff
+  patches: []                        # names registered under src/patches/
 
   required_capabilities: []          # must be subset of cluster.capabilities
 

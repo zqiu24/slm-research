@@ -22,7 +22,6 @@ experiment:
     - ngpt_normalize_step
     - ngpt_optimizer_setup
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
-    - log_grad_norm_extra     # always-on: log post-clip grad-norm + clip-coeff
   required_capabilities: []
 
 optim:

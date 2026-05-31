@@ -20,6 +20,11 @@
   its native throughput as a passthrough. Backend-specific extras pass through
   unchanged; no vendored-submodule edits. Design + plan in
   `docs/superpowers/{specs,plans}/2026-05-31-unified-wandb-logging*.md`.
+- **Removed the `log_grad_norm_extra` patch** (and its `grad-norm-clipped` /
+  `grad-norm-clip-coeff` W&B/TensorBoard scalars) from all experiments
+  (adam, champion, poet, ngpt, muon_hybrid, template). It was a POET grad-norm
+  debugging aid; the POET issue is resolved, so only the raw grad-norm
+  (`train/grad_norm`, from Megatron's native `grad-norm`) is kept.
 
 ### Added — torchtitan training backend (M1–M2)
 
