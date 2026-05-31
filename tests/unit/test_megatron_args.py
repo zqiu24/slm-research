@@ -91,7 +91,12 @@ def test_poet_args_use_slm_optimizer_and_keep_megatron_optimizer_adam():
     assert args["--optimizer"] == "adam"
     assert args["--slm-optimizer"] == "poet"
     assert args["--poet"] is True
-    assert args["--poet-block-size"] == "256"
+    # POET takes EITHER --poet-block-size (bs) OR --poet-block-count (bc), never
+    # both. The optim/poet experiment may set either, so assert the contract
+    # (exactly one, positive value) rather than hardcoding one parameterization.
+    has_bs, has_bc = "--poet-block-size" in args, "--poet-block-count" in args
+    assert has_bs ^ has_bc, "poet must emit exactly one of block-size / block-count"
+    assert int(args["--poet-block-size" if has_bs else "--poet-block-count"]) > 0
     assert args["--poet-merge-period"] == "200"
 
 
