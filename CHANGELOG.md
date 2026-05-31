@@ -49,3 +49,16 @@
   `wandb_run_name`. torchtitan's `WANDB_NAME` switched from the timestamped run-dir
   name to this shared name, so the two backends' W&B names differ **only** by the
   prefix and land side-by-side on one dashboard. (Run-*dir* names are unchanged.)
+- **Megatron 300m aligned to the torchtitan model build** so a Megatron run
+  reproduces the torchtitan training curve. torchtitan builds llama3 from its
+  native flavor (ignores `ffn_hidden_size`, derives the FFN from `dim`; untied
+  embeddings; depth-scaled init), so `configs/base/scale/300m.yaml` now sets
+  `ffn_hidden_size: 2816` (matches torchtitan's `dim`-derived width),
+  `tie_embeddings: false`, and a new `titan_init: true` flag. The init scheme has
+  no Megatron config knob, so `src/model/titan_init.py` re-initializes the built
+  model to torchtitan's exact per-weight recipe (std=1.0 embeddings, fixed-0.02
+  fan-in / gate, per-layer depth-scaled output·up·down, `dim**-0.5` LM head) —
+  wired in `launchers/pretrain_gpt_slm.py` as a post-build, pre-DDP
+  `model_provider` wrapper (after unfuse), gated on the config, TP=PP=1, seeded
+  for data-parallel-replica determinism. No-op on the torchtitan backend.
+  Covered by `tests/unit/test_titan_init.py`.
