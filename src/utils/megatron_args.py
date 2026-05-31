@@ -8,6 +8,7 @@ from typing import Any
 from omegaconf import DictConfig, OmegaConf
 
 from src.utils.scheduler import scheduler_args
+from src.utils.wandb_naming import wandb_run_name
 
 
 def _truthy(value: Any) -> bool:
@@ -319,42 +320,6 @@ def _data_args(cfg: DictConfig) -> list[str]:
     return args
 
 
-def _wandb_run_name(cfg: DictConfig) -> str:
-    """Build the wandb run name: ``<experiment>-<family>-<scale>-lr<lr>``.
-
-    No seed. ``lr`` is ``optim.lr`` for adam/poet/ngpt. For muon_hybrid it is
-    the Adam-side LR (``optim.adam.lr``) and a second ``-muon_lr<lr>`` segment
-    holds the Muon-side LR (``optim.muon.lr``). POET additionally appends the
-    block parameterization: ``-bc<n>`` when ``block_count`` is set, else
-    ``-bs<n>`` for the legacy shared block size.
-    """
-    optim = cfg.optim
-    otype = str(optim.type)
-
-    parts = [
-        str(cfg.experiment.name),
-        str(cfg.base.family),
-        str(cfg.base.scale),
-    ]
-    if otype == "muon_hybrid":
-        adam_lr = optim.get("adam", {}).get("lr", 1.0e-3)
-        muon_lr = optim.get("muon", {}).get("lr", adam_lr)
-        parts.append(f"lr{float(adam_lr):g}")
-        parts.append(f"muon_lr{float(muon_lr):g}")
-    else:
-        lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
-        parts.append(f"lr{float(lr):g}")
-
-    if otype == "poet":
-        poet = optim.get("poet", {})
-        block_count = poet.get("block_count", None)
-        if block_count is not None:
-            parts.append(f"bc{int(block_count)}")
-        else:
-            parts.append(f"bs{int(poet.get('block_size', 256))}")
-    return "-".join(parts)
-
-
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
     archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
@@ -386,7 +351,7 @@ def _logging_args(cfg: DictConfig) -> list[str]:
             "--wandb-project",
             cfg.wandb.project,
             "--wandb-exp-name",
-            _wandb_run_name(cfg),
+            wandb_run_name(cfg),
         ]
     )
     # Checkpoint saving. With training.save_enabled=false we omit --save

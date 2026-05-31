@@ -43,3 +43,9 @@
   (`{"input": tokens}`, pre-shifted `labels`), dropping the unused
   attention_mask/loss_mask/position_ids. Without it the first training step
   crashed in `batch_generator` with `too many values to unpack (expected 2)`.
+- **Unified W&B run naming** (`src/utils/wandb_naming.py`): both backends now
+  derive the same canonical name (`wandb_base_name`: `<exp>-<family>-<scale>-lr<lr>`
+  + optimizer segments) and tag it with a `[megatron]` / `[torchtitan]` prefix via
+  `wandb_run_name`. torchtitan's `WANDB_NAME` switched from the timestamped run-dir
+  name to this shared name, so the two backends' W&B names differ **only** by the
+  prefix and land side-by-side on one dashboard. (Run-*dir* names are unchanged.)

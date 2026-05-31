@@ -314,24 +314,30 @@ def _run_name(experiment: str) -> str:
 
 def test_wandb_run_name_has_lr_and_no_seed():
     # champion optim.lr = 1.0e-3; display name is "adam"; no "-s<seed>" suffix.
-    assert _run_name("champion") == "adam-llama3-300m-lr0.001"
+    # Megatron's --wandb-exp-name now carries the shared "[<backend>] " prefix.
+    assert _run_name("champion") == "[megatron] adam-llama3-300m-lr0.001"
 
 
 def test_wandb_run_name_muon_shows_adam_lr_and_muon_lr():
     # muon_hybrid: lr = Adam-side (optim.adam.lr = 1.0e-3),
     # plus muon_lr = Muon-side (optim.muon.lr = 2.0e-3).
-    assert _run_name("optim/muon_hybrid") == "muon-llama3-300m-lr0.001-muon_lr0.002"
+    assert _run_name("optim/muon_hybrid") == "[megatron] muon-llama3-300m-lr0.001-muon_lr0.002"
 
 
 def test_wandb_run_name_poet_appends_block_param():
-    # poet optim.lr = 3.0e-4; default uses block_size=256 (no block_count).
+    # poet's wandb name carries the [megatron] prefix and appends a block
+    # parameterization segment (-bs<n> for block_size, -bc<n> for block_count).
+    # Assert the stable SHAPE, not the exact lr/block values (those track the
+    # poet experiment config, which evolves independently of the naming logic).
     name = _run_name("optim/poet")
-    assert name.startswith("poet-llama3-300m-lr0.0003")
-    assert name.endswith("-bs256")
+    assert name.startswith("[megatron] poet-llama3-300m-")
+    block_seg = name.rsplit("-", 1)[-1]
+    assert block_seg[:2] in ("bs", "bc") and block_seg[2:].isdigit()
 
 
 def test_wandb_run_name_poet_block_count_overrides_block_size():
-    from src.utils.megatron_args import _wandb_run_name
+    # block_count logic lives in the shared wandb_base_name (un-prefixed canonical).
+    from src.utils.wandb_naming import wandb_base_name
 
     cfg = OmegaConf.create(
         {
@@ -340,7 +346,7 @@ def test_wandb_run_name_poet_block_count_overrides_block_size():
             "optim": {"type": "poet", "lr": 3.0e-4, "poet": {"block_count": 8}},
         }
     )
-    assert _wandb_run_name(cfg) == "poet-llama3-300m-lr0.0003-bc8"
+    assert wandb_base_name(cfg) == "poet-llama3-300m-lr0.0003-bc8"
 
 
 def test_unfuse_flags_default_on_for_all_train_script_experiments():

@@ -32,6 +32,7 @@ from launchers.submit import (
 )
 from launchers.train_megatron import _launch_nnodes
 from src.utils.torchtitan_args import build_torchtitan_config, unmapped_megatron_knobs
+from src.utils.wandb_naming import wandb_run_name
 
 TORCHTITAN_ROOT = Path(REPO_ROOT) / "third_party" / "torchtitan"
 MEGATRON_ROOT = Path(REPO_ROOT) / "third_party" / "Megatron-LM"
@@ -85,12 +86,13 @@ def wandb_env_for(cfg) -> dict:
 
     torchtitan's [metrics] block has only `enable_wandb` (no project/run-name
     field, verified in docs/torchtitan_api_notes.md §1), so project + run name are
-    set via env. Using the same WANDB_PROJECT/WANDB_NAME as the Megatron path
-    lands both backends on one dashboard.
+    set via env. WANDB_NAME uses the SHARED wandb_run_name(cfg) (same canonical
+    name the Megatron path emits via --wandb-exp-name), differing only by the
+    `[torchtitan]` vs `[megatron]` prefix, so both backends land on one dashboard.
     """
     env = {
         "WANDB_PROJECT": str(cfg.wandb.project),
-        "WANDB_NAME": str(cfg._derived.run_name),
+        "WANDB_NAME": wandb_run_name(cfg),
     }
     if bool(cfg.cluster.get("wandb_offline", False)):
         env["WANDB_MODE"] = "offline"
