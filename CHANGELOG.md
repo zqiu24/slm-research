@@ -49,6 +49,15 @@
   torchtitan's `val/loss` is computed on the same held-out documents as Megatron's
   eval. The vendored `Validator` hardcodes a C4 raw-text loader with no TrainSpec
   hook, hence the monkeypatch (consistent with the existing `titan_ext` pattern).
+- **`wandb_metric_normalize` enabled in every Megatron experiment**, not just
+  adam/champion: added to `poet`, `arch/ngpt`, `muon_hybrid`, and the experiment
+  `_template` (alongside the always-on `training_log_eta`). Previously
+  `train_poet`/`train_ngpt`/`train_muon` logged native Megatron keys (`lm loss`,
+  `learning-rate`, `grad-norm`) instead of the canonical `train/*` schema. The
+  torchtitan side is already unconditional (applied on `titan_ext` import).
+  Verified all five experiments' patch lists co-register without a `PatchConflict`
+  (e.g. POET's `poet_merge_step` wraps `train_step`, `wandb_metric_normalize`
+  wraps `training_log`).
 - **Removed the `log_grad_norm_extra` patch** (and its `grad-norm-clipped` /
   `grad-norm-clip-coeff` W&B/TensorBoard scalars) from all experiments
   (adam, champion, poet, ngpt, muon_hybrid, template). It was a POET grad-norm
