@@ -58,6 +58,10 @@
   torchtitan's `val/loss` is computed on the same held-out documents as Megatron's
   eval. The vendored `Validator` hardcodes a C4 raw-text loader with no TrainSpec
   hook, hence the monkeypatch (consistent with the existing `titan_ext` pattern).
+  Also patched `BaseValidator.should_validate` to **drop torchtitan's step-1
+  eval** (`step == 1 or step % freq == 0` → `step % freq == 0`): evaluating an
+  untrained model at step 1 produced a huge first point that distorted the curve
+  (Megatron only evals at `eval_interval` boundaries). First eval is now at `freq`.
 - **`wandb_metric_normalize` enabled in every Megatron experiment**, not just
   adam/champion: added to `poet`, `arch/ngpt`, `muon_hybrid`, and the experiment
   `_template` (alongside the always-on `training_log_eta`). Previously

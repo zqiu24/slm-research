@@ -18,7 +18,9 @@ from src.titan_ext.dataloader import (
     _collate_megatron_to_titan,
     _num_val_samples,
     _perf_loader_kwargs,
+    _should_validate,
     apply_titan_validation_dataloader_patch,
+    apply_titan_validation_schedule_patch,
 )
 
 
@@ -88,3 +90,14 @@ def test_num_val_samples_caps_consume_all_to_finite():
 def test_apply_titan_validation_patch_noops_without_torchtitan():
     # CPU unit-test env has no torchtitan -> returns False, never raises.
     assert apply_titan_validation_dataloader_patch() in (True, False)
+    assert apply_titan_validation_schedule_patch() in (True, False)
+
+
+def test_should_validate_skips_step_1():
+    # No eval at step 1 (untrained model -> huge loss distorts the curve); first
+    # eval at `freq`, then every `freq`. freq<=0 disables (no modulo error).
+    assert _should_validate(1, 500) is False
+    assert _should_validate(500, 500) is True
+    assert _should_validate(1000, 500) is True
+    assert _should_validate(20, 500) is False
+    assert _should_validate(5, 0) is False

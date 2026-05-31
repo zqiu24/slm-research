@@ -108,9 +108,13 @@ def _patch_validation() -> None:
     # Megatron backend's eval). Must run before Trainer init builds the Validator;
     # titan_ext is imported via experimental.custom_import at startup. No-ops if
     # torchtitan is absent (CPU unit-test env).
-    from src.titan_ext.dataloader import apply_titan_validation_dataloader_patch
+    from src.titan_ext.dataloader import (
+        apply_titan_validation_dataloader_patch,
+        apply_titan_validation_schedule_patch,
+    )
 
     apply_titan_validation_dataloader_patch()
+    apply_titan_validation_schedule_patch()  # no step-1 eval (avoid a distorted first point)
 
 
 _register()

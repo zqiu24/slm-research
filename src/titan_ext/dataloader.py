@@ -297,3 +297,35 @@ def apply_titan_validation_dataloader_patch() -> bool:
     _patched._slm_val_patched = True
     _v.build_text_validation_dataloader = _patched
     return True
+
+
+def _should_validate(step: int, freq: int) -> bool:
+    """torchtitan eval schedule WITHOUT the step-1 eval: first eval at ``freq``,
+    then every ``freq`` steps. ``freq <= 0`` disables (no modulo error)."""
+    return int(freq) > 0 and int(step) % int(freq) == 0
+
+
+def apply_titan_validation_schedule_patch() -> bool:
+    """Drop torchtitan's step-1 validation.
+
+    The vendored ``BaseValidator.should_validate`` returns
+    ``step == 1 or step % freq == 0`` — it evals at step 1 on an essentially
+    untrained model, producing a huge first point that distorts the eval curve
+    (Megatron evals only at ``eval_interval`` boundaries). Replace it with
+    :func:`_should_validate` so the first eval is at ``freq``. Idempotent; returns
+    False if torchtitan is not importable (CPU unit-test env).
+    """
+    try:
+        import torchtitan.components.validate as _v
+    except Exception:
+        return False
+
+    if getattr(_v.BaseValidator.should_validate, "_slm_no_step1", False):
+        return True
+
+    def _should_validate_method(self, step):
+        return _should_validate(step, self.job_config.validation.freq)
+
+    _should_validate_method._slm_no_step1 = True
+    _v.BaseValidator.should_validate = _should_validate_method
+    return True
