@@ -119,3 +119,47 @@ def apply_titan_metrics_patch() -> bool:
     _m.MetricsProcessor.log = _wrapped
     logger.info("[titan_ext] patched MetricsProcessor.log (rank-0-only + ETA)")
     return True
+
+
+_WANDB_WRAP_FLAG = "_slm_wandb_normalize_wrapped"
+
+
+def _wrap_titan_wandb_log(orig_log):
+    """Return a ``WandBLogger.log`` wrapper that canonicalizes metric keys.
+
+    Runs ``src.utils.wandb_metrics.normalize(metrics, "torchtitan")`` BEFORE the
+    upstream body (which applies any ``tag/`` prefix and calls ``wandb.log``), so
+    e.g. ``loss_metrics/global_avg_loss`` -> ``train/loss``. Backend-specific keys
+    (mfu(%), tflops, memory/*) pass through. Guarded: a transform failure falls
+    back to the original metrics, never crashing training.
+    """
+    import contextlib
+
+    from src.utils.wandb_metrics import normalize
+
+    def _log(self, metrics, step, *args, **kwargs):
+        with contextlib.suppress(Exception):
+            metrics = normalize(metrics, "torchtitan")
+        return orig_log(self, metrics, step, *args, **kwargs)
+
+    setattr(_log, _WANDB_WRAP_FLAG, True)
+    return _log
+
+
+def apply_titan_wandb_normalize() -> bool:
+    """Monkeypatch ``WandBLogger.log`` to canonicalize metric keys.
+
+    Returns True if the patch is in place (or was already), False if torchtitan
+    is not importable (e.g. a CPU unit-test env).
+    """
+    try:
+        import torchtitan.components.metrics as _m
+    except Exception:
+        return False
+
+    if getattr(_m.WandBLogger.log, _WANDB_WRAP_FLAG, False):
+        return True
+
+    _m.WandBLogger.log = _wrap_titan_wandb_log(_m.WandBLogger.log)
+    logger.info("[titan_ext] patched WandBLogger.log (canonical metric keys)")
+    return True
