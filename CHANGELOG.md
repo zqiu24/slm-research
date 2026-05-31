@@ -9,9 +9,12 @@
   canonical schema (`train/loss`, `train/lr`, `train/grad_norm`,
   `train/tokens_seen`, `perf/step_time_s`, `val/loss`) so Megatron and torchtitan
   runs overlay on one dashboard. Applied via a registered Megatron patch
-  (`wandb_metric_normalize`, wraps `wandb.log`; also computes tokens_seen /
-  step_time, which our runs don't log to W&B) and a torchtitan `WandBLogger.log`
-  wrapper in `src/titan_ext/metrics.py`. Throughput is deliberately NOT normalized
+  (`wandb_metric_normalize`, wraps `wandb.log` **lazily inside the `training_log`
+  wrapper** — `wandb.init()` rebinds the module-level `wandb.log`, so wrapping at
+  patch-apply time was silently clobbered and left Megatron's native keys
+  unrenamed; it also computes tokens_seen / step_time, which our runs don't log to
+  W&B) and a torchtitan `WandBLogger.log` wrapper in `src/titan_ext/metrics.py`.
+  Throughput is deliberately NOT normalized
   (Megatron's `throughput` is TFLOP/s/GPU; torchtitan's `throughput(tps)` is
   normalized by `non_data_parallel_size` — not comparable), so each backend keeps
   its native throughput as a passthrough. Backend-specific extras pass through

@@ -9,6 +9,11 @@ Two orthogonal changes, both guarded so logging never crashes training:
    run ``src.utils.wandb_metrics.normalize(d, "megatron")`` on the dict first
    (``lm loss`` -> ``train/loss``, ``learning-rate`` -> ``train/lr``, ...).
    Unmapped keys (grad-norm-clipped, params-norm, ...) pass through.
+   The wrap is installed **lazily inside the ``training_log`` wrapper**, NOT in
+   ``apply()``: ``apply()`` runs before Megatron's ``wandb.init()`` (deep in
+   ``pretrain()``), and ``wandb.init()`` rebinds the module-level ``wandb.log`` —
+   so a wrap installed at ``apply()`` time is silently discarded. Re-checking the
+   flag every ``training_log`` call (post-init) is robust and self-healing.
 
 2. **Add computed metrics.** Our runs don't set --log-timers-to-tensorboard, so
    Megatron logs neither iteration-time nor throughput to W&B. We wrap
@@ -80,20 +85,24 @@ def apply() -> None:
     from megatron.training import get_args
     from megatron.training import training as _mt
 
-    # (1) Rename keys at the wandb.log boundary (idempotent guard).
-    if not getattr(wandb.log, "_slm_wandb_normalize", False):
-        wandb.log = _wrap_wandb_log(wandb.log)
-
-    # (2) Add computed canonical metrics from training_log (idempotent guard).
+    # Both the key-rename and the computed metrics ride on one training_log wrap.
+    # wandb.log is wrapped LAZILY inside it (see below) — wrapping here would be
+    # clobbered by wandb.init()'s rebinding of the module-level wandb.log.
     _orig = _mt.training_log
     if getattr(_orig, "_slm_wandb_extra", False):
         return
     state = {"last": None}
 
     def _wrapped(*args, **kwargs):
+        # (1) (Re)wrap wandb.log at call time (post wandb.init, so it's the stable
+        #     function) so Megatron's own wandb_writer.log({'lm loss': ...}) calls
+        #     inside _orig get renamed. Re-checked every call -> self-healing.
+        if not getattr(wandb.log, "_slm_wandb_normalize", False):
+            wandb.log = _wrap_wandb_log(wandb.log)
         ret = _orig(*args, **kwargs)
         try:
-            # get_wandb_writer() is None on non-logging ranks -> nothing to do.
+            # (2) Add computed metrics. get_wandb_writer() is None on non-logging
+            #     ranks -> nothing to do.
             if _mt.get_wandb_writer() is not None:
                 opts = get_args()
                 iteration = kwargs.get("iteration")

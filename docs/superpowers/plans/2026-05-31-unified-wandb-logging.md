@@ -445,20 +445,25 @@ def apply() -> None:
     from megatron.training import get_args
     from megatron.training import training as _mt
 
-    # (1) Rename keys at the wandb.log boundary (idempotent guard).
-    if not getattr(wandb.log, "_slm_wandb_normalize", False):
-        wandb.log = _wrap_wandb_log(wandb.log)
-
-    # (2) Add computed canonical metrics from training_log (idempotent guard).
+    # Both the key-rename and the computed metrics ride on one training_log wrap.
+    # wandb.log is wrapped LAZILY inside it: apply() runs before Megatron's
+    # wandb.init() (deep in pretrain()), and wandb.init() rebinds the module-level
+    # wandb.log — so a wrap installed here is silently discarded.
     _orig = _mt.training_log
     if getattr(_orig, "_slm_wandb_extra", False):
         return
     state = {"last": None}
 
     def _wrapped(*args, **kwargs):
+        # (1) (Re)wrap wandb.log at call time (post wandb.init, so it's the stable
+        #     function) so Megatron's own wandb_writer.log({'lm loss': ...}) calls
+        #     inside _orig get renamed. Re-checked every call -> self-healing.
+        if not getattr(wandb.log, "_slm_wandb_normalize", False):
+            wandb.log = _wrap_wandb_log(wandb.log)
         ret = _orig(*args, **kwargs)
         try:
-            # get_wandb_writer() is None on non-logging ranks -> nothing to do.
+            # (2) Add computed metrics. get_wandb_writer() is None on non-logging
+            #     ranks -> nothing to do.
             if _mt.get_wandb_writer() is not None:
                 opts = get_args()
                 iteration = kwargs.get("iteration")
