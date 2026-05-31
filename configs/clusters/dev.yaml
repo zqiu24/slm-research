@@ -19,7 +19,7 @@ cluster:
   transformer_engine_version: "1.12.0"
   cuda_version: "12.4"
   pytorch_version: "2.4.0"
-  wandb_offline: true                  # keep debug runs out of online wandb
+  wandb_offline: false                 # log dev/debug runs to wandb online (override: cluster.wandb_offline=true)
   slurm_partition: "dev"               # inert: dev launches locally, not via slurm
   slurm_account: "research"            # inert
   slurm_template: "launchers/slurm/bid_cluster.sbatch.j2"  # inert

@@ -14,6 +14,7 @@ commit bb43fa063). The wrapper preserves the base optimizer's state dict and
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import torch
@@ -299,6 +300,50 @@ def _install_poet_step_hook(wrapped_optimizer, cache_mode: str) -> None:
     wrapped_optimizer.prepare_grads = _wrapped_prepare_grads
 
 
+def _build_vanilla_poet_optimizer(
+    config: Any,
+    model_chunks: list,
+    poet_scale: float,
+    *,
+    config_overrides: Any = None,
+    use_gloo_process_groups: bool = True,
+):
+    """Stock Megatron optimizer for the ``POET_VANILLA_OPT`` A/B path.
+
+    No POETAdam, no manual linear/nonlinear partition, no ``ChainedOptimizer``
+    plumbing: POETLinear already froze the base weights, and Megatron's
+    ``_get_param_groups`` skips ``requires_grad=False`` params, so the stock
+    builder optimizes exactly ``oft_R + embeddings + norms`` — the same trainable
+    set the custom path produces.
+
+    ``poet_scale`` is applied to ``oft_R`` only, via a per-parameter
+    ``max_lr``/``min_lr`` override keyed on the ``*oft_R*`` name glob (the
+    scheduler honours per-group ``max_lr``/``min_lr``; ``lr_mult`` would only
+    scale weight-decay). This mirrors the LR scaling POETAdam applied at
+    construction. The periodic Adam momentum reset is reinstated by the
+    ``poet_merge_step`` hook when ``POET_VANILLA_OPT`` is set.
+    """
+    from megatron.core.optimizer import get_standard_config_overrides
+    from megatron.core.optimizer.optimizer_config import ParamKey
+
+    overrides = (
+        dict(config_overrides)
+        if config_overrides is not None
+        else dict(get_standard_config_overrides(config))
+    )
+    if poet_scale != 1.0:
+        overrides[ParamKey(name="*oft_R*")] = {
+            "max_lr": config.lr * poet_scale,
+            "min_lr": config.min_lr * poet_scale,
+        }
+    return get_megatron_optimizer(
+        config,
+        model_chunks,
+        config_overrides=overrides,
+        use_gloo_process_groups=use_gloo_process_groups,
+    )
+
+
 def get_megatron_poet_optimizer(
     config: Any,
     model_chunks: list,
@@ -333,6 +378,29 @@ def get_megatron_poet_optimizer(
         poet_merge_period,
         poet_scale,
     )
+
+    # A/B path (POET_VANILLA_OPT=1): skip the custom POETAdam + manual partition
+    # and use the STOCK Megatron optimizer. Lets us isolate whether POETAdam
+    # itself contributes anything beyond stock Adam + a counted momentum reset.
+    if os.environ.get("POET_VANILLA_OPT") == "1":
+        if poet_cache_mode != "none":
+            raise ValueError(
+                "POET_VANILLA_OPT supports only poet_cache_mode='none'; the "
+                "cached_fwd_bwd path needs the manual VJP flush hook that the "
+                f"stock optimizer bypasses (got {poet_cache_mode!r})."
+            )
+        logger.warning(
+            "[POET] POET_VANILLA_OPT=1 -> stock Megatron optimizer (no POETAdam); "
+            "oft_R LR x%s via param-group override; reset via poet_merge_step hook.",
+            poet_scale,
+        )
+        return _build_vanilla_poet_optimizer(
+            config,
+            model_chunks,
+            poet_scale,
+            config_overrides=config_overrides,
+            use_gloo_process_groups=use_gloo_process_groups,
+        )
 
     def poet_init_state_fn(opt, config=None):
         base = opt.base_optimizer if hasattr(opt, "base_optimizer") else opt

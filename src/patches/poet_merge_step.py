@@ -15,6 +15,7 @@ opt_param_scheduler, config, forward_backward_func, iteration=None)`` —
 from __future__ import annotations
 
 import logging
+import os
 
 from src.patches._registry import register_patch
 
@@ -50,9 +51,80 @@ def apply() -> None:
             logger.warning("[POET] merge step skipped: model not found in train_step args")
             return ret
         _run_merge(model, dist, iteration)
+        # Vanilla A/B path: POETAdam isn't in the loop to reset momentum, so do
+        # it here (same cadence as the weight merge).
+        if os.environ.get("POET_VANILLA_OPT") == "1":
+            optimizer = args[3] if len(args) >= 4 else kwargs.get("optimizer")
+            if optimizer is not None:
+                _reset_vanilla_momentum(optimizer, model, iteration)
         return ret
 
     _mt.train_step = _wrapped
+
+
+def _reset_vanilla_momentum(optimizer, model, iteration: int) -> None:
+    """POETAdam-faithful momentum reset for the ``POET_VANILLA_OPT`` path.
+
+    POETAdam reset only its oft_R branch (exp_avg / exp_avg_sq / step), leaving
+    the embedding/norm Adam state untouched. We reproduce that exactly: zero the
+    Adam state for the oft_R params ONLY.
+
+    The stock bf16 optimizer keys its Adam state by the fp32 *master* params, not
+    the model's bf16 oft_R tensors, so we map model->master via the optimizer's
+    parallel ``float16_groups`` / ``fp32_from_float16_groups`` lists (state is
+    keyed by the master). Falls back to ``fp32_from_fp32_groups`` and, for an
+    FP32Optimizer, to the model params directly.
+    """
+    import torch
+
+    chunks = model if isinstance(model, list) else [model]
+    oft_ids = {
+        id(p)
+        for m in chunks
+        for name, p in m.named_parameters()
+        if "oft_R" in name and p.requires_grad
+    }
+
+    def _zero(master_param, torch_opt) -> int:
+        st = torch_opt.state.get(master_param)
+        if not st:
+            return 0
+        if "exp_avg" in st:
+            st["exp_avg"].zero_()
+        if "exp_avg_sq" in st:
+            st["exp_avg_sq"].zero_()
+        if "step" in st:
+            if torch.is_tensor(st["step"]):
+                st["step"].zero_()
+            else:
+                st["step"] = 0
+        return 1
+
+    inner = getattr(optimizer, "chained_optimizers", None) or [optimizer]
+    n = 0
+    for opt in inner:
+        torch_opt = getattr(opt, "optimizer", None)
+        if torch_opt is None:
+            continue
+        f16 = getattr(opt, "float16_groups", None)
+        fp32_master = getattr(opt, "fp32_from_float16_groups", None)
+        if f16 is not None and fp32_master is not None:
+            # bf16/fp16 optimizer: Adam state lives on the fp32 master copies.
+            for f16_grp, master_grp in zip(f16, fp32_master, strict=False):
+                for model_p, master_p in zip(f16_grp, master_grp, strict=False):
+                    if id(model_p) in oft_ids:
+                        n += _zero(master_p, torch_opt)
+            for grp in getattr(opt, "fp32_from_fp32_groups", None) or []:
+                for p in grp:
+                    if id(p) in oft_ids:
+                        n += _zero(p, torch_opt)
+        else:
+            # FP32Optimizer: Adam state is keyed by the model params directly.
+            for group in torch_opt.param_groups:
+                for p in group["params"]:
+                    if id(p) in oft_ids:
+                        n += _zero(p, torch_opt)
+    logger.info("[POET] vanilla momentum reset (oft_R only) at iter %d (%d params)", iteration, n)
 
 
 def _run_merge(model, dist, iteration: int) -> None:

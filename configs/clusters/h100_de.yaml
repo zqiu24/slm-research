@@ -3,7 +3,7 @@ cluster:
   name: h100_de
   site: germany
   nodes: 1
-  gpus_per_node: 8
+  gpus_per_node: 4
   interconnect: "nvlink_within_ib_across"
   capabilities: [bf16, fp16, fp8, nvlink, ib_fast]
   transformer_engine_version: "1.12.0"
