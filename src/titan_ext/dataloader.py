@@ -140,6 +140,23 @@ def _collate_megatron_to_titan(samples):
     return {"input": tokens}, labels
 
 
+def _perf_loader_kwargs(num_workers: int) -> dict:
+    """DataLoader kwargs that overlap data loading with compute — parity with the
+    Megatron path, which launches ``--num-workers`` (data.num_workers) prefetch
+    workers + pinned memory so data loading hides under the step.
+
+    torchtitan's ``ParallelAwareDataloader`` otherwise defaults to ``num_workers=0``
+    (synchronous, main-process), which starves the GPU between steps (observed
+    mfu ~1.7%, ~98% idle at 300m/seq256). ``prefetch_factor`` / ``persistent_workers``
+    are only valid with workers, so they are omitted when ``num_workers == 0``.
+    """
+    kwargs: dict = {"num_workers": int(num_workers), "pin_memory": True}
+    if int(num_workers) > 0:
+        kwargs["prefetch_factor"] = 2
+        kwargs["persistent_workers"] = True
+    return kwargs
+
+
 def build_dataloader(*, dp_world_size, dp_rank, tokenizer, job_config):
     """TrainSpec build_dataloader_fn. VERIFIED signature (api notes §2/§4):
     (dp_world_size, dp_rank, tokenizer, job_config). `tokenizer` is unused — the
@@ -172,7 +189,17 @@ def build_dataloader(*, dp_world_size, dp_rank, tokenizer, job_config):
     )
     # ParallelAwareDataloader(dataset, dp_rank, dp_world_size, **kwargs) — verified §4.
     # collate_fn reshapes Megatron's per-sample dict into torchtitan's required
-    # (input_dict, labels) 2-tuple (see _collate_megatron_to_titan).
+    # (input_dict, labels) 2-tuple (see _collate_megatron_to_titan). num_workers etc.
+    # mirror the Megatron path (data.num_workers) so data loading overlaps compute —
+    # the default num_workers=0 was the dominant per-step cost (see _perf_loader_kwargs).
+    # Worker prefetch does not change sample selection or order (same sampler), so the
+    # training curve is unaffected.
+    num_workers = int(slm.data.get("num_workers", 2))
     return ParallelAwareDataloader(
-        ds, dp_rank, dp_world_size, batch_size=local_bs, collate_fn=_collate_megatron_to_titan
+        ds,
+        dp_rank,
+        dp_world_size,
+        batch_size=local_bs,
+        collate_fn=_collate_megatron_to_titan,
+        **_perf_loader_kwargs(num_workers),
     )

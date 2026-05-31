@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import torch
 
-from src.titan_ext.dataloader import _collate_megatron_to_titan
+from src.titan_ext.dataloader import _collate_megatron_to_titan, _perf_loader_kwargs
 
 
 def _sample(seq_len: int, fill: int) -> dict:
@@ -49,3 +49,19 @@ def test_collate_preserves_tokens_and_megatron_shift():
     input_dict, labels = _collate_megatron_to_titan([s])
     assert torch.equal(input_dict["input"][0], s["tokens"])
     assert torch.equal(labels[0], s["labels"])
+
+
+def test_perf_loader_kwargs_overlaps_data_loading():
+    # With workers: prefetch + persistent + pinned memory, so data loading hides
+    # under compute (parity with Megatron's --num-workers path).
+    kw = _perf_loader_kwargs(6)
+    assert kw["num_workers"] == 6
+    assert kw["pin_memory"] is True
+    assert kw["prefetch_factor"] == 2
+    assert kw["persistent_workers"] is True
+
+
+def test_perf_loader_kwargs_drops_worker_only_args_when_zero():
+    # prefetch_factor/persistent_workers are invalid without workers — must be absent.
+    kw = _perf_loader_kwargs(0)
+    assert kw == {"num_workers": 0, "pin_memory": True}

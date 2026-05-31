@@ -72,3 +72,13 @@
   metrics module logger to a rank-0/ETA proxy for the call; all upstream metric
   math and wandb/tb logging are unchanged. Helpers covered by
   `tests/unit/test_titan_metrics_patch.py`.
+- **Fixed torchtitan data starvation** (`src/titan_ext/dataloader.py`): the
+  `ParallelAwareDataloader` was built with no `num_workers`, so it defaulted to
+  `0` (synchronous, main-process) and the GPU idled ~98% per step waiting for the
+  next batch from the shared Megatron `GPTDataset` (mfu ~1.7%; ~5× slower wall
+  clock than the Megatron path at 300m/seq256). Now passes `num_workers`
+  (= `data.num_workers`, same value Megatron's `--num-workers` uses), `pin_memory`,
+  `prefetch_factor`, and `persistent_workers`, so data loading overlaps compute.
+  Worker prefetch does not change sample selection or order (same sampler), so the
+  training curve is unaffected. Kwargs builder covered by
+  `tests/unit/test_titan_dataloader_collate.py`.
