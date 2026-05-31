@@ -62,3 +62,13 @@
   `model_provider` wrapper (after unfuse), gated on the config, TP=PP=1, seeded
   for data-parallel-replica determinism. No-op on the torchtitan backend.
   Covered by `tests/unit/test_titan_init.py`.
+- **torchtitan per-step console line now matches the Megatron path**
+  (`src/titan_ext/metrics.py`, applied via the `custom_import` hook — no submodule
+  edit): the `step: … loss: … grad_norm: … tps: … tflops: … mfu: …` line is
+  emitted **only on rank 0** (torchtitan's `init_logger` otherwise duplicates it
+  per rank) and gains an **`ETA: 1h30m`** segment derived from
+  `training.steps` + just-elapsed wall time — same `HhMMm` format as the Megatron
+  `training_log_eta` patch. Runtime-wraps `MetricsProcessor.log`, rebinding the
+  metrics module logger to a rank-0/ETA proxy for the call; all upstream metric
+  math and wandb/tb logging are unchanged. Helpers covered by
+  `tests/unit/test_titan_metrics_patch.py`.

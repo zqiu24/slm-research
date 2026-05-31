@@ -88,4 +88,14 @@ def _register() -> None:
     register_train_spec(slm_name, _slm_spec_from(base, cfg))
 
 
+def _patch_metrics() -> None:
+    # Rank-0-only per-step console line + ETA, to match the Megatron path.
+    # Independent of the TrainSpec registration above and of SLM_RESOLVED_CONFIG;
+    # no-ops if torchtitan is absent (CPU unit-test env).
+    from src.titan_ext.metrics import apply_titan_metrics_patch
+
+    apply_titan_metrics_patch()
+
+
 _register()
+_patch_metrics()
