@@ -63,6 +63,10 @@ Exact dotted keys we emit (section → fields, with v0.2.2 defaults):
   `interval=500`, `initial_load_path`, `initial_load_model_only`, … (40+ fields).
 - **[debug]** (`Debug`): **`seed: int | None = None`** (+ `deterministic`, …).
   → **seed lives here.** Emit `[debug].seed`.
+- **[comm]** (`Comm`): `init_timeout_seconds=300`, `train_timeout_seconds=100`, …
+  → `init_timeout_seconds` bounds init + first-step collectives (incl. the rank-0
+  cold dataset-index build behind a barrier). We emit a generous value because the
+  300s default trips a barrier timeout on large cold builds.
 - **[experimental]** (`Experimental`): **`custom_import: str = ""`** (module path
   imported before train-spec lookup) and a separate (deprecated) `custom_args_module`.
 

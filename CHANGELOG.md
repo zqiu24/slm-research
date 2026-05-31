@@ -33,3 +33,8 @@
   per-family curves are pending an operator GPU run.
 - API surface recorded in `docs/torchtitan_api_notes.md`; design + plan in
   `docs/superpowers/{specs,plans}/2026-05-30-torchtitan-backend*.md`.
+- Emit `[comm].init_timeout_seconds` (default **3600s**, override via
+  `cluster.comm_init_timeout_seconds`) so rank 0's cold dataset-index build
+  doesn't trip torchtitan's 300s default and crash the other ranks at the
+  startup barrier. The torchtitan path always cold-builds (different cache hash
+  than Megatron), so the 5-min default was insufficient on real corpora.

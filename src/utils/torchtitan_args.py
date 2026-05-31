@@ -128,6 +128,21 @@ def _metrics_block(cfg: DictConfig) -> dict:
     }
 
 
+def _comm_block(cfg: DictConfig) -> dict:
+    # The slm_megatron_indexed dataloader builds its per-run sample/shuffle index on
+    # rank 0 while the other ranks wait at a torch.distributed.barrier(). A COLD build
+    # of a large corpus (tens of millions of samples) takes ~20-30 min — far longer
+    # than torchtitan's default comm.init_timeout_seconds=300 (5 min), so the waiting
+    # ranks hit a barrier timeout and crash the run before the first step. The
+    # torchtitan path always cold-builds (its seed + FixedVocabTokenizer give a
+    # different cache hash than the Megatron path), so this bites on every fresh
+    # data shape. Give the init/first-step phase a generous budget; warm cache loads
+    # are fast and unaffected. Overridable via cluster.comm_init_timeout_seconds.
+    return {
+        "init_timeout_seconds": int(cfg.cluster.get("comm_init_timeout_seconds", 3600)),
+    }
+
+
 def lr_scheduler_block(sched: dict, *, total_steps: int) -> dict:
     """Map an slm `scheduler` block to torchtitan [lr_scheduler] keys.
 
@@ -176,6 +191,9 @@ def build_torchtitan_config(cfg: DictConfig) -> tuple[dict, list[str]]:
         "optimizer": _optimizer_block(cfg),
         "parallelism": _parallelism_block(cfg),
         "metrics": _metrics_block(cfg),
+        # Raise the init/first-step barrier timeout so rank 0's cold dataset-index
+        # build doesn't trip torchtitan's 300s default (see _comm_block).
+        "comm": _comm_block(cfg),
         # VERIFIED v0.2.2: seed is [debug].seed, not [training].seed
         # (docs/torchtitan_api_notes.md §1).
         "debug": {"seed": int(cfg.seed)},

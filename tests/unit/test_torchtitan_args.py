@@ -90,6 +90,27 @@ def test_parallelism_is_fsdp_only_at_300m():
     assert par["data_parallel_shard_degree"] == -1  # FSDP over all remaining ranks
 
 
+def test_comm_block_raises_init_timeout_above_default():
+    # The slm_megatron_indexed dataloader cold-builds its sample/shuffle index on
+    # rank 0 while other ranks wait at a barrier; a large-corpus build exceeds
+    # torchtitan's default comm.init_timeout_seconds=300 and crashes the run with a
+    # barrier timeout before training starts. The builder must emit a [comm] block
+    # with a generous init_timeout, overridable via cluster.comm_init_timeout_seconds.
+    toml, _ = build_torchtitan_config(_cfg())
+    assert toml["comm"]["init_timeout_seconds"] > 300
+    assert toml["comm"]["init_timeout_seconds"] == 3600  # default when cluster knob unset
+
+
+def test_comm_init_timeout_is_overridable_from_cluster():
+    from omegaconf import OmegaConf
+
+    cfg = _cfg()
+    OmegaConf.set_struct(cfg, False)  # resolved cfg is struct-locked; allow injecting a field
+    cfg.cluster.comm_init_timeout_seconds = 7200
+    toml, _ = build_torchtitan_config(cfg)
+    assert toml["comm"]["init_timeout_seconds"] == 7200
+
+
 def test_rejects_non_adamw_optimizer():
     cfg = _parse_overrides(["base/family=llama3", "experiment=optim/poet", "backend=torchtitan"])
     resolve_config(cfg)
