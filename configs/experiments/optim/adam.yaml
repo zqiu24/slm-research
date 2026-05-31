@@ -19,6 +19,7 @@ experiment:
     - model_unfuse_linears
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
     - log_grad_norm_extra     # always-on: log post-clip grad-norm + clip-coeff
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
   required_capabilities: []
 
 optim:
