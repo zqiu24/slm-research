@@ -2,7 +2,8 @@
 # POET: Parameter-Efficient Orthogonal Training.
 #
 # Replaces 2D linear params with POETLinear (frozen base weight + block-
-# orthogonal delta), trains only the orthogonal piece via POETAdam, and
+# orthogonal delta), trains only the orthogonal piece (via stock Megatron Adam
+# by default; optim.poet.use_poet_adam=true for the custom POETAdam path), and
 # periodically merges deltas + resets Adam momentum.
 #
 # Triggers patches: model_unfuse_linears, poet_unfuse_te_impl,
@@ -14,7 +15,10 @@ experiment:
     POET (Parameter-Efficient Orthogonal Training). Block-orthogonal
     parameterisation of 2D linear weights — POETLinear holds a frozen base
     weight and a low-rank orthogonal delta (``oft_R``). Only ``oft_R`` is
-    trained, via POETAdam. Every ``poet_merge_period`` steps the delta is
+    trained — by default via the stock Megatron Adam optimizer (oft_R LR scaled
+    by ``scale``, momentum reset by the poet_merge_step hook); set
+    ``optim.poet.use_poet_adam=true`` for the legacy custom POETAdam path.
+    Every ``poet_merge_period`` steps the delta is
     merged into the base weight, the permutations re-randomised, and Adam's
     first/second-moment buffers reset. Hypothesis: matches dense Adam on
     perplexity while leaving rotational symmetry exact under SGD.
@@ -27,7 +31,6 @@ experiment:
     - poet_apply_to_model
     - poet_merge_step
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
-    - log_grad_norm_extra     # also log post-clip "grad-norm-clipped" + clip-coeff
   required_capabilities: []
 
 optim:
@@ -46,8 +49,14 @@ optim:
     # cache_mode: cached_fwd_bwd  # "none" | "cached_fwd_bwd" — caches the Cayley fwd+bwd across the K microbatches of a gradient-accumulation cycle. Override with optim.poet.cache_mode=none.
     init_type: normalized   # "none" | "normalized" | "mup_normalized"
     mup_alpha: 1.0
-    merge_period: 200       # 0 disables periodic merge
-    scale: 0.5              # LR multiplier for the POET linear group
+    merge_period: 400       # 0 disables periodic merge
+    scale: 0.05              # LR multiplier for the POET linear group
+    # Optimizer impl. DEFAULT (false): stock Megatron Adam — oft_R is a normal
+    # trainable param in the DDP grad buffer, its LR is scaled by `scale` via a
+    # param-group override, and its Adam momentum is reset by the poet_merge_step
+    # hook. Set true for the legacy custom POETAdam + ChainedOptimizer path
+    # (requires cache_mode=none).
+    use_poet_adam: false
 
 # Architectural unfusing of fused linears (handled by the model_unfuse_linears
 # patch, optimizer-agnostic — lives under base.model, not optim.poet). Defaulted

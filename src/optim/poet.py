@@ -145,11 +145,28 @@ class POETAdam(torch.optim.Optimizer):
                     else:
                         st["step"] = 0
                     _n_step += 1
+        # Some Adam impls (apex/fused) store `step` per param-group rather than
+        # per-param, so the per-param reset above is a no-op for them. Reset the
+        # group step too — every base_optimizer group here holds only oft_R
+        # params, so this is safe. t -> 0 gives fresh bias correction post-merge.
+        _grp_before = None
+        _n_groups = 0
+        for group in self.base_optimizer.param_groups:
+            if "step" in group:
+                if _verify and _grp_before is None:
+                    _gs = group["step"]
+                    _grp_before = float(_gs.item()) if isinstance(_gs, torch.Tensor) else float(_gs)
+                if isinstance(group["step"], torch.Tensor):
+                    group["step"].zero_()
+                else:
+                    group["step"] = 0
+                _n_groups += 1
         if _verify:
             print(
                 f"[POET-VERIFY] _reset_momentum FIRED (counter={self.global_step_counter}): "
-                f"zeroed exp_avg/exp_avg_sq/step for {_n_step} oft_R params; "
-                f"sample step {_sample_before} -> 0",
+                f"zeroed momentum for {_n_step} oft_R params; per-param step "
+                f"{_sample_before} -> 0; group-level step {_grp_before} -> 0 "
+                f"({_n_groups} groups)",
                 flush=True,
             )
 
@@ -334,20 +351,21 @@ def _build_vanilla_poet_optimizer(
     config_overrides: Any = None,
     use_gloo_process_groups: bool = True,
 ):
-    """Stock Megatron optimizer for the ``POET_VANILLA_OPT`` A/B path.
+    """Stock Megatron optimizer — the DEFAULT POET path (``use_poet_adam=false``).
 
     No POETAdam, no manual linear/nonlinear partition, no ``ChainedOptimizer``
     plumbing: POETLinear already froze the base weights, and Megatron's
     ``_get_param_groups`` skips ``requires_grad=False`` params, so the stock
     builder optimizes exactly ``oft_R + embeddings + norms`` — the same trainable
-    set the custom path produces.
+    set the custom POETAdam path produces.
 
     ``poet_scale`` is applied to ``oft_R`` only, via a per-parameter
     ``max_lr``/``min_lr`` override keyed on the ``*oft_R*`` name glob (the
     scheduler honours per-group ``max_lr``/``min_lr``; ``lr_mult`` would only
     scale weight-decay). This mirrors the LR scaling POETAdam applied at
-    construction. The periodic Adam momentum reset is reinstated by the
-    ``poet_merge_step`` hook when ``POET_VANILLA_OPT`` is set.
+    construction. The periodic Adam momentum reset is performed by the
+    ``poet_merge_step`` hook (which skips it only when ``use_poet_adam=true``,
+    since POETAdam resets momentum itself).
     """
     from megatron.core.optimizer import get_standard_config_overrides
     from megatron.core.optimizer.optimizer_config import ParamKey
@@ -362,12 +380,14 @@ def _build_vanilla_poet_optimizer(
             "max_lr": config.lr * poet_scale,
             "min_lr": config.min_lr * poet_scale,
         }
-    return get_megatron_optimizer(
+    opt = get_megatron_optimizer(
         config,
         model_chunks,
         config_overrides=overrides,
         use_gloo_process_groups=use_gloo_process_groups,
     )
+    _verify_poet_groups(opt, model_chunks)  # TEMP VERIFY (POET_VERIFY=1; delete later)
+    return opt
 
 
 def _verify_poet_groups(chained, model_chunks) -> None:
@@ -395,18 +415,30 @@ def _verify_poet_groups(chained, model_chunks) -> None:
             "[POET-VERIFY] ===== optimizer param groups (lr / max_lr / weight_decay) =====",
             flush=True,
         )
-        for oi, opt in enumerate(chained.chained_optimizers):
+        opt_list = getattr(chained, "chained_optimizers", None) or [chained]
+        for oi, opt in enumerate(opt_list):
             inner = getattr(opt, "optimizer", opt)
+            # optimizer param_groups hold fp32 MASTER params; map them back to
+            # the model params so id2name can resolve oft_R vs the rest.
+            master2model = {}
+            f16 = getattr(opt, "float16_groups", None)
+            fp32m = getattr(opt, "fp32_from_float16_groups", None)
+            if f16 and fp32m:
+                for fg, mg in zip(f16, fp32m, strict=False):
+                    for model_p, master_p in zip(fg, mg, strict=False):
+                        master2model[id(master_p)] = model_p
             for gi, g in enumerate(getattr(inner, "param_groups", [])):
                 ps = g.get("params", [])
-                names = [id2name.get(id(p), "?") for p in ps]
+                names = [id2name.get(id(master2model.get(id(p), p)), "?") for p in ps]
                 n_oft = sum(1 for nm in names if "oft_R" in nm)
                 kind = "OFT" if (ps and n_oft == len(ps)) else ("MIXED" if n_oft else "non-oft")
+                sample = next((nm for nm in names if nm != "?"), names[0] if names else "")
+                shape0 = tuple(ps[0].shape) if ps else None
                 print(
                     f"[POET-VERIFY] chain[{oi}].group[{gi}] kind={kind} "
                     f"lr={g.get('lr')} max_lr={g.get('max_lr')} min_lr={g.get('min_lr')} "
                     f"weight_decay={g.get('weight_decay')} wd_mult={g.get('wd_mult')} "
-                    f"nparams={len(ps)} n_oft={n_oft} sample={names[0] if names else ''}",
+                    f"nparams={len(ps)} n_oft={n_oft} shape0={shape0} sample={sample}",
                     flush=True,
                 )
         print("[POET-VERIFY] ===== end param groups =====", flush=True)
@@ -449,19 +481,21 @@ def get_megatron_poet_optimizer(
         poet_scale,
     )
 
-    # A/B path (POET_VANILLA_OPT=1): skip the custom POETAdam + manual partition
-    # and use the STOCK Megatron optimizer. Lets us isolate whether POETAdam
-    # itself contributes anything beyond stock Adam + a counted momentum reset.
-    if os.environ.get("POET_VANILLA_OPT") == "1":
+    # Optimizer-impl selection. DEFAULT = the Megatron-Adam path: the stock
+    # Megatron optimizer, with oft_R's LR scaled via a param-group override and
+    # its Adam momentum reset by the poet_merge_step hook. The custom POETAdam +
+    # ChainedOptimizer path is opt-in via ``optim.poet.use_poet_adam=true``.
+    use_poet_adam = bool(getattr(config, "poet_use_poet_adam", False))
+    if not use_poet_adam:
         if poet_cache_mode != "none":
             raise ValueError(
-                "POET_VANILLA_OPT supports only poet_cache_mode='none'; the "
-                "cached_fwd_bwd path needs the manual VJP flush hook that the "
-                f"stock optimizer bypasses (got {poet_cache_mode!r})."
+                "The Megatron-Adam POET path supports only poet_cache_mode='none'; "
+                "the cached_fwd_bwd path needs the POETAdam VJP flush hook "
+                f"(got {poet_cache_mode!r}). Set optim.poet.use_poet_adam=true to use it."
             )
-        logger.warning(
-            "[POET] POET_VANILLA_OPT=1 -> stock Megatron optimizer (no POETAdam); "
-            "oft_R LR x%s via param-group override; reset via poet_merge_step hook.",
+        logger.info(
+            "[POET] Megatron-Adam path (no POETAdam): oft_R LR x%s via param-group "
+            "override; Adam momentum reset via poet_merge_step hook.",
             poet_scale,
         )
         return _build_vanilla_poet_optimizer(
@@ -471,6 +505,8 @@ def get_megatron_poet_optimizer(
             config_overrides=config_overrides,
             use_gloo_process_groups=use_gloo_process_groups,
         )
+
+    logger.info("[POET] custom POETAdam + ChainedOptimizer path (optim.poet.use_poet_adam=true).")
 
     def poet_init_state_fn(opt, config=None):
         base = opt.base_optimizer if hasattr(opt, "base_optimizer") else opt

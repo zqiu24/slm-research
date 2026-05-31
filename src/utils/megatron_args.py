@@ -232,32 +232,35 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             block_args = ["--poet-block-count", block_count]
         else:
             block_args = ["--poet-block-size", poet.block_size]
-        return _sequence(
-            [
-                "--optimizer",
-                "adam",
-                "--slm-optimizer",
-                "poet",
-                "--poet",
-                *block_args,
-                "--poet-init-type",
-                poet.init_type,
-                "--poet-mup-alpha",
-                poet.mup_alpha,
-                "--poet-merge-period",
-                poet.merge_period,
-                "--poet-scale",
-                poet.scale,
-                "--poet-cache-mode",
-                poet.get("cache_mode", "none"),
-                "--adam-beta1",
-                optim.betas[0],
-                "--adam-beta2",
-                optim.betas[1],
-                "--adam-eps",
-                optim.eps,
-            ]
-        )
+        poet_args = [
+            "--optimizer",
+            "adam",
+            "--slm-optimizer",
+            "poet",
+            "--poet",
+            *block_args,
+            "--poet-init-type",
+            poet.init_type,
+            "--poet-mup-alpha",
+            poet.mup_alpha,
+            "--poet-merge-period",
+            poet.merge_period,
+            "--poet-scale",
+            poet.scale,
+            "--poet-cache-mode",
+            poet.get("cache_mode", "none"),
+            "--adam-beta1",
+            optim.betas[0],
+            "--adam-beta2",
+            optim.betas[1],
+            "--adam-eps",
+            optim.eps,
+        ]
+        # store_true flag: emit only when the custom POETAdam path is requested
+        # (default = stock Megatron-Adam path).
+        if poet.get("use_poet_adam", False):
+            poet_args.append("--poet-use-poet-adam")
+        return _sequence(poet_args)
 
     if kind == "ngpt_adamw":
         ng = optim.get("ngpt", {})
