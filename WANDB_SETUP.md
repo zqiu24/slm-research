@@ -748,3 +748,30 @@ def build_tags(cfg) -> list[str]:
         f"month:{datetime.utcnow().strftime('%Y-%m')}",
     ]
 ```
+
+## Canonical metric schema (cross-backend)
+
+Both training backends normalize their core W&B metric keys onto one schema so a
+single dashboard overlays Megatron and torchtitan runs. Implemented by
+`src/utils/wandb_metrics.py` (`normalize()`), applied at each backend's W&B-log
+boundary (`src/patches/wandb_metric_normalize.py` for Megatron;
+`src/titan_ext/metrics.py` for torchtitan). Backend-specific extras keep their
+native names (passthrough). See
+`docs/superpowers/specs/2026-05-31-unified-wandb-logging-design.md`.
+
+| Canonical key | Meaning | Unit | Megatron source | Torchtitan source |
+|---|---|---|---|---|
+| `train/loss` | training loss (mean) | nats | `lm loss` | `loss_metrics/global_avg_loss` |
+| `train/loss_max` | max micro-batch loss | nats | — | `loss_metrics/global_max_loss` |
+| `train/lr` | learning rate | — | `learning-rate` | `lr` |
+| `train/grad_norm` | raw (pre-clip) grad norm | — | `grad-norm` | `grad_norm` |
+| `train/tokens_seen` | cumulative tokens | tokens | computed (consumed_samples × seq_len) | `n_tokens_seen` |
+| `perf/step_time_s` | wall-time per iteration | seconds | computed (perf-counter window) | `time_metrics/end_to_end(s)` |
+| `val/loss` | validation loss | nats | `lm loss validation` | `validation_metrics/loss` |
+
+**Throughput is intentionally NOT normalized.** Megatron's native `throughput`
+is **TFLOP/s/GPU**; torchtitan's `throughput(tps)` is tokens/sec normalized by
+`non_data_parallel_size` (a per-model-parallel-group rate). These are different
+quantities and would not overlay, so each backend keeps its native throughput key
+as a passthrough extra; `perf/step_time_s` is the comparable perf metric.
+TensorBoard keys are not normalized (W&B only).

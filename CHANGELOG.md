@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added — unified W&B logging
+
+- **Unified W&B metric keys across backends** (`src/utils/wandb_metrics.py`):
+  both backends now normalize their core training-health metrics onto one
+  canonical schema (`train/loss`, `train/lr`, `train/grad_norm`,
+  `train/tokens_seen`, `perf/step_time_s`, `val/loss`) so Megatron and torchtitan
+  runs overlay on one dashboard. Applied via a registered Megatron patch
+  (`wandb_metric_normalize`, wraps `wandb.log`; also computes tokens_seen /
+  step_time, which our runs don't log to W&B) and a torchtitan `WandBLogger.log`
+  wrapper in `src/titan_ext/metrics.py`. Throughput is deliberately NOT normalized
+  (Megatron's `throughput` is TFLOP/s/GPU; torchtitan's `throughput(tps)` is
+  normalized by `non_data_parallel_size` — not comparable), so each backend keeps
+  its native throughput as a passthrough. Backend-specific extras pass through
+  unchanged; no vendored-submodule edits. Design + plan in
+  `docs/superpowers/{specs,plans}/2026-05-31-unified-wandb-logging*.md`.
+
 ### Added — torchtitan training backend (M1–M2)
 
 - Vendored **torchtitan v0.2.2** as `third_party/torchtitan` (pinned
