@@ -32,6 +32,26 @@ def test_run_name_torchtitan_prefix():
     )
 
 
+def test_poet_name_includes_oft_scale():
+    # POET run name carries the oft_R LR multiplier (optim.poet.scale) so scale
+    # sweeps are distinguishable; explicit override keeps this robust to the
+    # yaml default. The block parameterization + lr segments are still present.
+    name = wandb_base_name(_cfg("experiment=optim/poet", "optim.poet.scale=0.5"))
+    assert name.endswith("-scale0.5")
+    assert name.startswith("poet-llama3-300m-lr")
+    assert "-bc" in name or "-bs" in name
+
+
+def test_poet_scale_formatting_is_compact():
+    # `:g` keeps it tidy: 0.05 not 0.050000, 1.0 -> 1.
+    assert wandb_base_name(_cfg("experiment=optim/poet", "optim.poet.scale=0.05")).endswith(
+        "-scale0.05"
+    )
+    assert wandb_base_name(_cfg("experiment=optim/poet", "optim.poet.scale=1.0")).endswith(
+        "-scale1"
+    )
+
+
 def test_only_difference_between_backends_is_the_prefix():
     base = _cfg("experiment=champion")
     titan = _cfg("experiment=champion", "backend=torchtitan")

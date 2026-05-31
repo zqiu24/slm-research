@@ -20,6 +20,15 @@
   params). Verified on 8-GPU `h100_de` and single-GPU `dev`: loss descends
   smoothly through every merge.
 
+### Changed — POET run name carries oft_R scale
+
+- **POET run names now include the oft_R LR multiplier** (`src/utils/wandb_naming.py`):
+  `wandb_base_name` appends a `-scale<v>` segment (`optim.poet.scale`, formatted
+  with `:g`) after the block parameterization, e.g.
+  `poet-llama3-300m-lr0.001-bc4-scale0.05`, so POET scale sweeps are
+  distinguishable on the W&B dashboard. Only the canonical W&B run name changes;
+  the on-disk run-dir name (`exp-family-scale-s<seed>-<ts>`) is unchanged.
+
 ### Added — unified W&B logging
 
 - **Unified W&B metric keys across backends** (`src/utils/wandb_metrics.py`):

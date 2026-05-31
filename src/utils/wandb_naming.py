@@ -19,8 +19,9 @@ def wandb_base_name(cfg: DictConfig) -> str:
     W&B's own run id). ``lr`` is ``optim.lr`` for adam/poet/ngpt. For muon_hybrid
     it is the Adam-side LR (``optim.adam.lr``) and a second ``-muon_lr<lr>`` segment
     holds the Muon-side LR (``optim.muon.lr``). POET additionally appends the block
-    parameterization: ``-bc<n>`` when ``block_count`` is set, else ``-bs<n>`` for the
-    legacy shared block size.
+    parameterization (``-bc<n>`` when ``block_count`` is set, else ``-bs<n>`` for the
+    legacy shared block size) and the oft_R LR multiplier ``-scale<v>``
+    (``optim.poet.scale``) so scale sweeps are distinguishable.
     """
     optim = cfg.optim
     otype = str(optim.type)
@@ -46,6 +47,8 @@ def wandb_base_name(cfg: DictConfig) -> str:
             parts.append(f"bc{int(block_count)}")
         else:
             parts.append(f"bs{int(poet.get('block_size', 256))}")
+        # oft_R LR multiplier (optim.poet.scale) — keeps scale sweeps distinct.
+        parts.append(f"scale{float(poet.get('scale', 1.0)):g}")
     return "-".join(parts)
 
 
