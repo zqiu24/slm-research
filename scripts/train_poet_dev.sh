@@ -98,4 +98,5 @@ python -m launchers.train_megatron \
   "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
   "base.model.tie_embeddings=false" \
+  "wandb.project=slm-zeju-dev" \
   "$@"

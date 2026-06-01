@@ -102,6 +102,7 @@ RUN=(python -m "${LAUNCHER}" \
   "training.save_enabled=true" \
   "optim.weight_decay=0" \
   "base.model.tie_embeddings=false" \
+  "wandb.project=slm-zeju-dev" \
   "$@")
 if [[ "${SLM_DRYRUN_PRINT:-0}" == "1" ]]; then
   printf '%s ' "${RUN[@]}"; echo
