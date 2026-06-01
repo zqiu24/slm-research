@@ -85,13 +85,28 @@ def _load_resolved_config(config_path: str):
     return OmegaConf.load(path)
 
 
+# Patches applied to EVERY Megatron run regardless of experiment. Logging-only,
+# so they belong here (not in any experiment's patches: list) and stay out of the
+# experiment patch_set_hash.
+_ALWAYS_ON_PATCHES = ("wandb_trainable_params",)
+
+
+def _resolve_runtime_patch_names(cfg) -> list[str]:
+    """Experiment patches plus the always-on patches, de-duplicated, order-stable."""
+    names = list(cfg.get("experiment", {}).get("patches", []) or [])
+    for name in _ALWAYS_ON_PATCHES:
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def _apply_runtime_patches(cfg) -> None:
     from src.patches import apply_patches
 
-    patches = list(cfg.get("experiment", {}).get("patches", []) or [])
-    for name in patches:
+    names = _resolve_runtime_patch_names(cfg)
+    for name in names:
         importlib.import_module(f"src.patches.{name}")
-    apply_patches(patches)
+    apply_patches(names)
 
 
 def _combined_extra_args_provider(existing_provider):

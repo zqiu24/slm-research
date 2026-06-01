@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — trainable/total param counts in the W&B run config
+
+- **Every Megatron run now logs `trainable_params`, `total_params`, and
+  `trainable_pct` into the W&B run config** (Overview → Config table, not a
+  chart) (`src/patches/wandb_trainable_params.py`, `src/utils/param_count.py`,
+  `launchers/pretrain_gpt_slm.py`). A new always-on patch wraps
+  `setup_model_and_optimizer`, counts params *after* it returns (so POET's frozen
+  base weights vs. trainable `oft_R` are reflected), SUM-reduces over the
+  model-parallel group (TP×PP; no-op in the current DP-only setup), and writes
+  the three fields on the W&B-logging rank via `get_wandb_writer().config.update(
+  ..., allow_val_change=True)` — mirroring Megatron's own post-setup
+  `config.update` for `slurm_job_name`. The collective runs on every rank
+  (outside the rank gate) to avoid a hang; the write is best-effort (falls back
+  to `0` on failure so the fields always appear). Applied unconditionally in the
+  per-rank launcher (`_resolve_runtime_patch_names`), so it needs no
+  `experiment.patches` entry and stays out of the experiment patch-set hash.
+  Expert parallelism (EP>1) is not yet aggregated across the expert group — a
+  warning is logged so the number is never silently wrong. Pure counting helper
+  `count_local_params` is CPU-unit-tested; the all-reduce / W&B write are covered
+  by a GPU smoke run.
+
 ### Changed — POET uses a 1% min-LR floor
 
 - **POET runs now default to a 1% min-LR floor instead of 10%**
