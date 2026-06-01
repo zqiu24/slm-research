@@ -1,13 +1,14 @@
 # @package _global_
 # Smallest dev/smoke scale — a faster-iterating sibling of 300m.yaml.
-# Sized so the model dim (hidden_size) is divisible by 512.
+# Sized so EVERY weight-matrix dim divides 512 (hidden 512, q/k/v/out 8*64=512,
+# ffn 1536=3*512), so POET can run with optim.poet.block_size=512.
 #
 # Non-embedding param count (the quantity the "60m" label refers to) is
-# ~60.3M, computed from the transformer blocks only (excludes input embedding
+# ~61.4M, computed from the transformer blocks only (excludes input embedding
 # and LM head):
-#   per layer = 2*d*q + 2*d*kv + 3*d*ffn + 2*d           (d=512, q=kv=512, ffn=1280)
-#             = 2*512*512 + 2*512*512 + 3*512*1280 + 1024 = 3,015,680
-#   20 layers + final norm (d) = 60,314,112
+#   per layer = 2*d*q + 2*d*kv + 3*d*ffn + 2*d           (d=512, q=kv=512, ffn=1536)
+#             = 2*512*512 + 2*512*512 + 3*512*1536 + 1024 = 3,408,896
+#   18 layers + final norm (d) = 61,360,640
 # Rounded to a clean 60_000_000 below (matches the round-label style of the
 # 600m/1_2b/2_4b rungs). NOTE: this is not just a label — total_tokens =
 # tokens_per_param * non_embedding_params (src/utils/megatron_args.py:159) ->
@@ -21,14 +22,15 @@ base:
   non_embedding_params: 60_000_000
 
   model:
-    num_layers: 20
+    num_layers: 18
     # The requested constraint: model dim divisible by 512 (here exactly 512,
     # the smallest such value). q/k/v/out projection dims are all 8*64 = 512,
     # so every attention weight-matrix dim also divides 512.
     hidden_size: 512
-    # 2.5x hidden — the SwiGLU ratio used across the whole ladder
-    # (300m=2560/1024, 600m=3200/1280, 1_2b=3840/1536, 2_4b=5760/2304).
-    ffn_hidden_size: 1280
+    # 3x hidden = 3*512 = 1536, so the FFN dim also divides 512 (POET-ready).
+    # Slightly fatter than the ladder's 2.5x ratio; equals torchtitan's native
+    # llama3 FFN for d=512 (int(2/3*4*512)=1365 -> round up to 256-mult -> 1536).
+    ffn_hidden_size: 1536
     num_attention_heads: 8
     # MHA (groups == heads). At this scale GQA buys little, and MHA keeps the
     # K/V projection out-dim = 8*64 = 512 (clean / POET block_size=512 friendly).
