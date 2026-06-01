@@ -1,11 +1,16 @@
 """Patch: log trainable / total param counts into the W&B run *config* (Megatron).
 
-Writes three static fields to the W&B Overview -> Config table (NOT charts):
+Writes four static fields to the W&B Overview -> Config table (NOT charts):
 
 * ``trainable_params`` — Σ ``p.numel()`` over params with ``requires_grad=True``
-  (for POET this is ``oft_R``; for plain Adam it equals ``total_params``).
+  (for POET this is ``oft_R`` + norms/embeddings/LM-head; for plain Adam it
+  equals ``total_params``).
 * ``total_params``      — Σ ``p.numel()`` over all params (incl. frozen base weights).
 * ``trainable_pct``     — ``100 * trainable / total``.
+* ``poet_params``       — Σ ``p.numel()`` over params whose name contains
+  ``oft_R`` (POET's trainable orthogonal generators). ``0`` for non-POET runs
+  (adam / muon / ngpt) — they have no such params — so the field is always
+  present and isolates POET's delta from the rest of the trainable set.
 
 Why a patch + ``config.update`` (not a chart, not a config arg): W&B's run
 config is a snapshot taken at ``wandb.init()`` time — before the model exists —
@@ -39,34 +44,37 @@ from src.patches._registry import register_patch
 logger = logging.getLogger(__name__)
 
 
-def _config_payload(trainable: int, total: int) -> dict:
+def _config_payload(trainable: int, total: int, poet: int) -> dict:
     """Build the W&B-config dict; ``trainable_pct`` is 0.0 when ``total`` is 0."""
     pct = round(100.0 * trainable / total, 4) if total else 0.0
     return {
         "trainable_params": int(trainable),
         "total_params": int(total),
         "trainable_pct": pct,
+        "poet_params": int(poet),
     }
 
 
-def _reduce_model_parallel_sum(trainable: int, total: int) -> tuple[int, int]:
-    """SUM ``(trainable, total)`` across the model-parallel group (TPxPP).
+def _reduce_model_parallel_sum(trainable: int, total: int, poet: int) -> tuple[int, int, int]:
+    """SUM ``(trainable, total, poet)`` across the model-parallel group (TPxPP).
 
     DP/CP ranks hold replicas and are excluded, so the result is the global
-    count for one replica. No-op when distributed is uninitialized or the
-    model-parallel group is a single rank (the current DP-only setup).
+    count for one replica. ``poet`` rides along as a third element of the same
+    reduced vector — identical group, identical reduction. No-op when
+    distributed is uninitialized or the model-parallel group is a single rank
+    (the current DP-only setup).
     """
     import torch
 
     if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
-        return trainable, total
+        return trainable, total, poet
     from megatron.core import parallel_state as mpu
 
     group = mpu.get_model_parallel_group()
     device = torch.cuda.current_device() if torch.cuda.is_available() else None
-    counts = torch.tensor([trainable, total], dtype=torch.long, device=device)
+    counts = torch.tensor([trainable, total, poet], dtype=torch.long, device=device)
     torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM, group=group)
-    return int(counts[0].item()), int(counts[1].item())
+    return int(counts[0].item()), int(counts[1].item()), int(counts[2].item())
 
 
 def _maybe_warn_expert_parallel() -> None:
@@ -98,24 +106,24 @@ def apply() -> None:
         # Count + reduce. This block runs identically on EVERY rank and must stay
         # OUTSIDE the logging-rank gate below: the all-reduce is a collective, so
         # a rank that skipped it would hang the ranks that didn't.
-        trainable, total = 0, 0
+        trainable, total, poet = 0, 0, 0
         try:
             from src.utils.param_count import count_local_params
 
             chunks = model if isinstance(model, list | tuple) else [model]
-            trainable, total = count_local_params(chunks)
+            trainable, total, poet = count_local_params(chunks)
             _maybe_warn_expert_parallel()
-            trainable, total = _reduce_model_parallel_sum(trainable, total)
+            trainable, total, poet = _reduce_model_parallel_sum(trainable, total, poet)
         except Exception:  # logging must never crash training; fall back to zeros
             logger.warning("wandb_trainable_params: counting failed", exc_info=True)
-            trainable, total = 0, 0
+            trainable, total, poet = 0, 0, 0
 
         # Write to the run config on the W&B-logging rank only (writer is None
         # elsewhere). Mirrors Megatron's own post-setup config.update.
         try:
             writer = _mt.get_wandb_writer()
             if writer is not None:
-                writer.config.update(_config_payload(trainable, total), allow_val_change=True)
+                writer.config.update(_config_payload(trainable, total, poet), allow_val_change=True)
         except Exception:  # logging must never crash training
             logger.warning("wandb_trainable_params: config.update failed", exc_info=True)
 

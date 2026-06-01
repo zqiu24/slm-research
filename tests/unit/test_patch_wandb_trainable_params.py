@@ -34,23 +34,33 @@ def test_patch_registers_with_empty_targets():
 
 def test_config_payload_normal():
     mod = importlib.import_module("src.patches.wandb_trainable_params")
-    # 4 trainable oft_R of 104 total -> 3.8462%
-    assert mod._config_payload(4, 104) == {
+    # 4 trainable oft_R of 104 total -> 3.8462%, all 4 trainable are poet.
+    assert mod._config_payload(4, 104, 4) == {
         "trainable_params": 4,
         "total_params": 104,
         "trainable_pct": 3.8462,
+        "poet_params": 4,
     }
 
 
 def test_config_payload_full_trainable_is_100pct():
     mod = importlib.import_module("src.patches.wandb_trainable_params")
-    assert mod._config_payload(15, 15)["trainable_pct"] == 100.0
+    assert mod._config_payload(15, 15, 0)["trainable_pct"] == 100.0
 
 
 def test_config_payload_zero_total_no_div_by_zero():
     mod = importlib.import_module("src.patches.wandb_trainable_params")
-    assert mod._config_payload(0, 0) == {
+    assert mod._config_payload(0, 0, 0) == {
         "trainable_params": 0,
         "total_params": 0,
         "trainable_pct": 0.0,
+        "poet_params": 0,
     }
+
+
+def test_config_payload_non_poet_run_has_zero_poet():
+    # adam / muon: every param trainable, none are oft_R -> poet_params == 0.
+    mod = importlib.import_module("src.patches.wandb_trainable_params")
+    payload = mod._config_payload(100, 100, 0)
+    assert payload["poet_params"] == 0
+    assert payload["trainable_pct"] == 100.0
