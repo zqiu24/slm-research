@@ -80,7 +80,8 @@ RUN=(python -m "${LAUNCHER}" \
   "${BACKEND_OVERRIDE[@]}" \
   "cluster=h100_de" \
   "experiment=optim/adam" \
-  "training.global_batch_size=512" \
+  "training.global_batch_size=1024" \
+  "training.micro_batch_size=128" \
   "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
   "$@")
