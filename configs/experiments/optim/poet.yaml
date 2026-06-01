@@ -45,13 +45,13 @@ optim:
     #   block_size: one shared block size on both sides; must divide in & out.
     #   block_count: each side gets `n` blocks → block_size_in = in/n,
     #     block_size_out = out/n (may differ). Better for non-square FFN layers.
-    block_size: 256
-    # block_count: 4       # uncomment to use decoupled block sizes instead.
+    # block_size: 256
+    block_count: 4       # uncomment to use decoupled block sizes instead.
     cache_mode: none       # "none" | "cached_fwd_bwd". Pinned to none: the R-block cache only pays off at K>=16 microbatches and is a slowdown at the small K we run (~0.8x at K=4); the fast chain path (below) is the real win. Set cached_fwd_bwd only for large-K accumulation.
     init_type: normalized   # "none" | "normalized" | "mup_normalized"
     mup_alpha: 1.0
     merge_period: 400       # 0 disables periodic merge
-    scale: 0.2              # LR multiplier for the POET linear group
+    scale: 0.5              # LR multiplier for the POET linear group
     # Optimizer impl. DEFAULT (false): stock Megatron Adam — oft_R is a normal
     # trainable param in the DDP grad buffer, its LR is scaled by `scale` via a
     # param-group override, and its Adam momentum is reset by the poet_merge_step

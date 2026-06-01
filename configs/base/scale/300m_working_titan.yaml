@@ -11,7 +11,7 @@ base:
     # builds the SAME model as the torchtitan backend (which ignores ffn_hidden_size
     # and derives it from dim): 4*1024 -> int(2/3 * 4096)=2730 -> round up to
     # multiple_of=256 -> 2816. (Was 2560.)
-    ffn_hidden_size: 2560
+    ffn_hidden_size: 2816
     num_attention_heads: 16
     num_query_groups: 4          # GQA 4:1
     head_dim: 64
