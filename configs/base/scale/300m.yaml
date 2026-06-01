@@ -20,14 +20,15 @@
 # value, so a name that doesn't match an existing file -> FileNotFoundError.
 base:
   scale: "300m"
-  # PINNED at the anchor's 300M on purpose (the real model is ~317M after the
-  # GQA bump). This value is NOT just a label: total_tokens = tokens_per_param *
+  # ~317M = the REAL non-embedding param count after the GQA 4:1->2:1 bump
+  # (300M anchor + ~16.8M from the doubled K/V projections). Set to the true
+  # size on purpose: this is not just a label — total_tokens = tokens_per_param *
   # non_embedding_params (src/utils/megatron_args.py:159) -> --train-samples ->
-  # the GPTDataset cache key (num_samples). Keeping 300M holds
-  # train_samples = 20*300e6//256 = 23,437,500 identical to the 300m anchor, so
-  # the (multi-hour) dataset index is REUSED and adam/poet stay token-budget
-  # comparable. Bumping to 317M would silently force a full dataset rebuild.
-  non_embedding_params: 300_000_000
+  # GPTDataset num_samples, so the token budget scales with the actual model
+  # size (the intended tokens-per-param law). Consequence: a one-time dataset
+  # index rebuild vs the 300m anchor's cached 23,437,500 samples, since this
+  # gives train_samples = 20*317e6//256 = 24,765,625.
+  non_embedding_params: 317_000_000
 
   model:
     num_layers: 32
