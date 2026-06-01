@@ -271,6 +271,44 @@ def chain_layer_x_pytorch(x: torch.Tensor, Rin: torch.Tensor, weight: torch.Tens
     return y
 
 
+def chain_layer_x_fast_decoupled(
+    x: torch.Tensor, Rin: torch.Tensor, weight: torch.Tensor,
+    bias: Optional[torch.Tensor], Rout: torch.Tensor,
+    perm_in_inv: torch.Tensor, perm_in: torch.Tensor,
+    perm_out: torch.Tensor, perm_out_inv: torch.Tensor,
+    bsz_in: int, bsz_out: int,
+) -> torch.Tensor:
+    """Non-recompute ("fast") twin of
+    ``poet::chain_layer_checkpoint_mem_o2_decoupled``.
+
+    Identical math (verified bit-exact on fwd + grad_x/grad_Rin/grad_Rout), but
+    written as plain ops so autograd *saves* the cheap block-rotation
+    activations instead of recomputing the input rotation + dense matmul in the
+    backward. Trades a little activation memory for ~1 fewer forward-equivalent
+    per layer per microbatch — a net win whenever memory is not the binding
+    constraint (e.g. small/medium dense models). It is also fully traceable, so
+    ``torch.compile`` can fuse it with the surrounding Cayley output (the custom
+    op is opaque to the compiler). Set ``mem_efficient_mode=True`` to fall back
+    to the recompute op for memory-bound runs.
+    """
+    leading_shape = x.shape[:-1]
+    Din = x.shape[-1]
+    N = x.numel() // Din
+    rin = Rin.size(0)
+    rout = Rout.size(0)
+
+    x = x[..., perm_in_inv]
+    xb_r = x.reshape(N, rin, bsz_in).transpose(0, 1)        # [rin, N, b_in]
+    xR = torch.bmm(xb_r, Rin).transpose(0, 1).reshape(N, rin * bsz_in)
+    yb_flat = xR @ weight.t()
+    if bias is not None:
+        yb_flat = yb_flat + bias
+    yb_r = yb_flat.view(N, rout, bsz_out).transpose(0, 1)   # [rout, N, b_out]
+    y = torch.bmm(yb_r, Rout).transpose(0, 1).reshape(*leading_shape, rout * bsz_out)
+    y = y[..., perm_out]
+    return y
+
+
 @torch.compile(fullgraph=True)
 def forward_core(
     x: torch.Tensor, 
@@ -325,11 +363,21 @@ def forward_core_decoupled(
         oft_R_in, oft_R_out, block_size_in, block_size_out,
         rows_in, cols_in, rows_out, cols_out,
     )
-    y = chain_layer_x_checkpoint_mem_o2_decoupled(
-        x, R_in, base_weight, base_bias, R_out,
-        perm_in_inv, perm_in, perm_out, perm_out_inv,
-        block_size_in, block_size_out,
-    )
+    if mem_efficient_mode:
+        # Memory-bound path: recompute the input rotation + dense matmul in the
+        # backward (saves activation memory, costs ~1 extra forward per layer).
+        y = chain_layer_x_checkpoint_mem_o2_decoupled(
+            x, R_in, base_weight, base_bias, R_out,
+            perm_in_inv, perm_in, perm_out, perm_out_inv,
+            block_size_in, block_size_out,
+        )
+    else:
+        # Fast (default) path: let autograd save activations — no recompute.
+        y = chain_layer_x_fast_decoupled(
+            x, R_in, base_weight, base_bias, R_out,
+            perm_in_inv, perm_in, perm_out, perm_out_inv,
+            block_size_in, block_size_out,
+        )
     return y
 
 
