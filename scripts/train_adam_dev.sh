@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Dev variant of train_adam.sh: same harness, but defaults to the tiny 60m
+# scale (configs/base/scale/60m.yaml, hidden=512, ~61M non-embedding params)
+# for fast local iteration instead of 300m. Untied embeddings are forced on
+# (overridable). Everything else — backend routing, env sourcing, batch sizes,
+# dry-run print — is identical to train_adam.sh, and any "$@" override still wins.
+
+# Auto-source the cluster env loader so the user doesn't have to remember.
+# Provides: cuda/13.2 on PATH (nvcc), LD_PRELOAD=libcublasLt.so.13 (TE
+# symbol fix), and the older system cudnn-9.10.2 unloaded (torch wants
+# the venv-bundled 9.19.0). All three are load-bearing for training to
+# pass `import transformer_engine` and the first forward step.
+SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Skip the CUDA env loader when only printing the resolved command — dry-print
+# needs no GPU, and the loader derefs $HOME under `set -u` (fails in a clean env).
+if [[ "${SLM_DRYRUN_PRINT:-0}" != "1" ]]; then
+  source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
+fi
+
+ARCH="${1:-llama3}"
+if [[ "${ARCH}" == "llama3" || "${ARCH}" == "deepseek_v3" || "${ARCH}" == "deepseek_v3_3b" ]]; then
+  shift || true
+else
+  ARCH="llama3"
+fi
+
+case "${ARCH}" in
+  llama3)
+    FAMILY="llama3"
+    DEFAULT_SCALE="60m"            # tiny dev scale; override with base/scale=...
+    ;;
+  deepseek_v3)
+    FAMILY="deepseek_v3"
+    DEFAULT_SCALE="deepseek_v3_proxy_small"
+    ;;
+  deepseek_v3_3b)
+    # DeepSeek-V3-style 3B-total / ~520M-activated. Ported from
+    # Megatron-poet/training_scripts/model_args/DeepSeek-3B.yaml.
+    FAMILY="deepseek_v3"
+    DEFAULT_SCALE="deepseek_v3_3b"
+    ;;
+  *)
+    echo "Unknown architecture: ${ARCH}. Use llama3, deepseek_v3, or deepseek_v3_3b." >&2
+    exit 2
+    ;;
+esac
+
+# Extract --backend {megatron,torchtitan} (default megatron) from the passthrough
+# args, route to the matching launcher, and inject backend=<value> so it lands in
+# the resolved config (and the run name / torchtitan_sha).
+BACKEND="megatron"
+NEWARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --backend) BACKEND="$2"; shift 2 ;;
+    --backend=*) BACKEND="${1#*=}"; shift ;;
+    *) NEWARGS+=("$1"); shift ;;
+  esac
+done
+set -- "${NEWARGS[@]}"
+
+case "${BACKEND}" in
+  megatron)   LAUNCHER="launchers.train_megatron"; BACKEND_OVERRIDE=() ;;
+  torchtitan) LAUNCHER="launchers.train_torchtitan"; BACKEND_OVERRIDE=("backend=torchtitan") ;;
+  *) echo "Unknown backend: ${BACKEND}. Use megatron or torchtitan." >&2; exit 2 ;;
+esac
+
+# Only inject the scale default if the user did not pass base/scale=...
+USER_SET_SCALE="no"
+for arg in "$@"; do
+  case "${arg}" in
+    base/scale=*) USER_SET_SCALE="yes" ;;
+  esac
+done
+
+SCALE_ARGS=()
+if [[ "${USER_SET_SCALE}" == "no" && -n "${DEFAULT_SCALE}" ]]; then
+  SCALE_ARGS=("base/scale=${DEFAULT_SCALE}")
+fi
+
+RUN=(python -m "${LAUNCHER}" \
+  "base/family=${FAMILY}" \
+  "${SCALE_ARGS[@]}" \
+  "${BACKEND_OVERRIDE[@]}" \
+  "cluster=h100_de" \
+  "experiment=optim/adam" \
+  "training.global_batch_size=1024" \
+  "training.micro_batch_size=128" \
+  "base.model.transformer_impl=local" \
+  "training.save_enabled=true" \
+  "optim.weight_decay=0" \
+  "base.model.tie_embeddings=false" \
+  "$@")
+if [[ "${SLM_DRYRUN_PRINT:-0}" == "1" ]]; then
+  printf '%s ' "${RUN[@]}"; echo
+else
+  "${RUN[@]}"
+fi
