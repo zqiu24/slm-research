@@ -76,15 +76,14 @@ divergence step — report the step and treat `1600` as the clean "loosened" com
 
 **One piece of new code** (the only build in this plan): an "overfit a single fixed minibatch"
 mode — cache the first micro-batch and feed it every step, constant LR, large fixed step budget.
-Regularization is already off (`weight_decay=0`, dropout 0). Implement behind a flag, e.g.
-`+training.overfit_single_batch=true` plus `scheduler=constant` (exact wiring left to the
-implementation plan).
+Regularization is already off (`weight_decay=0`, dropout 0). Realized as an env-gated patch
+(`SLM_OVERFIT_SINGLE_BATCH=1`) plus `scheduler=constant`; see the implementation plan for wiring.
 
-Three arms, identical batch/seed/budget, 60m:
+Three arms, identical batch/seed/budget, 60m, DP=1:
 ```bash
-codexlog s0a_adam      bash scripts/train_adam_dev.sh  +training.overfit_single_batch=true scheduler=constant
-codexlog s0a_poet400   bash scripts/train_poet_dev.sh  +training.overfit_single_batch=true scheduler=constant
-codexlog s0a_poet0     bash scripts/train_poet_dev.sh  +training.overfit_single_batch=true scheduler=constant optim.poet.merge_period=0
+SLM_OVERFIT_SINGLE_BATCH=1 codexlog s0a_adam    bash scripts/train_adam_dev.sh scheduler=constant
+SLM_OVERFIT_SINGLE_BATCH=1 codexlog s0a_poet400 bash scripts/train_poet_dev.sh scheduler=constant
+SLM_OVERFIT_SINGLE_BATCH=1 codexlog s0a_poet0   bash scripts/train_poet_dev.sh scheduler=constant optim.poet.merge_period=0
 ```
 Plot train-loss-vs-step floors on shared axes.
 
@@ -108,7 +107,7 @@ over training + scalars: condition number `σ_max/σ_min`, stable rank `‖·‖
 `σ_max/σ_median`.
 
 ```bash
-codexlog s0b_cond  bash scripts/train_poet_dev.sh +diagnostics.poet_grad_conditioning=true
+SLM_POET_GRAD_CONDITIONING=1 codexlog s0b_cond  bash scripts/train_poet_dev.sh
 ```
 
 **Gate:**
