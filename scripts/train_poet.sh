@@ -43,10 +43,12 @@ esac
 #   scale=300m (smallest dense scale), seq_length=256 (short ctx for fast debug).
 USER_SET_SCALE="no"
 USER_SET_SEQ="no"
+USER_SET_SCHED="no"
 for arg in "$@"; do
   case "${arg}" in
     base/scale=*) USER_SET_SCALE="yes" ;;
     base.model.seq_length=*) USER_SET_SEQ="yes" ;;
+    scheduler=*) USER_SET_SCHED="yes" ;;
   esac
 done
 
@@ -60,10 +62,19 @@ if [[ "${USER_SET_SEQ}" == "no" ]]; then
   SEQ_ARGS=("base.model.seq_length=256")
 fi
 
+# POET defaults to a 1% min-LR floor (scheduler/cosine_poet.yaml,
+# min_lr_ratio=0.01) instead of the global cosine default's 10%, matching the
+# POET reference recipe. Override with scheduler=... on the command line.
+SCHED_ARGS=()
+if [[ "${USER_SET_SCHED}" == "no" ]]; then
+  SCHED_ARGS=("scheduler=cosine_poet")
+fi
+
 python -m launchers.train_megatron \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
   "${SEQ_ARGS[@]}" \
+  "${SCHED_ARGS[@]}" \
   "cluster=h100_de" \
   "experiment=optim/poet" \
   "training.global_batch_size=512" \

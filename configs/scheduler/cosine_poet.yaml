@@ -1,0 +1,13 @@
+# @package _global_
+# Cosine decay with a 1% min-LR floor — the POET variant of cosine.yaml.
+#
+# Identical to cosine.yaml except min_lr_ratio is 0.01 (vs 0.1): the LR (and,
+# after the optim.poet.scale multiplier, the oft_R group's LR) anneals to 1% of
+# peak instead of 10%. Matches the POET reference recipe (Megatron-poet uses
+# LR 8.6e-4 / MIN_LR 7e-6 ≈ a 0.8% floor). Wired as the default in
+# scripts/train_poet.sh; override per-run with scheduler=... or
+# scheduler.min_lr_ratio=...
+scheduler:
+  type: cosine
+  warmup_fraction: 0.01      # 1% of total tokens; auto-scales with the budget
+  min_lr_ratio: 0.01         # min_lr = 0.01 × optim.lr (POET 1% floor, vs 0.1 default)

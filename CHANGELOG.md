@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Changed — POET uses a 1% min-LR floor
+
+- **POET runs now default to a 1% min-LR floor instead of 10%**
+  (`configs/scheduler/cosine_poet.yaml`, `scripts/train_poet.sh`). The global
+  cosine scheduler floors at `min_lr_ratio=0.1` (`min_lr = 0.1 × optim.lr`),
+  which carried through the `optim.poet.scale` multiplier to land the `oft_R`
+  group at a 10% floor (`min_lr=5e-6` vs `max_lr=5e-5`). The reference POET
+  recipe (Megatron-poet: `LR 8.6e-4 / MIN_LR 7e-6`) uses ~0.8%. New
+  `scheduler=cosine_poet` (`min_lr_ratio=0.01`) is injected as the default by
+  `train_poet.sh` (overridable with `scheduler=...`), giving global
+  `--min-lr=1e-5` and `oft_R min_lr=5e-7` — a true 1% floor. Non-POET runs are
+  unaffected; `cosine.yaml` still defaults to `0.1`. Note `optim.min_lr` is not
+  a wired key — `--min-lr` is derived solely from `scheduler.min_lr_ratio ×
+  optim.lr`.
+
 ### Fixed — POET merge loss spike
 
 - **POET merge-and-reinitialize no longer spikes the loss every
