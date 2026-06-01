@@ -1,8 +1,26 @@
 # @package _global_
-# Optional smallest-scale slope anchor / smoke test (SPEC.md §1.2).
+# Default 300m build, sized so EVERY weight-matrix dimension divides 512 — so
+# POET can run with `optim.poet.block_size=512`, and adam/muon/etc. train the
+# SAME model for an apples-to-apples comparison.
+#
+# vs the original anchor (kept verbatim as 300m_base.yaml): the only change is
+# num_query_groups 4 -> 8 (GQA 4:1 -> 2:1). POET unfuses QKV/gate-up and
+# hard-errors unless EACH unfused Q/K/V/gate/up segment's in- and out-dim
+# divides the block size. The one dim 512 didn't divide was the K/V projection
+# out-dim (num_query_groups * head_dim = 4*64 = 256); 8 groups makes it
+# 8*64 = 512. Everything else (hidden 1024, Q out 16*64=1024, attn-out 1024,
+# ffn 2560=5*512) already divides 512. 8 still divides 16 heads so GQA is valid.
+#
+# Trade-off: +~17M non-embedding params (K/V projections double) and a 2:1 (not
+# 4:1) GQA ratio, so this is NOT a torchtitan-parity build / canonical slope
+# anchor — use 300m_base for those.
+#
+# IMPORTANT: `scale` below MUST equal this file's stem ("300m"). submit.py's
+# _load_champion_for() reloads configs/base/scale/<base.scale>.yaml by that
+# value, so a name that doesn't match an existing file -> FileNotFoundError.
 base:
   scale: "300m"
-  non_embedding_params: 300_000_000
+  non_embedding_params: 317_000_000   # ~+17M vs original anchor (wider K/V proj from GQA 2:1)
 
   model:
     num_layers: 32
@@ -10,10 +28,13 @@ base:
     # Aligned to torchtitan's NATIVE llama3 FFN sizing so the Megatron backend
     # builds the SAME model as the torchtitan backend (which ignores ffn_hidden_size
     # and derives it from dim): 4*1024 -> int(2/3 * 4096)=2730 -> round up to
-    # multiple_of=256 -> 2816. (Was 2560.)
+    # multiple_of=256 -> 2816. (Was 2560.) Note 2560 = 5*512, so already 512-aligned.
     ffn_hidden_size: 2560
     num_attention_heads: 16
-    num_query_groups: 4          # GQA 4:1
+    # GQA 2:1 (vs 4:1 in 300m_base). 8 query groups so the K/V projection out-dim
+    # num_query_groups * head_dim = 8*64 = 512 is divisible by POET block_size=512.
+    # 8 also divides num_attention_heads=16, so the GQA grouping stays valid.
+    num_query_groups: 8
     head_dim: 64
     # Dev/smoke context length. NOTE: diverges from the 4096 used across the
     # rest of the scale ladder, so a 300m run is NOT a valid 4096 slope-anchor

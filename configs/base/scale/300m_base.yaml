@@ -1,0 +1,29 @@
+# @package _global_
+# Optional smallest-scale slope anchor / smoke test (SPEC.md §1.2).
+base:
+  scale: "300m"
+  non_embedding_params: 300_000_000
+
+  model:
+    num_layers: 32
+    hidden_size: 1024
+    # Aligned to torchtitan's NATIVE llama3 FFN sizing so the Megatron backend
+    # builds the SAME model as the torchtitan backend (which ignores ffn_hidden_size
+    # and derives it from dim): 4*1024 -> int(2/3 * 4096)=2730 -> round up to
+    # multiple_of=256 -> 2816. (Was 2560.)
+    ffn_hidden_size: 2560
+    num_attention_heads: 16
+    num_query_groups: 4          # GQA 4:1
+    head_dim: 64
+    # Dev/smoke context length. NOTE: diverges from the 4096 used across the
+    # rest of the scale ladder, so a 300m run is NOT a valid 4096 slope-anchor
+    # as-is (override base.model.seq_length=4096 to use 300m for cross-scale slope).
+    seq_length: 256
+    # Untied to match torchtitan's native llama3 (separate output projection).
+    tie_embeddings: false
+    # Re-initialize Megatron's weights to torchtitan's native llama3 init scheme
+    # (std=1.0 embeddings, per-layer depth-scaled output/up projections, dim^-0.5
+    # LM head). No Megatron config knob expresses this; applied as a post-build
+    # weight overwrite (src/model/titan_init.py) wired in launchers/pretrain_gpt_slm.py.
+    # No-op on the torchtitan backend, which already uses this init.
+    titan_init: true
