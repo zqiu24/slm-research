@@ -67,11 +67,15 @@ case "${BACKEND}" in
   *) echo "Unknown backend: ${BACKEND}. Use megatron or torchtitan." >&2; exit 2 ;;
 esac
 
-# Only inject the scale default if the user did not pass base/scale=...
+# Inject defaults unless overridden on the command line:
+#   scale=60m, and the 40x-tokens-per-param dev regime (training_regime=ablation_40x,
+#   i.e. 40 * non_embedding_params tokens — 2x the base 20x default).
 USER_SET_SCALE="no"
+USER_SET_REGIME="no"
 for arg in "$@"; do
   case "${arg}" in
     base/scale=*) USER_SET_SCALE="yes" ;;
+    training_regime=*) USER_SET_REGIME="yes" ;;
   esac
 done
 
@@ -80,9 +84,15 @@ if [[ "${USER_SET_SCALE}" == "no" && -n "${DEFAULT_SCALE}" ]]; then
   SCALE_ARGS=("base/scale=${DEFAULT_SCALE}")
 fi
 
+REGIME_ARGS=()
+if [[ "${USER_SET_REGIME}" == "no" ]]; then
+  REGIME_ARGS=("training_regime=ablation_40x")
+fi
+
 RUN=(python -m "${LAUNCHER}" \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
+  "${REGIME_ARGS[@]}" \
   "${BACKEND_OVERRIDE[@]}" \
   "cluster=h100_de" \
   "experiment=optim/adam" \

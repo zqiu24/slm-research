@@ -46,21 +46,30 @@ case "${ARCH}" in
 esac
 
 # Inject debug defaults unless overridden on the command line:
-#   scale=60m (tiny dev scale), seq_length=256 (short ctx for fast debug).
+#   scale=60m (tiny dev scale), seq_length=256 (short ctx for fast debug),
+#   training_regime=ablation_40x (40 * non_embedding_params tokens — 2x the
+#   base 20x default).
 USER_SET_SCALE="no"
 USER_SET_SEQ="no"
 USER_SET_SCHED="no"
+USER_SET_REGIME="no"
 for arg in "$@"; do
   case "${arg}" in
     base/scale=*) USER_SET_SCALE="yes" ;;
     base.model.seq_length=*) USER_SET_SEQ="yes" ;;
     scheduler=*) USER_SET_SCHED="yes" ;;
+    training_regime=*) USER_SET_REGIME="yes" ;;
   esac
 done
 
 SCALE_ARGS=()
 if [[ "${USER_SET_SCALE}" == "no" && -n "${DEFAULT_SCALE}" ]]; then
   SCALE_ARGS=("base/scale=${DEFAULT_SCALE}")
+fi
+
+REGIME_ARGS=()
+if [[ "${USER_SET_REGIME}" == "no" ]]; then
+  REGIME_ARGS=("training_regime=ablation_40x")
 fi
 
 SEQ_ARGS=()
@@ -79,6 +88,7 @@ fi
 python -m launchers.train_megatron \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
+  "${REGIME_ARGS[@]}" \
   "${SEQ_ARGS[@]}" \
   "${SCHED_ARGS[@]}" \
   "cluster=h100_de" \
