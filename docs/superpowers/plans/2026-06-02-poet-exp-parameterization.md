@@ -16,6 +16,8 @@
 ```
 (First collection is slow — ~30–90s — because importing torch + triton + poet_torch is heavy. This is normal; do not assume a hang.) Run CPU tests yourself and report real output. Do **not** run any GPU/training job — those are the user's.
 
+**CPU-safety invariant (verified):** the `exp` path is pure PyTorch (`torch.linalg.matrix_exp`) and runs on CPU; the **Cayley path is a Triton op (`torch.ops.poet.cayley`) with NO CPU fallback** — calling it on a CPU-only node raises `RuntimeError: 0 active drivers`. Every test in this plan is designed so that on CPU it exercises *only* the `exp` path (or pure construction / pure-PyTorch refs). This is also why several "expected to FAIL before the fix" steps fail by *crashing on the Triton op*, not by a wrong value — that is the intended TDD signal. Do not add CPU tests that call a `parameterization="cayley"` forward / merge / estimator. (A benign `CUDA initialization ... driver too old` warning from torch probing for a GPU is expected and harmless.)
+
 **Working-tree note:** [`third_party/poet_torch/poet_layer.py`](../../../third_party/poet_torch/poet_layer.py) and [`configs/experiments/optim/poet.yaml`](../../../configs/experiments/optim/poet.yaml) already carry **unrelated** uncommitted edits (separate Muon-Q work). Layer your edits on top; never revert those. Each commit stages **only** the files that belong to that task.
 
 ---
@@ -96,7 +98,13 @@ def test_exp_builder_is_exactly_orthogonal():
 
 def test_exp_is_tighter_than_cayley_neumann_at_large_angle():
     """At a non-tiny angle, exp stays exactly orthogonal while the degree-4
-    Cayley/Neumann truncation drifts measurably."""
+    Cayley/Neumann truncation drifts measurably.
+
+    Uses ``cayley_batch`` (the pure-Python degree-4 helper, CPU-runnable) as the
+    truncation stand-in — NOT the production ``poet::cayley`` Triton kernel,
+    which has no CPU fallback. The point is only that a finite polynomial
+    truncation drifts from orthogonality where exp does not.
+    """
     from poet_torch.poet_layer import (
         cayley_batch,
         get_weight_poet_decoupled_exp,
@@ -237,7 +245,7 @@ def test_poetlinear_rejects_unknown_parameterization():
                    parameterization="bogus", device="cpu", dtype=torch.float32)
 
 
-def test_build_R_exp_is_orthogonal_and_cayley_branch_runs():
+def test_build_R_exp_is_orthogonal():
     from poet_torch import POETLinear
 
     pl = POETLinear(in_features=16, out_features=16, bsz=8,
@@ -554,8 +562,18 @@ def test_merge_then_reinitialize_exp_rotates_weight_and_zeros_oft():
 
 
 def test_delta_weff_spec_uses_layer_parameterization():
+    """The estimator must build R with the layer's parameterization. With prev=0
+    the previous rotation is exactly I, so the expected
+    dM = (Rin_exp @ W^T @ Rout_exp) - W^T. Before the fix the estimator hardcodes
+    the Cayley builder: on CPU that Triton op crashes (no CPU fallback); on GPU it
+    yields a materially different dM (verified diff ~1.0). Either way this fails
+    until Step 3 routes the estimator through the exp builder."""
     from poet_torch import POETLinear
-    from poet_torch.poet_layer import estimate_poet_delta_weff_spec
+    from poet_torch.poet_layer import (
+        block_diag_lr_matmul_decoupled,
+        estimate_poet_delta_weff_spec,
+        get_weight_poet_decoupled_exp,
+    )
 
     pl = POETLinear(in_features=16, out_features=16, bsz=8,
                     parameterization="exp", device="cpu", dtype=torch.float32)
@@ -565,9 +583,16 @@ def test_delta_weff_spec_uses_layer_parameterization():
         prev_out = torch.zeros_like(pl.oft_R_out)
         pl.oft_R_in.normal_(std=0.1)
         pl.oft_R_out.normal_(std=0.1)
+        R_out, R_in = get_weight_poet_decoupled_exp(
+            pl.oft_R_in, pl.oft_R_out, pl.block_size_in, pl.block_size_out,
+            pl.rows_in, pl.cols_in, pl.rows_out, pl.cols_out)
+        W = pl.weight.detach().float()
+        dM_expected = block_diag_lr_matmul_decoupled(R_in.float(), W.t(), R_out.float()) - W.t()
+
     dM, sigma = estimate_poet_delta_weff_spec(pl, prev_in, prev_out)
     assert sigma > 0.0
     assert torch.isfinite(dM).all()
+    assert torch.allclose(dM, dM_expected, atol=1e-4, rtol=1e-3), (dM - dM_expected).abs().max()
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -576,7 +601,7 @@ Run:
 ```
 /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_exp_parameterization.py -q -p no:cacheprovider -k "merge or delta_weff"
 ```
-Expected: `test_merge_then_reinitialize_exp...` PASSES already (merge routes through `_build_R`), but `test_delta_weff_spec_uses_layer_parameterization` may pass-by-luck or mismatch because `estimate_poet_delta_weff_spec`'s inner `_R` hardcodes the Cayley builder. To make the requirement explicit and the fix verifiable, also assert exp-vs-cayley divergence (see Step 3 rationale). If both pass without the fix, still apply Step 3 — the estimator MUST use the layer's parameterization for correctness.
+Expected: `test_merge_then_reinitialize_exp...` PASSES already (merge routes through `_build_R` from Task 2 — this test is a regression guard). `test_delta_weff_spec_uses_layer_parameterization` FAILS: the estimator's inner `_R` still hardcodes the Cayley builder, so on this CPU node it raises `RuntimeError: 0 active drivers` (the Triton `poet::cayley` op has no CPU fallback); on a GPU node it would instead fail the `allclose` (Cayley R ≠ exp R; verified dM diff ~1.0). Either way it fails until Step 3.
 
 - [ ] **Step 3: Route the estimator through the layer's parameterization**
 
