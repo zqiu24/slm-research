@@ -41,3 +41,19 @@ def test_vec_to_skew_is_skew_symmetric_and_matches_layout():
     # first upper-tri entry (row 0, col 1) of block 0 is vec[0,0]
     assert q[0, 0, 1].item() == 1.0
     assert q[0, 1, 0].item() == -1.0
+
+
+def test_skew_to_vec_is_inverse_of_vec_to_skew():
+    from src.diag.skew_conditioning import skew_to_vec, vec_to_skew
+
+    b = 6
+    vec = torch.arange(1.0, 1.0 + 2 * (b * (b - 1) // 2)).reshape(2, b * (b - 1) // 2)
+    round_trip = skew_to_vec(vec_to_skew(vec, b), b)
+    assert torch.allclose(round_trip, vec)
+
+
+def test_block_size_from_nelems():
+    from src.diag.skew_conditioning import block_size_from_nelems
+
+    for b in (2, 4, 8, 256, 512):
+        assert block_size_from_nelems(b * (b - 1) // 2) == b

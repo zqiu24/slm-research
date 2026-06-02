@@ -7,6 +7,8 @@ tensors so the math is unit-testable on CPU.
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 
@@ -57,3 +59,25 @@ def vec_to_skew(vec: torch.Tensor, block_size: int) -> torch.Tensor:
     q[:, rows, cols] = vec
     q[:, cols, rows] = -vec
     return q
+
+
+def block_size_from_nelems(n_elems: int) -> int:
+    """Recover block size b from the strictly-upper-triangular count
+    n_elems = b*(b-1)/2  =>  b = (1 + sqrt(1 + 8*n_elems)) / 2."""
+    return (1 + math.isqrt(1 + 8 * int(n_elems))) // 2
+
+
+def skew_to_vec(skew: torch.Tensor, block_size: int) -> torch.Tensor:
+    """Inverse of ``vec_to_skew``: extract the strictly-upper-triangular entries
+    (same ``triu_indices(b,b,1)`` order POET stores).
+
+    Args:
+        skew: (num_blocks, b, b) (or (b, b)).
+        block_size: b.
+    Returns: (num_blocks, b*(b-1)/2).
+    """
+    if skew.dim() == 2:
+        skew = skew.unsqueeze(0)
+    b = block_size
+    rows, cols = torch.triu_indices(b, b, 1)
+    return skew[:, rows, cols]
