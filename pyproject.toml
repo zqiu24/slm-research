@@ -61,7 +61,8 @@ exclude = ["tests*", "third_party*"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["third_party"]
+extend-exclude = ["third_party", "src/optim/_kimi_muon.py"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP", "N", "SIM", "RUF"]
