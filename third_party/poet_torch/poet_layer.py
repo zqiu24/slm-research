@@ -325,7 +325,14 @@ def chain_layer_x_fast_decoupled(
     rin = Rin.size(0)
     rout = Rout.size(0)
 
-    x = x[..., perm_in_inv]
+    # Permutations via PermutationFunction (gather backward) instead of plain
+    # advanced indexing. Both have a gather forward, but plain `x[..., perm]`
+    # makes autograd emit a scatter-add backward (indexing_backward_kernel) —
+    # the single biggest cost in the POET fwd+bwd (~50-63% of the chain). A
+    # permutation has no duplicate indices, so its exact backward is the
+    # inverse-perm GATHER, ~3.2x faster (bit-identical). inv(perm_in_inv)=perm_in,
+    # inv(perm_out)=perm_out_inv.
+    x = PermutationFunction.apply(x, perm_in_inv, perm_in)
     xb_r = x.reshape(N, rin, bsz_in).transpose(0, 1)        # [rin, N, b_in]
     xR = torch.bmm(xb_r, Rin).transpose(0, 1).reshape(N, rin * bsz_in)
     yb_flat = xR @ weight.t()
@@ -333,7 +340,7 @@ def chain_layer_x_fast_decoupled(
         yb_flat = yb_flat + bias
     yb_r = yb_flat.view(N, rout, bsz_out).transpose(0, 1)   # [rout, N, b_out]
     y = torch.bmm(yb_r, Rout).transpose(0, 1).reshape(*leading_shape, rout * bsz_out)
-    y = y[..., perm_out]
+    y = PermutationFunction.apply(y, perm_out, perm_out_inv)
     return y
 
 
@@ -368,8 +375,7 @@ def forward_core(
     return y
 
 
-@torch.compile(fullgraph=True)
-def forward_core_decoupled(
+def _forward_core_decoupled_eager(
     x: torch.Tensor,
     oft_R_in: torch.Tensor,
     oft_R_out: torch.Tensor,
@@ -407,6 +413,18 @@ def forward_core_decoupled(
             block_size_in, block_size_out,
         )
     return y
+
+
+# Compiled (fused) entry used during TRAINING (grad enabled). Its eval/inference
+# graph — built the first time the model runs under torch.no_grad() — trips a
+# torch-2.11 Inductor scheduler bug (KeyError 'op6' in compute_ancestors) for
+# full-block (block_count=1) configs, where the 1536-dim blocks produce an
+# inference graph whose schedule references a buffer an inference-only fusion pass
+# already eliminated. Training's graph keeps that buffer (it's a saved activation),
+# so it never hits it. POETLinear.forward therefore routes no_grad/eval forwards to
+# the eager twin `_forward_core_decoupled_eager` above — identical math, just
+# unfused. Repro: /lustre/home/zqiu/tmp/poet_op6_repro2.py
+forward_core_decoupled = torch.compile(_forward_core_decoupled_eager, fullgraph=True)
 
 
 def forward_core_decoupled_exp(
@@ -506,11 +524,27 @@ class POETLinear(nn.Module):
     """
 
     def __init__(self, in_features, out_features, bsz=None, block_count=None,
-                 bias=False, device=None, dtype=None, mem_efficient_mode=False,
+                 bias=False, device=None, dtype=None, mem_efficient_mode=None,
                  parameterization="cayley"):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+        # The exp path runs eager: matrix_exp's backward does not survive
+        # torch.compile(fullgraph=True), so forward_core_decoupled_exp is NOT
+        # compiled (unlike the Cayley forward_core_decoupled). Without inductor
+        # to fuse/recompute the per-token chain, the fast (non-recompute) chain
+        # saves every intermediate and drives peak memory ~3x the theoretical
+        # footprint, OOMing the downstream fused cross-entropy (observed at
+        # 60m/mbs128 on an 80GB H100, 2026-06-02). So default exp to the
+        # recompute chain and leave Cayley on the fast path. Cayley can also hit
+        # that activation-peak OOM at large mbs (the fast chain holds every
+        # rotation activation, leaving no room for the fp32 CE logits buffer);
+        # set POET_MEM_EFFICIENT=1 to force the recompute chain for Cayley too.
+        # Passing an explicit bool overrides both this env gate and the default.
+        if mem_efficient_mode is None:
+            mem_efficient_mode = (parameterization == "exp") or os.environ.get(
+                "POET_MEM_EFFICIENT"
+            ) == "1"
         self.mem_efficient_mode = mem_efficient_mode
 
         if (bsz is None) == (block_count is None):
@@ -686,7 +720,12 @@ class POETLinear(nn.Module):
                 self.perm_in, self.perm_in_inv, self.perm_out, self.perm_out_inv,
                 self.weight, self.bias, self.mem_efficient_mode,
             )
-        x = forward_core_decoupled(
+        # Training uses the compiled (fused) path; eval/inference (no grad) uses the
+        # eager twin. The compiled INFERENCE graph trips a torch-2.11 Inductor bug
+        # (KeyError 'op6') for full-block (block_count=1) configs; eager is identical
+        # math, just unfused. See _forward_core_decoupled_eager.
+        core = forward_core_decoupled if torch.is_grad_enabled() else _forward_core_decoupled_eager
+        x = core(
             x, self.oft_R_in, self.oft_R_out,
             self.block_size_in, self.block_size_out,
             self.rows_in, self.cols_in, self.rows_out, self.cols_out,
