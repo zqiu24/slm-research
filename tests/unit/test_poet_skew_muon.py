@@ -63,3 +63,23 @@ def test_skew_param_stays_a_valid_skew_vector():
     assert torch.isfinite(p.data).all()
     assert opt.state[p]["use_skew"] is True
     assert "momentum_buffer" in opt.state[p]
+
+
+def test_split_skew_vs_adamw_by_name():
+    """oft_R params -> skew branch, everything else -> adamw (pure split logic)."""
+    import torch.nn as nn
+
+    from src.optim.poet import _split_poet_muon_params
+
+    class FakeChunk(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer = nn.Module()
+            self.layer.oft_R_in = nn.Parameter(torch.zeros(1, 6))
+            self.layer.oft_R_out = nn.Parameter(torch.zeros(1, 6))
+            self.embedding = nn.Parameter(torch.zeros(8, 8))  # non-oft_R
+
+    chunk = FakeChunk()
+    skew, adamw = _split_poet_muon_params([chunk])
+    assert len(skew) == 2  # oft_R_in, oft_R_out
+    assert len(adamw) == 1  # embedding
