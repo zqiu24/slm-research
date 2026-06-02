@@ -307,3 +307,50 @@ def test_delta_weff_spec_uses_layer_parameterization():
     assert sigma > 0.0
     assert torch.isfinite(dM).all()
     assert torch.allclose(dM, dM_expected, atol=1e-4, rtol=1e-3), (dM - dM_expected).abs().max()
+
+
+def test_replace_linears_threads_parameterization():
+    import torch.nn as nn
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    model = nn.Sequential(nn.Linear(16, 16, bias=False))
+    n = replace_linears_with_poet(
+        model,
+        block_size=8,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        parameterization="exp",
+    )
+    assert n == 1
+    pl = model[0].poet_linear
+    assert pl.parameterization == "exp"
+
+
+def test_replace_linears_defaults_to_cayley():
+    import torch.nn as nn
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    model = nn.Sequential(nn.Linear(16, 16, bias=False))
+    replace_linears_with_poet(
+        model, block_size=8, init_type="none", extra_linear_types=(nn.Linear,)
+    )
+    assert model[0].poet_linear.parameterization == "cayley"
+
+
+def test_replace_linears_rejects_exp_with_cache():
+    import torch.nn as nn
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    model = nn.Sequential(nn.Linear(16, 16, bias=False))
+    with pytest.raises(ValueError):
+        replace_linears_with_poet(
+            model,
+            block_size=8,
+            init_type="none",
+            extra_linear_types=(nn.Linear,),
+            parameterization="exp",
+            cache_mode="cached_fwd_bwd",
+        )

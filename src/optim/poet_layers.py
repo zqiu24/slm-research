@@ -117,6 +117,7 @@ def replace_linears_with_poet(
     skip_lm_head: bool = True,
     extra_linear_types: Iterable[type] = (),
     cache_mode: str = "none",
+    parameterization: str = "cayley",
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -136,6 +137,12 @@ def replace_linears_with_poet(
             "No replaceable linear types found. Pass "
             "extra_linear_types=(nn.Linear,) for tests, or make sure "
             "megatron is importable."
+        )
+
+    if parameterization == "exp" and cache_mode != "none":
+        raise ValueError(
+            "parameterization='exp' is not supported with cache_mode != 'none' "
+            "(the cached Cayley path is a documented dead-end; use cache_mode='none')."
         )
 
     replaced = 0
@@ -196,6 +203,7 @@ def replace_linears_with_poet(
                         bias=has_bias,
                         device=child.weight.device,
                         dtype=child.weight.dtype,
+                        parameterization=parameterization,
                         **block_kwargs,
                     )
                 else:
