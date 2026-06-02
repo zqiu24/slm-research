@@ -375,3 +375,59 @@ def test_unfuse_can_be_disabled_per_run():
     args = build_megatron_args(cfg)
     assert "--unfuse-qkv" not in args
     assert "--unfuse-fc1" not in args
+
+
+def test_poet_argv_includes_parameterization_when_set():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "poet",
+                "lr": 1.0e-3,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.95],
+                "eps": 1.0e-8,
+                "poet": {
+                    "block_size": 8,
+                    "init_type": "none",
+                    "mup_alpha": 1.0,
+                    "merge_period": 0,
+                    "scale": 1.0,
+                    "parameterization": "exp",
+                },
+            }
+        }
+    )
+    args = _optimizer_args(cfg)
+    assert "--poet-parameterization" in args
+    assert args[args.index("--poet-parameterization") + 1] == "exp"
+
+
+def test_poet_argv_parameterization_defaults_to_cayley():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "poet",
+                "lr": 1.0e-3,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.95],
+                "eps": 1.0e-8,
+                "poet": {
+                    "block_size": 8,
+                    "init_type": "none",
+                    "mup_alpha": 1.0,
+                    "merge_period": 0,
+                    "scale": 1.0,
+                },
+            }
+        }
+    )
+    args = _optimizer_args(cfg)
+    assert args[args.index("--poet-parameterization") + 1] == "cayley"

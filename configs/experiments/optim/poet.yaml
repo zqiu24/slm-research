@@ -58,6 +58,13 @@ optim:
     # hook. Set true for the legacy custom POETAdam + ChainedOptimizer path
     # (requires cache_mode=none).
     use_poet_adam: false
+    # Orthogonalization map for the block rotation G = f(Q):
+    #   "cayley" (default): truncated Cayley/Neumann polynomial (poet::cayley
+    #     Triton op). Cheap matmuls; approximate orthogonality; angle = 2*arctan.
+    #   "exp": exact matrix exponential G = exp(Q) (torch.linalg.matrix_exp).
+    #     Exactly orthogonal for any Q; angle = singular value of Q (no factor
+    #     of 2, no ||Q||<1 ceiling). Heavier backward; cache_mode must be "none".
+    parameterization: cayley
 
 # Architectural unfusing of fused linears (handled by the model_unfuse_linears
 # patch, optimizer-agnostic — lives under base.model, not optim.poet). Defaulted
