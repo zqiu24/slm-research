@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added — POET Muon-on-Q (Stage 2): SkewMuon optimizer
+
+- **`oft_R` can now be optimized by a Muon-style spectral update** instead of
+  AdamW, via `optim.poet.q_optimizer: adam|muon` (+ `muon_theta`/`muon_ns_steps`/
+  `muon_momentum`). `SkewMuon` (`src/optim/poet_skew_muon.py`) inflates each
+  block's skew gradient to `b×b`, Newton–Schulz-orthogonalizes it, re-skews, and
+  rescales to a constant rotation angle `muon_theta`, then steps `oft_R`; all
+  non-`oft_R` params stay AdamW (hybrid, `muon_kimi` pattern). Built into the POET
+  optimizer path (`get_megatron_poet_muon_optimizer`), single-process/DP-replicated.
+  Motivated by Probe 0B (heavy-tailed `∂f/∂Q`). Per-block `‖G−I‖`/`‖RRᵀ−I‖`
+  diagnostics added. Default (`adam`) unchanged. Intended for the no-reset regime
+  (`merge_period=0`).
+
 ### Added — POET single-sided (input-only) rotation ablation
 
 - **POET can now freeze the output-side rotation so only the input rotation is
