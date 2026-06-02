@@ -68,6 +68,13 @@ force-exclude = true
 select = ["E", "F", "I", "W", "B", "UP", "N", "SIM", "RUF"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# SkewMuon mirrors _kimi_muon's matrix math; uppercase Q/X/A/B are the standard
+# linear-algebra names. Allow them (N803 arg, N806 local) without excluding the
+# file from the rest of lint (F/B/UP/SIM/RUF still apply).
+"src/optim/poet_skew_muon.py" = ["N803", "N806"]
+"tests/unit/test_poet_skew_muon.py" = ["N806"]
+
 [tool.ruff.format]
 quote-style = "double"
 
