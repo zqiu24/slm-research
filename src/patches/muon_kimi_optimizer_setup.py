@@ -10,6 +10,11 @@ from __future__ import annotations
 
 from src.patches._registry import register_patch
 
+# NOTE: poet_optimizer_setup targets these same two functions. The patch
+# registry raises PatchConflict if both are registered at once, but that never
+# happens in a real run (one experiment's patches load per process). Never list
+# both poet_optimizer_setup and muon_kimi_optimizer_setup in experiment.patches
+# simultaneously.
 _TARGET = (
     "megatron.training.training.get_megatron_optimizer_config",
     "megatron.training.training.get_megatron_optimizer",
