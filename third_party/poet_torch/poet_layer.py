@@ -1148,9 +1148,17 @@ def estimate_poet_delta_weff_spec(
     W = poet_module.weight.detach().to(device=device, dtype=compute_dtype)
 
     def _R(oft_in, oft_out):
+        oft_in = oft_in.to(device=device, dtype=poet_module.oft_R_in.dtype)
+        oft_out = oft_out.to(device=device, dtype=poet_module.oft_R_out.dtype)
+        if getattr(poet_module, "parameterization", "cayley") == "exp":
+            return get_weight_poet_decoupled_exp(
+                oft_in, oft_out,
+                poet_module.block_size_in, poet_module.block_size_out,
+                poet_module.rows_in, poet_module.cols_in,
+                poet_module.rows_out, poet_module.cols_out,
+            )
         return get_weight_poet_decoupled(
-            oft_in.to(device=device, dtype=poet_module.oft_R_in.dtype),
-            oft_out.to(device=device, dtype=poet_module.oft_R_out.dtype),
+            oft_in, oft_out,
             poet_module.block_size_in, poet_module.block_size_out,
             poet_module.rows_in, poet_module.cols_in,
             poet_module.rows_out, poet_module.cols_out,
