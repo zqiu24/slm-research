@@ -129,25 +129,30 @@ from src.diag.skew_conditioning import block_spectral_stats, vec_to_skew
 from src.optim.poet_skew_muon import SkewMuon, orthogonalize_skew_blocks
 
 
-def _heavy_tailed_skew_vec(num_blocks, b):
-    # one dominant rotation direction + small noise => low stable rank
-    ne = b * (b - 1) // 2
-    v = torch.randn(num_blocks, ne) * 1e-3
-    v[:, 0] = 10.0
-    return v
-
-
 def test_ns_flattens_the_skew_spectrum():
+    """Newton-Schulz democratizes the skew gradient's spectrum: a heavy-tailed
+    (high condition number) input becomes near-uniform (condition ~1). NS
+    *preserves rank* (it equalizes the nonzero singular values but cannot
+    resurrect near-zero ones in a few steps), so the robust signal is the
+    condition number collapsing — assert that, on a FULL-RANK heavy-tailed input.
+    (stable rank also rises here, but it would NOT for a genuinely low-rank input,
+    which is why condition number is the primary assertion.)"""
+    torch.manual_seed(0)
     b, num_blocks = 16, 2
-    Q = vec_to_skew(_heavy_tailed_skew_vec(num_blocks, b), b)
-    sr_in = block_spectral_stats(Q)["stable_rank"].mean().item()
+    ne = b * (b - 1) // 2
+    v = torch.randn(num_blocks, ne)
+    v[:, :3] *= 6.0  # full-rank but heavy-tailed (a few dominant directions)
+    Q = vec_to_skew(v, b)
+    s_in = block_spectral_stats(Q)
     X = orthogonalize_skew_blocks(Q.float(), ns_steps=5)
     X = (X - X.transpose(-2, -1)) / 2  # re-skew
-    sr_out = block_spectral_stats(X)["stable_rank"].mean().item()
-    # heavy-tailed input (~1-2) becomes broadly spread (>= b/4)
-    assert sr_in < 3.0
-    assert sr_out > b / 4
-    assert sr_out > 4 * sr_in
+    s_out = block_spectral_stats(X)
+    cond_in = s_in["condition_number"].mean().item()
+    cond_out = s_out["condition_number"].mean().item()
+    assert cond_in > 10.0  # heavy-tailed input
+    assert cond_out < 5.0  # NS democratized -> near-uniform spectrum
+    assert cond_out < cond_in / 5.0  # a large drop
+    assert s_out["stable_rank"].mean() > s_in["stable_rank"].mean()  # energy spread
 
 
 def test_constant_angle_scaling_hits_theta():
@@ -350,12 +355,9 @@ Route `oft_R`→SkewMuon, rest→AdamW, wrapped in Megatron's mixed-precision op
 ```python
 def test_split_skew_vs_adamw_by_name():
     """oft_R params -> skew branch, everything else -> adamw (pure split logic)."""
-    from src.optim.poet import _split_poet_muon_params
-
-    class P(torch.nn.Parameter):
-        pass
-
     import torch.nn as nn
+
+    from src.optim.poet import _split_poet_muon_params
 
     class FakeChunk(nn.Module):
         def __init__(self):
@@ -652,7 +654,7 @@ def test_block_rotation_diagnostics_on_identity_and_rotation():
     Q[0, 0, 1], Q[0, 1, 0] = 0.5, -0.5
     R = torch.linalg.matrix_exp(Q)
     d1 = block_rotation_diagnostics(R)
-    assert d1["ortho_err"][0].item() < 1e-5
+    assert d1["ortho_err"][0].item() < 1e-4  # fp32 matrix_exp ortho error ~2e-5
     assert d1["g_minus_i"][0].item() > 0.1
 ```
 
