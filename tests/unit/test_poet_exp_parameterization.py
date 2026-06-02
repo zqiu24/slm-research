@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 import torch
 
 torch.manual_seed(0)
@@ -107,3 +108,45 @@ def test_exp_builder_gradcheck():
         return R_out
 
     assert torch.autograd.gradcheck(f, (oft,), atol=1e-5, rtol=1e-3)
+
+
+def test_poetlinear_defaults_to_cayley():
+    from poet_torch import POETLinear
+
+    pl = POETLinear(in_features=16, out_features=16, bsz=8, device="cpu", dtype=torch.float32)
+    assert pl.parameterization == "cayley"
+
+
+def test_poetlinear_rejects_unknown_parameterization():
+    from poet_torch import POETLinear
+
+    with pytest.raises(ValueError):
+        POETLinear(
+            in_features=16,
+            out_features=16,
+            bsz=8,
+            parameterization="bogus",
+            device="cpu",
+            dtype=torch.float32,
+        )
+
+
+def test_build_R_exp_is_orthogonal():  # noqa: N802
+    from poet_torch import POETLinear
+
+    pl = POETLinear(
+        in_features=16,
+        out_features=16,
+        bsz=8,
+        parameterization="exp",
+        device="cpu",
+        dtype=torch.float32,
+    )
+    # seed non-zero rotation so R != I
+    with torch.no_grad():
+        pl.oft_R_in.normal_(std=0.1)
+        pl.oft_R_out.normal_(std=0.1)
+    R_out, R_in = pl._build_R(pl.oft_R_in, pl.oft_R_out)  # noqa: N806
+    eye = torch.eye(8)
+    assert (R_in @ R_in.transpose(-2, -1) - eye).abs().max().item() < 1e-5
+    assert (R_out @ R_out.transpose(-2, -1) - eye).abs().max().item() < 1e-5

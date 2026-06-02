@@ -461,7 +461,8 @@ class POETLinear(nn.Module):
     """
 
     def __init__(self, in_features, out_features, bsz=None, block_count=None,
-                 bias=False, device=None, dtype=None, mem_efficient_mode=False):
+                 bias=False, device=None, dtype=None, mem_efficient_mode=False,
+                 parameterization="cayley"):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -490,6 +491,12 @@ class POETLinear(nn.Module):
         # in the decoupled case it is the input-side block size — callers that
         # need an exact per-side value must read block_size_in / block_size_out.
         self.block_size = block_size_in
+
+        if parameterization not in ("cayley", "exp"):
+            raise ValueError(
+                f"parameterization must be 'cayley' or 'exp', got {parameterization!r}"
+            )
+        self.parameterization = parameterization
 
         # Basic linear layer parameters
         self.weight = nn.Parameter(torch.empty((out_features, in_features), device=device, dtype=dtype), requires_grad=False)
@@ -549,13 +556,25 @@ class POETLinear(nn.Module):
 
         self.perform_permutation()
 
-    def _merge_R(self):
-        """Build (R_out, R_in) from the two decoupled skew params (no grad)."""
+    def _build_R(self, oft_in, oft_out):
+        """Build (R_out, R_in) from skew params using the configured map.
+
+        Single dispatch point so forward, merge, and the dW-spec estimator all
+        use the same orthogonalization.
+        """
+        if self.parameterization == "exp":
+            return get_weight_poet_decoupled_exp(
+                oft_in, oft_out, self.block_size_in, self.block_size_out,
+                self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+            )
         return get_weight_poet_decoupled(
-            self.oft_R_in, self.oft_R_out,
-            self.block_size_in, self.block_size_out,
+            oft_in, oft_out, self.block_size_in, self.block_size_out,
             self.rows_in, self.cols_in, self.rows_out, self.cols_out,
         )
+
+    def _merge_R(self):
+        """Build (R_out, R_in) from the two decoupled skew params (no grad)."""
+        return self._build_R(self.oft_R_in, self.oft_R_out)
 
     def merge_then_reinitialize_working(self) -> None:
         # with torch.no_grad():
