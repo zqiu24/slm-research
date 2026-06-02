@@ -285,6 +285,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # (default = stock Megatron-Adam path).
         if poet.get("use_poet_adam", False):
             poet_args.append("--poet-use-poet-adam")
+        # store_true: freeze the output-side rotation (train the input rotation only).
+        if not poet.get("train_output_rotation", True):
+            poet_args.append("--poet-freeze-output-rotation")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":

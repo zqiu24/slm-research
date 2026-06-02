@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added — POET single-sided (input-only) rotation ablation
+
+- **POET can now freeze the output-side rotation so only the input rotation is
+  trained**, via the new `optim.poet.train_output_rotation` flag (`true` default |
+  `false` = input-only) (`configs/experiments/optim/poet.yaml`,
+  `launchers/pretrain_gpt_slm.py` `--poet-freeze-output-rotation`,
+  `src/utils/megatron_args.py`). When false, `replace_linears_with_poet`
+  (`src/optim/poet_layers.py`) sets `oft_R_out.requires_grad_(False)` at wrap time
+  (pre-DDP, via `src/patches/poet_apply_to_model.py`); since `oft_R_out` inits to
+  zero, `R_out` stays the identity and is excluded from the grad buffer + optimizer
+  param groups (Megatron only takes `requires_grad` params). `oft_R_in` continues to
+  train. New `scripts/train_poet_dev_full_single.sh` = `train_poet_dev_full.sh`
+  (block_count=1 full rotation, merge_period=0) + `train_output_rotation=false`.
+  Default behavior is unchanged (both rotations trained).
+
 ### Added — POET × Muon-on-Q Stage 0 diagnostics (gate instrumentation)
 
 - **Two env-gated diagnostic probes** for deciding whether the Muon-on-Q line is

@@ -118,6 +118,7 @@ def replace_linears_with_poet(
     extra_linear_types: Iterable[type] = (),
     cache_mode: str = "none",
     parameterization: str = "cayley",
+    freeze_output_rotation: bool = False,
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -216,6 +217,12 @@ def replace_linears_with_poet(
                         **block_kwargs,
                     )
                     _poet_cache.register_poet_layer(pl)
+                if freeze_output_rotation and hasattr(pl, "oft_R_out"):
+                    # Single-sided POET: keep R_out = identity (oft_R_out inits to
+                    # zero) and never train it. requires_grad=False is set here,
+                    # pre-DDP, so oft_R_out is excluded from the grad buffer and the
+                    # optimizer param groups (which only take requires_grad params).
+                    pl.oft_R_out.requires_grad_(False)
                 with torch.no_grad():
                     w = child.weight.data.clone()
                     if init_type == "normalized":

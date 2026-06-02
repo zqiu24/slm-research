@@ -65,6 +65,7 @@ def apply() -> None:
         mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
         cache_mode = getattr(args, "poet_cache_mode", "none")
         parameterization = getattr(args, "poet_parameterization", "cayley")
+        freeze_output_rotation = getattr(args, "poet_freeze_output_rotation", False)
         return replace_linears_with_poet(
             m,
             block_size=block,
@@ -73,6 +74,7 @@ def apply() -> None:
             mup_alpha=mup_alpha,
             cache_mode=cache_mode,
             parameterization=parameterization,
+            freeze_output_rotation=freeze_output_rotation,
         )
 
     def _wrapped(*a, **kw):
