@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Dev/smoke variant of scripts/train_muon.sh: same Muon recipe, but defaults to
-# the smallest llama3 rung (60m, seq_length=256) for fast local iteration
-# instead of 300m. Override base/scale=... to pick a different rung.
+# Dev variant of train_muon.sh: same harness, but defaults to the tiny 60m
+# scale (configs/base/scale/60m.yaml, hidden=512, ~61M non-embedding params)
+# for fast local iteration instead of 300m. Untied embeddings are forced on
+# (overridable). Everything else is identical to train_muon.sh, and any "$@"
+# override still wins.
 
 # torchtitan is AdamW-only in milestone 1; reject --backend torchtitan here so the
 # same flag fails fast on this non-AdamW wrapper (see scripts/train_adam.sh).
@@ -31,7 +33,7 @@ fi
 case "${ARCH}" in
   llama3)
     FAMILY="llama3"
-    DEFAULT_SCALE="60m"            # dev/smoke rung; override with base/scale=...
+    DEFAULT_SCALE="60m"            # tiny dev scale; override with base/scale=...
     ;;
   deepseek_v3)
     FAMILY="deepseek_v3"
@@ -43,11 +45,16 @@ case "${ARCH}" in
     ;;
 esac
 
-# Only inject the scale default if the user did not pass base/scale=...
+# Inject dev defaults unless overridden on the command line:
+#   scale=60m (tiny dev scale) and the 40x-tokens-per-param dev regime
+#   (training_regime=ablation_40x — 40 * non_embedding_params tokens, 2x the
+#   base 20x default).
 USER_SET_SCALE="no"
+USER_SET_REGIME="no"
 for arg in "$@"; do
   case "${arg}" in
     base/scale=*) USER_SET_SCALE="yes" ;;
+    training_regime=*) USER_SET_REGIME="yes" ;;
   esac
 done
 
@@ -56,12 +63,21 @@ if [[ "${USER_SET_SCALE}" == "no" && -n "${DEFAULT_SCALE}" ]]; then
   SCALE_ARGS=("base/scale=${DEFAULT_SCALE}")
 fi
 
+REGIME_ARGS=()
+if [[ "${USER_SET_REGIME}" == "no" ]]; then
+  REGIME_ARGS=("training_regime=ablation_40x")
+fi
+
 python -m launchers.train_megatron \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
+  "${REGIME_ARGS[@]}" \
   "cluster=h100_de" \
   "experiment=optim/muon_hybrid" \
-  "training.global_batch_size=512" \
+  "training.global_batch_size=1024" \
+  "training.micro_batch_size=128" \
   "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
+  "base.model.tie_embeddings=false" \
+  "wandb.project=slm-zeju-dev" \
   "$@"
