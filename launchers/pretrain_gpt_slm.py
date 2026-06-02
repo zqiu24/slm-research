@@ -92,10 +92,15 @@ def _load_resolved_config(config_path: str):
     return OmegaConf.load(path)
 
 
-# Patches applied to EVERY Megatron run regardless of experiment. Logging-only,
-# so they belong here (not in any experiment's patches: list) and stay out of the
-# experiment patch_set_hash.
-_ALWAYS_ON_PATCHES = ("wandb_trainable_params",)
+# Patches applied to EVERY Megatron run regardless of experiment. The logging
+# ones are no-ops on the model; the diagnostic ones (overfit_single_batch,
+# poet_grad_conditioning) self-disable unless their SLM_* env var is set, so
+# they are inert on normal runs and stay out of the experiment patch_set_hash.
+_ALWAYS_ON_PATCHES = (
+    "wandb_trainable_params",
+    "overfit_single_batch",
+    "poet_grad_conditioning",
+)
 
 
 def _resolve_runtime_patch_names(cfg) -> list[str]:
