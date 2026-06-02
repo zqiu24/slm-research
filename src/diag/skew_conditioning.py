@@ -1,0 +1,38 @@
+# src/diag/skew_conditioning.py
+"""Pure-math diagnostics for POET's per-block ∂f/∂Q conditioning (Probe 0B).
+
+No Megatron / CUDA / poet_torch imports — every function here takes plain
+tensors so the math is unit-testable on CPU.
+"""
+
+from __future__ import annotations
+
+import torch
+
+
+def block_spectral_stats(skew: torch.Tensor, eps: float = 1e-12) -> dict[str, torch.Tensor]:
+    """Summarize the singular-value spectrum of a batch of (skew-symmetric) blocks.
+
+    Args:
+        skew: tensor of shape (num_blocks, b, b). Skew-symmetric inputs have
+            *paired* singular values; the stats below are well-defined on the
+            full (paired) spectrum and pairing is not removed.
+        eps: floor for sigma_min to avoid div-by-zero on rank-deficient blocks.
+
+    Returns dict of shape-(num_blocks,) tensors:
+        condition_number   = sigma_max / max(sigma_min, eps)
+        stable_rank        = ||.||_F^2 / sigma_max^2
+        sigma_max_over_median = sigma_max / median(sigma)
+    """
+    if skew.dim() == 2:
+        skew = skew.unsqueeze(0)
+    sv = torch.linalg.svdvals(skew.to(torch.float32))  # (num_blocks, b), descending
+    sigma_max = sv[:, 0]
+    sigma_min = sv[:, -1].clamp_min(eps)
+    fro_sq = (sv * sv).sum(dim=1)
+    median = torch.quantile(sv, 0.5, dim=1)
+    return {
+        "condition_number": sigma_max / sigma_min,
+        "stable_rank": fro_sq / (sigma_max * sigma_max),
+        "sigma_max_over_median": sigma_max / median.clamp_min(eps),
+    }
