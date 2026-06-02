@@ -69,6 +69,7 @@ def select_target_params(named_layers, max_targets: int = 8):
                     "factor": factor,
                     "param": param,
                     "block_size": int(bsz),
+                    "layer": layer,
                 }
             )
             if len(targets) >= max_targets:
@@ -110,6 +111,37 @@ def _log_conditioning(targets, iteration: int) -> None:
                 },
                 step=iteration,
             )
+
+        # rotation diagnostics: build R = f(Q) for this block's CURRENT oft_R and
+        # log realized-angle ||G-I|| + orthogonality-drift ||RR^T-I|| (Stage-2 calibration).
+        try:
+            from poet_torch.poet_layer import pytorch_skew_symmetric
+
+            from src.diag.rotation_diag import block_rotation_diagnostics
+
+            oft = param.detach()
+            bs = t["block_size"]
+            rows, cols = torch.triu_indices(bs, bs, 1, device=oft.device)
+            q_skew = pytorch_skew_symmetric(
+                oft.float(), bs, rows.to(torch.int32), cols.to(torch.int32)
+            )
+            param_kind = getattr(t.get("layer"), "parameterization", "cayley")
+            rot = (
+                torch.linalg.matrix_exp(q_skew)
+                if param_kind == "exp"
+                else torch.ops.poet.cayley(q_skew)[0]
+            )
+            rd = block_rotation_diagnostics(rot)
+            if wandb is not None and getattr(wandb, "run", None) is not None:
+                wandb.log(
+                    {
+                        f"poet_rot/{t['label']}/g_minus_i": rd["g_minus_i"].mean().item(),
+                        f"poet_rot/{t['label']}/ortho_err": rd["ortho_err"].mean().item(),
+                    },
+                    step=iteration,
+                )
+        except Exception:  # diagnostics must never break training
+            logger.exception("[COND] rotation diag failed for %s", t["label"])
 
 
 def _install_step_hook(optimizer, targets, interval: int) -> None:

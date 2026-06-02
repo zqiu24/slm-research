@@ -74,6 +74,9 @@ ignore = ["E501"]
 # file from the rest of lint (F/B/UP/SIM/RUF still apply).
 "src/optim/poet_skew_muon.py" = ["N803", "N806"]
 "tests/unit/test_poet_skew_muon.py" = ["N806"]
+# Rotation diagnostics: R/Q are the standard rotation/skew matrix names.
+"src/diag/rotation_diag.py" = ["N803", "N806"]
+"tests/unit/test_diag_rotation.py" = ["N806"]
 
 [tool.ruff.format]
 quote-style = "double"
