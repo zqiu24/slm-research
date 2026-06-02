@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added — POET `exp` (matrix-exponential) orthogonalization parameterization
+
+- **POET can now build the block rotation as the exact matrix exponential
+  `G = exp(Q)` instead of the truncated Cayley/Neumann polynomial**, selected via
+  the new `optim.poet.parameterization` flag (`"cayley"` default | `"exp"`)
+  (`configs/experiments/optim/poet.yaml`, `launchers/pretrain_gpt_slm.py`
+  `--poet-parameterization`, `src/utils/megatron_args.py`). A new builder
+  `get_weight_poet_decoupled_exp` (`third_party/poet_torch/poet_layer.py`) mirrors
+  the Cayley builder's signature and computes `R = torch.linalg.matrix_exp(Q)` in
+  fp32/fp64 (autograd flows through the cast — no custom backward). `R` is
+  **exactly** orthogonal for any `Q` (no `‖Q‖<1` ceiling, no truncation error) and
+  the singular values of `Q` are exactly the rotation angles of `R` (angle =
+  singular value, not Cayley's `2·arctan`). A single `POETLinear._build_R` dispatch
+  on `self.parameterization` routes the forward (`forward_core_decoupled_exp`,
+  built eagerly outside `torch.compile`), the merge (`merge_then_reinitialize`),
+  and the ΔW-spec estimator (`estimate_poet_delta_weff_spec`) through the same map.
+  `parameterization="exp"` requires `cache_mode="none"` (guarded in
+  `replace_linears_with_poet`). The Cayley path and all default behavior are
+  byte-for-byte unchanged. CPU-unit-tested (orthogonality, no-factor-of-2 angle,
+  gradcheck, forward parity vs a pure-PyTorch oracle, merge + estimator
+  consistency, config plumbing); GPU compile-fusion of the exp chain is an
+  optional follow-up.
+
 ### Added — trainable/total param counts in the W&B run config
 
 - **Every Megatron run now logs `trainable_params`, `total_params`,
