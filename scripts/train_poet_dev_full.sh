@@ -30,6 +30,15 @@ esac
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
 
+# Full-rotation POET (block_count=1) on the fast/non-recompute chain saves every
+# rotation activation and OOMs at mbs=128 — observed step-2 forward OOM (~67GB
+# peak after iter 1) on an 80GB H100. Default this variant to the recompute
+# chain (POET layer enables mem_efficient_mode when POET_MEM_EFFICIENT=1, even
+# for cayley). Export POET_MEM_EFFICIENT=0 before invoking to opt back onto the
+# fast path. The launcher copies os.environ to the torchrun workers, so an
+# export here reaches every rank.
+export POET_MEM_EFFICIENT="${POET_MEM_EFFICIENT:-1}"
+
 ARCH="${1:-llama3}"
 if [[ "${ARCH}" == "llama3" || "${ARCH}" == "deepseek_v3" ]]; then
   shift || true
