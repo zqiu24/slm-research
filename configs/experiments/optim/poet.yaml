@@ -51,7 +51,7 @@ optim:
     init_type: normalized   # "none" | "normalized" | "mup_normalized"
     mup_alpha: 1.0
     merge_period: 400       # 0 disables periodic merge
-    scale: 1.0              # LR multiplier for the POET linear group
+    scale: 0.5              # LR multiplier for the POET linear group
     # Optimizer impl. DEFAULT (false): stock Megatron Adam — oft_R is a normal
     # trainable param in the DDP grad buffer, its LR is scaled by `scale` via a
     # param-group override, and its Adam momentum is reset by the poet_merge_step

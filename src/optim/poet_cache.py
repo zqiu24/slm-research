@@ -79,7 +79,8 @@ def reset_for_testing() -> None:
 import torch  # noqa: E402
 from poet_torch import POETLinear  # noqa: E402
 from poet_torch.poet_layer import (  # noqa: E402
-    chain_layer_x_checkpoint_mem_o2_decoupled,
+    chain_layer_x_checkpoint_mem_o2_decoupled,  # noqa: F401  (kept for the memory-bound fallback)
+    chain_layer_x_fast_decoupled,
     get_weight_poet_decoupled,
 )
 from torch import Tensor  # noqa: E402
@@ -259,8 +260,13 @@ def _cached_chain_layer_core_decoupled(
     via R_in/R_out), so we wrap only the chain_layer call here with the same
     decorator. Without this, every microbatch's linear call runs uncompiled
     and the per-call overhead drowns the (K-1) Cayley savings for large shapes.
+
+    Uses the fast (non-recompute) chain: with R supplied, the only thing to
+    save across the K microbatches' backwards is each microbatch's cheap
+    block-rotation activations, so recomputing them (mem_o2) is pure waste here.
+    The fast twin is bit-exact (see ``chain_layer_x_fast_decoupled``).
     """
-    return chain_layer_x_checkpoint_mem_o2_decoupled(
+    return chain_layer_x_fast_decoupled(
         x,
         R_in,
         weight,

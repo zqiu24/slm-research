@@ -100,7 +100,6 @@ RUN=(python -m "${LAUNCHER}" \
   "training.micro_batch_size=128" \
   "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
-  "optim.weight_decay=0" \
   "base.model.tie_embeddings=false" \
   "wandb.project=slm-zeju-dev" \
   "$@")

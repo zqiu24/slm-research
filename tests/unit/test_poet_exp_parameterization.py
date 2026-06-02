@@ -354,3 +354,25 @@ def test_replace_linears_rejects_exp_with_cache():
             parameterization="exp",
             cache_mode="cached_fwd_bwd",
         )
+
+
+def test_mem_efficient_mode_env_gate(monkeypatch):
+    """POET_MEM_EFFICIENT=1 forces the recompute chain for cayley (to dodge the
+    fast-chain activation-peak OOM at large mbs); an explicit arg still wins."""
+    from poet_torch import POETLinear
+
+    def _layer(**kw):
+        return POETLinear(
+            in_features=16, out_features=16, bsz=8, device="cpu", dtype=torch.float32, **kw
+        )
+
+    monkeypatch.delenv("POET_MEM_EFFICIENT", raising=False)
+    # default: cayley -> fast chain, exp -> recompute (unchanged behavior)
+    assert _layer(parameterization="cayley").mem_efficient_mode is False
+    assert _layer(parameterization="exp").mem_efficient_mode is True
+
+    monkeypatch.setenv("POET_MEM_EFFICIENT", "1")
+    # env gate flips cayley to the recompute chain
+    assert _layer(parameterization="cayley").mem_efficient_mode is True
+    # explicit arg overrides the env gate
+    assert _layer(parameterization="cayley", mem_efficient_mode=False).mem_efficient_mode is False
