@@ -64,6 +64,7 @@ def apply() -> None:
         init = getattr(args, "poet_init_type", "normalized")
         mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
         cache_mode = getattr(args, "poet_cache_mode", "none")
+        parameterization = getattr(args, "poet_parameterization", "cayley")
         return replace_linears_with_poet(
             m,
             block_size=block,
@@ -71,6 +72,7 @@ def apply() -> None:
             init_type=init,
             mup_alpha=mup_alpha,
             cache_mode=cache_mode,
+            parameterization=parameterization,
         )
 
     def _wrapped(*a, **kw):

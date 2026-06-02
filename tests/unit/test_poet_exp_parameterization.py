@@ -150,3 +150,207 @@ def test_build_R_exp_is_orthogonal():  # noqa: N802
     eye = torch.eye(8)
     assert (R_in @ R_in.transpose(-2, -1) - eye).abs().max().item() < 1e-5
     assert (R_out @ R_out.transpose(-2, -1) - eye).abs().max().item() < 1e-5
+
+
+def _poet_forward_reference_exp(pl, x):
+    """Pure-PyTorch oracle for the exp forward, independent of the layer code.
+
+    Mirrors chain_layer_x_fast_decoupled's math:
+      y = perm_out( bmm_out( ( perm_in(x) @blocks Rin ) @ W^T ) @blocks Rout )
+    with R = exp(Q) built from the layer's current skew params.
+    """
+    from poet_torch.poet_layer import pytorch_skew_symmetric
+
+    Qi = pytorch_skew_symmetric(pl.oft_R_in, pl.block_size_in, pl.rows_in, pl.cols_in)  # noqa: N806
+    Qo = pytorch_skew_symmetric(pl.oft_R_out, pl.block_size_out, pl.rows_out, pl.cols_out)  # noqa: N806
+    R_in = torch.linalg.matrix_exp(Qi.float()).to(x.dtype)  # noqa: N806
+    R_out = torch.linalg.matrix_exp(Qo.float()).to(x.dtype)  # noqa: N806
+
+    def apply_blocks(t, R, bs):  # noqa: N803
+        lead = t.shape[:-1]
+        n = t.numel() // t.shape[-1]
+        r = R.size(0)
+        tb = t.reshape(n, r, bs).transpose(0, 1)  # [r, n, bs]
+        out = torch.bmm(tb, R).transpose(0, 1).reshape(*lead, r * bs)
+        return out
+
+    xin = x.index_select(-1, pl.perm_in_inv.long())
+    xin = apply_blocks(xin, R_in, pl.block_size_in)
+    y = xin @ pl.weight.t()
+    if pl.bias is not None:
+        y = y + pl.bias
+    y = apply_blocks(y, R_out, pl.block_size_out)
+    return y.index_select(-1, pl.perm_out.long())
+
+
+def test_exp_forward_matches_pure_pytorch_oracle_cpu():
+    from poet_torch import POETLinear
+
+    pl = POETLinear(
+        in_features=16,
+        out_features=16,
+        bsz=8,
+        parameterization="exp",
+        device="cpu",
+        dtype=torch.float32,
+        mem_efficient_mode=False,
+    )
+    with torch.no_grad():
+        pl.weight.normal_()
+        pl.oft_R_in.normal_(std=0.1)
+        pl.oft_R_out.normal_(std=0.1)
+    x = torch.randn(4, 16)
+    y = pl(x)
+    y_ref = _poet_forward_reference_exp(pl, x)
+    assert torch.allclose(y, y_ref, atol=1e-4, rtol=1e-3), (y - y_ref).abs().max()
+
+
+def test_exp_forward_backward_runs_cpu():
+    from poet_torch import POETLinear
+
+    pl = POETLinear(
+        in_features=16,
+        out_features=16,
+        bsz=8,
+        parameterization="exp",
+        device="cpu",
+        dtype=torch.float32,
+    )
+    with torch.no_grad():
+        pl.weight.normal_()
+    x = torch.randn(4, 16)
+    pl(x).sum().backward()
+    assert pl.oft_R_in.grad is not None
+    assert pl.oft_R_out.grad is not None
+    assert torch.isfinite(pl.oft_R_in.grad).all()
+
+
+def test_merge_then_reinitialize_exp_rotates_weight_and_zeros_oft():
+    from poet_torch import POETLinear
+    from poet_torch.poet_layer import block_diag_lr_matmul_decoupled
+
+    pl = POETLinear(
+        in_features=16,
+        out_features=16,
+        bsz=8,
+        parameterization="exp",
+        device="cpu",
+        dtype=torch.float32,
+    )
+    with torch.no_grad():
+        pl.weight.normal_()
+        pl.oft_R_in.normal_(std=0.1)
+        pl.oft_R_out.normal_(std=0.1)
+        W0 = pl.weight.clone()  # noqa: N806
+        R_out, R_in = pl._build_R(pl.oft_R_in, pl.oft_R_out)  # noqa: N806
+        perm_in0, perm_out0 = pl.perm_in.clone(), pl.perm_out.clone()
+
+    # expected merged weight = transpose( perm( Rin @ W0^T @ Rout ) )
+    tmp = block_diag_lr_matmul_decoupled(R_in, W0.t(), R_out)
+    tmp = tmp.index_select(0, perm_in0).index_select(1, perm_out0)
+    expected = tmp.t()
+
+    pl.merge_then_reinitialize()
+
+    assert torch.allclose(pl.oft_R_in, torch.zeros_like(pl.oft_R_in))
+    assert torch.allclose(pl.oft_R_out, torch.zeros_like(pl.oft_R_out))
+    # weight changed under a real rotation
+    assert not torch.allclose(pl.weight, W0)
+    # NOTE: merge_then_reinitialize re-permutes the float weight before storing,
+    # so compare the un-re-permuted reconstruction:
+    reperm = expected.index_select(0, pl.perm_out_inv.long()).index_select(1, pl.perm_in_inv.long())
+    assert torch.allclose(pl.weight, reperm, atol=1e-4, rtol=1e-3), (pl.weight - reperm).abs().max()
+
+
+def test_delta_weff_spec_uses_layer_parameterization():
+    """The estimator must build R with the layer's parameterization. With prev=0
+    the previous rotation is exactly I, so the expected
+    dM = (Rin_exp @ W^T @ Rout_exp) - W^T. Before the fix the estimator hardcodes
+    the Cayley builder: on CPU that Triton op crashes (no CPU fallback); on GPU it
+    yields a materially different dM (verified diff ~1.0). Either way this fails
+    until Step 3 routes the estimator through the exp builder."""
+    from poet_torch import POETLinear
+    from poet_torch.poet_layer import (
+        block_diag_lr_matmul_decoupled,
+        estimate_poet_delta_weff_spec,
+        get_weight_poet_decoupled_exp,
+    )
+
+    pl = POETLinear(
+        in_features=16,
+        out_features=16,
+        bsz=8,
+        parameterization="exp",
+        device="cpu",
+        dtype=torch.float32,
+    )
+    with torch.no_grad():
+        pl.weight.normal_()
+        prev_in = torch.zeros_like(pl.oft_R_in)
+        prev_out = torch.zeros_like(pl.oft_R_out)
+        pl.oft_R_in.normal_(std=0.1)
+        pl.oft_R_out.normal_(std=0.1)
+        R_out, R_in = get_weight_poet_decoupled_exp(  # noqa: N806
+            pl.oft_R_in,
+            pl.oft_R_out,
+            pl.block_size_in,
+            pl.block_size_out,
+            pl.rows_in,
+            pl.cols_in,
+            pl.rows_out,
+            pl.cols_out,
+        )
+        W = pl.weight.detach().float()  # noqa: N806
+        dM_expected = block_diag_lr_matmul_decoupled(R_in.float(), W.t(), R_out.float()) - W.t()  # noqa: N806
+
+    dM, sigma = estimate_poet_delta_weff_spec(pl, prev_in, prev_out)  # noqa: N806
+    assert sigma > 0.0
+    assert torch.isfinite(dM).all()
+    assert torch.allclose(dM, dM_expected, atol=1e-4, rtol=1e-3), (dM - dM_expected).abs().max()
+
+
+def test_replace_linears_threads_parameterization():
+    import torch.nn as nn
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    model = nn.Sequential(nn.Linear(16, 16, bias=False))
+    n = replace_linears_with_poet(
+        model,
+        block_size=8,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        parameterization="exp",
+    )
+    assert n == 1
+    pl = model[0].poet_linear
+    assert pl.parameterization == "exp"
+
+
+def test_replace_linears_defaults_to_cayley():
+    import torch.nn as nn
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    model = nn.Sequential(nn.Linear(16, 16, bias=False))
+    replace_linears_with_poet(
+        model, block_size=8, init_type="none", extra_linear_types=(nn.Linear,)
+    )
+    assert model[0].poet_linear.parameterization == "cayley"
+
+
+def test_replace_linears_rejects_exp_with_cache():
+    import torch.nn as nn
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    model = nn.Sequential(nn.Linear(16, 16, bias=False))
+    with pytest.raises(ValueError):
+        replace_linears_with_poet(
+            model,
+            block_size=8,
+            init_type="none",
+            extra_linear_types=(nn.Linear,),
+            parameterization="exp",
+            cache_mode="cached_fwd_bwd",
+        )

@@ -272,6 +272,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.scale,
             "--poet-cache-mode",
             poet.get("cache_mode", "none"),
+            "--poet-parameterization",
+            poet.get("parameterization", "cayley"),
             "--adam-beta1",
             optim.betas[0],
             "--adam-beta2",

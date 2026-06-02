@@ -53,6 +53,11 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         choices=["none", "cached_fwd", "cached_fwd_bwd"],
         default="none",
     )
+    group.add_argument(
+        "--poet-parameterization",
+        choices=["cayley", "exp"],
+        default="cayley",
+    )
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")
