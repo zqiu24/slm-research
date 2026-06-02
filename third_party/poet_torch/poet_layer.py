@@ -409,6 +409,51 @@ def forward_core_decoupled(
     return y
 
 
+def forward_core_decoupled_exp(
+    x: torch.Tensor,
+    oft_R_in: torch.Tensor,
+    oft_R_out: torch.Tensor,
+    block_size_in: int,
+    block_size_out: int,
+    rows_in: torch.Tensor,
+    cols_in: torch.Tensor,
+    rows_out: torch.Tensor,
+    cols_out: torch.Tensor,
+    perm_in: torch.Tensor,
+    perm_in_inv: torch.Tensor,
+    perm_out: torch.Tensor,
+    perm_out_inv: torch.Tensor,
+    base_weight: torch.Tensor,
+    base_bias: Optional[torch.Tensor],
+    mem_efficient_mode: bool = False,
+) -> torch.Tensor:
+    """Forward for the exact-matrix-exponential parameterization.
+
+    Builds R eagerly via matrix_exp (NOT under torch.compile fullgraph, which
+    matrix_exp's backward may not support), then reuses the same
+    parameterization-agnostic chain consumers as the Cayley path. The R build is
+    O(b^3) per block, amortized over the whole microbatch; the per-token chain is
+    unchanged.
+    """
+    R_out, R_in = get_weight_poet_decoupled_exp(
+        oft_R_in, oft_R_out, block_size_in, block_size_out,
+        rows_in, cols_in, rows_out, cols_out,
+    )
+    if mem_efficient_mode:
+        y = chain_layer_x_checkpoint_mem_o2_decoupled(
+            x, R_in, base_weight, base_bias, R_out,
+            perm_in_inv, perm_in, perm_out, perm_out_inv,
+            block_size_in, block_size_out,
+        )
+    else:
+        y = chain_layer_x_fast_decoupled(
+            x, R_in, base_weight, base_bias, R_out,
+            perm_in_inv, perm_in, perm_out, perm_out_inv,
+            block_size_in, block_size_out,
+        )
+    return y
+
+
 @torch.compile(fullgraph=True)
 def forward_core_q8(
     x: torch.Tensor, 
@@ -633,6 +678,14 @@ class POETLinear(nn.Module):
         self.oft_R_out.zero_()
 
     def forward(self, x):
+        if self.parameterization == "exp":
+            return forward_core_decoupled_exp(
+                x, self.oft_R_in, self.oft_R_out,
+                self.block_size_in, self.block_size_out,
+                self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+                self.perm_in, self.perm_in_inv, self.perm_out, self.perm_out_inv,
+                self.weight, self.bias, self.mem_efficient_mode,
+            )
         x = forward_core_decoupled(
             x, self.oft_R_in, self.oft_R_out,
             self.block_size_in, self.block_size_out,

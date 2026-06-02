@@ -233,9 +233,12 @@ optimizer supports. Reached via ``src/patches/muon_kimi_optimizer_setup.py``.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 def get_megatron_muon_kimi_optimizer(
@@ -280,6 +283,19 @@ def get_megatron_muon_kimi_optimizer(
             else:
                 adamw_params.append(param)
 
+    # Diagnostic: surface the routing split so the first run can confirm the
+    # embedding / LM-head / norms landed in AdamW (not Muon). A 2-D embedding
+    # with an unset is_embedding_or_output_parameter flag would silently route
+    # to Muon and still pass Muon's ndim==2 assert — this log makes it visible.
+    logger.info(
+        "muon_kimi: %d muon params (2D non-embedding), %d adamw params",
+        len(muon_params),
+        len(adamw_params),
+    )
+
+    # NOTE: weight decay is constant here. Muon reads group["wd"]; Megatron's
+    # scheduler writes group["weight_decay"], which Muon ignores. This matches
+    # the GaLore recipe (no WD schedule).
     optimizer = Muon(
         lr=config.lr,
         wd=config.weight_decay,
