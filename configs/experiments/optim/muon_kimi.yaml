@@ -1,0 +1,38 @@
+# @package _global_
+# Muon variant using the vendored Kimi/Moonlight single-process optimizer
+# (src/optim/_kimi_muon.py), routed via --slm-optimizer muon_kimi. Single-GPU
+# dev only. Unlike muon_hybrid (separate muon/adam LRs), muon_kimi uses one
+# optim.lr for both the Muon and internal-AdamW sides; the Muon side scales
+# internally by 0.2*sqrt(max(d_out,d_in)).
+experiment:
+  name: muon_kimi
+  family: optim
+  description: |
+    Kimi/Moonlight Muon (vendored from the GaLore fork) on 2D attn/MLP weights,
+    internal AdamW on embeddings, norms, biases, and LM head. Single base LR;
+    Muon update orthogonalized via Newton-Schulz and RMS-scaled. Single-GPU dev.
+  references:
+    - "Moonlight paper arXiv:2502.16982"
+    - "Keller Jordan Muon (github.com/KellerJordan/Muon)"
+  patches:
+    - model_unfuse_linears
+    - muon_kimi_optimizer_setup
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: muon_kimi
+  lr: 1.0e-3
+  weight_decay: 0.1
+  muon_momentum: 0.95
+  muon_use_nesterov: true
+  muon_num_ns_steps: 5
+  adam:
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true
