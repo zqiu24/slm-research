@@ -24,7 +24,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group = parser.add_argument_group("slm-research")
     group.add_argument("--slm-config-path", type=str, required=True)
     group.add_argument(
-        "--slm-optimizer", choices=["adamw", "muon", "poet", "ngpt_adamw"], default="adamw"
+        "--slm-optimizer",
+        choices=["adamw", "muon", "poet", "ngpt_adamw", "muon_kimi"],
+        default="adamw",
     )
     group.add_argument("--poet", action="store_true")
     # block_size and block_count are mutually exclusive: block_size uses one
