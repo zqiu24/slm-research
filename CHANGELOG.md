@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — POET × Muon-on-Q Stage 0 diagnostics (gate instrumentation)
+
+- **Two env-gated diagnostic probes** for deciding whether the Muon-on-Q line is
+  worth pursuing, inert on normal runs. Probe 0A: `SLM_OVERFIT_SINGLE_BATCH=1`
+  replays the first batch every step (single-batch overfit;
+  `src/patches/overfit_single_batch.py` + `src/diag/single_batch.py`
+  `BatchReplay`). Probe 0B: `SLM_POET_GRAD_CONDITIONING=1` logs per-block
+  `∂f/∂Q` singular-value conditioning (condition number / stable rank /
+  σ_max-over-median) to W&B every `SLM_POET_GRAD_CONDITIONING_INTERVAL` steps
+  (`src/patches/poet_grad_conditioning.py` + `src/diag/skew_conditioning.py`
+  `vec_to_skew`/`block_spectral_stats`). Both registered in the launcher's
+  `_ALWAYS_ON_PATCHES`. No POET math or optimizer changes; the Muon-on-Q
+  optimizer itself remains gated behind the Stage 0 human-review decision.
+
 ### Added — POET `exp` (matrix-exponential) orthogonalization parameterization
 
 - **POET can now build the block rotation as the exact matrix exponential

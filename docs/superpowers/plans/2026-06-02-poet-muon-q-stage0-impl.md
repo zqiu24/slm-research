@@ -135,7 +135,10 @@ def block_spectral_stats(skew: torch.Tensor, eps: float = 1e-12) -> dict[str, to
     sigma_max = sv[:, 0]
     sigma_min = sv[:, -1].clamp_min(eps)
     fro_sq = (sv * sv).sum(dim=1)
-    median = sv.median(dim=1).values
+    # quantile(0.5), NOT torch.median: for even-length spectra torch.median
+    # returns the lower-middle value, not the arithmetic median the metric wants
+    # (e.g. median of [3,3,1,1] is 2.0, not 1.0).
+    median = torch.quantile(sv, 0.5, dim=1)
     return {
         "condition_number": sigma_max / sigma_min,
         "stable_rank": fro_sq / (sigma_max * sigma_max),
