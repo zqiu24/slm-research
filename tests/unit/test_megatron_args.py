@@ -460,3 +460,63 @@ def test_poet_argv_parameterization_defaults_to_cayley():
     )
     args = _optimizer_args(cfg)
     assert args[args.index("--poet-parameterization") + 1] == "cayley"
+
+
+def test_poet_argv_includes_q_optimizer_and_muon_knobs():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "poet",
+                "lr": 1.0e-3,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.95],
+                "eps": 1.0e-8,
+                "poet": {
+                    "block_size": 8,
+                    "init_type": "none",
+                    "mup_alpha": 1.0,
+                    "merge_period": 0,
+                    "scale": 1.0,
+                    "q_optimizer": "muon",
+                    "muon_theta": 0.2,
+                    "muon_ns_steps": 5,
+                    "muon_momentum": 0.95,
+                },
+            }
+        }
+    )
+    args = _optimizer_args(cfg)
+    assert args[args.index("--poet-q-optimizer") + 1] == "muon"
+    # _optimizer_args stringifies all argv values (_sequence -> list[str]).
+    assert args[args.index("--poet-muon-theta") + 1] == "0.2"
+
+
+def test_poet_argv_q_optimizer_defaults_to_adam():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "poet",
+                "lr": 1.0e-3,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.95],
+                "eps": 1.0e-8,
+                "poet": {
+                    "block_size": 8,
+                    "init_type": "none",
+                    "mup_alpha": 1.0,
+                    "merge_period": 0,
+                    "scale": 1.0,
+                },
+            }
+        }
+    )
+    args = _optimizer_args(cfg)
+    assert args[args.index("--poet-q-optimizer") + 1] == "adam"

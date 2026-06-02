@@ -66,6 +66,15 @@ optim:
     #     Exactly orthogonal for any Q; angle = singular value of Q (no factor
     #     of 2, no ||Q||<1 ceiling). Heavier backward; cache_mode must be "none".
     parameterization: cayley
+    # Optimizer that steps the orthogonal generators oft_R:
+    #   "adam" (default): stock Megatron-Adam on oft_R (unchanged).
+    #   "muon": SkewMuon — orthogonalize each block's skew gradient (Newton-Schulz)
+    #     and rescale to a constant rotation angle muon_theta. Fixes heavy-tailed
+    #     df/dQ conditioning (Probe 0B). Use with merge_period=0 (no-reset regime).
+    q_optimizer: adam
+    muon_theta: 0.1        # target per-step rotation angle (the single Muon tunable)
+    muon_ns_steps: 5       # Newton-Schulz iterations
+    muon_momentum: 0.95
     # Train both block rotations by default. Set false to FREEZE the output-side
     # rotation (oft_R_out) at identity — it inits to zero, so freezing leaves
     # R_out = I and only the input-side rotation (oft_R_in) is learned: a single-
