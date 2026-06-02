@@ -48,3 +48,11 @@ def test_poet_script_supports_llama3():
     assert "--slm-optimizer" in proc.stdout
     assert "poet" in proc.stdout
     assert "--poet-merge-period" in proc.stdout
+
+
+def test_muon_kimi_dev_script_routes_to_kimi_optimizer():
+    proc = _run("train_muon_kimi_dev.sh", "llama3")
+    assert '"command"' in proc.stdout
+    assert "--slm-optimizer" in proc.stdout
+    assert "muon_kimi" in proc.stdout
+    assert "slm-zeju-dev" in proc.stdout
