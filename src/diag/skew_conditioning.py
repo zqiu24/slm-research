@@ -36,3 +36,24 @@ def block_spectral_stats(skew: torch.Tensor, eps: float = 1e-12) -> dict[str, to
         "stable_rank": fro_sq / (sigma_max * sigma_max),
         "sigma_max_over_median": sigma_max / median.clamp_min(eps),
     }
+
+
+def vec_to_skew(vec: torch.Tensor, block_size: int) -> torch.Tensor:
+    """Map upper-triangular vectors to full skew-symmetric blocks.
+
+    Args:
+        vec: shape (num_blocks, b*(b-1)/2), the trainable/grad entries in the
+            same order as ``torch.triu_indices(b, b, 1)``.
+        block_size: b.
+
+    Returns: (num_blocks, b, b) with Q[..., r, c] = vec, Q[..., c, r] = -vec.
+    """
+    if vec.dim() == 1:
+        vec = vec.unsqueeze(0)
+    b = block_size
+    n = vec.shape[0]
+    rows, cols = torch.triu_indices(b, b, 1)
+    q = torch.zeros(n, b, b, dtype=vec.dtype, device=vec.device)
+    q[:, rows, cols] = vec
+    q[:, cols, rows] = -vec
+    return q
