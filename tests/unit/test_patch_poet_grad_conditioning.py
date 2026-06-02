@@ -56,3 +56,48 @@ def test_select_target_params_picks_representative_blocks():
     assert not any("linear_no_match" in lbl for lbl in labels)
     # each selected layer contributes its R_in and R_out factor
     assert all(t["factor"] in ("R_in", "R_out") for t in targets)
+
+
+def test_install_conditioning_on_setup_wraps_and_hooks():
+    """The probe wraps setup_model_and_optimizer (not get_megatron_optimizer, which
+    poet_optimizer_setup bypasses on the POET path): it must return the built
+    (model, optimizer, scheduler) unchanged AND install a step-hook on the
+    optimizer that still calls the original .step."""
+    import torch
+
+    from src.patches.poet_grad_conditioning import _install_conditioning_on_setup
+
+    class FakeOpt:
+        def __init__(self):
+            self.n = 0
+
+        def step(self, *a, **k):
+            self.n += 1
+
+    class FakePOET(torch.nn.Module):
+        def __init__(self, b):
+            super().__init__()
+            self.block_size_in = b
+            self.block_size_out = b
+            self.oft_R_in = torch.nn.Parameter(torch.zeros(1, b * (b - 1) // 2))
+            self.oft_R_out = torch.nn.Parameter(torch.zeros(1, b * (b - 1) // 2))
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_q = FakePOET(4)  # name matches _WANTED -> 2 targets (R_in/R_out)
+
+    model, opt = FakeModel(), FakeOpt()
+
+    def orig_setup(*a, **k):
+        return model, opt, "sched"
+
+    wrapped = _install_conditioning_on_setup(orig_setup, interval=1)
+    m, o, s = wrapped()
+
+    # returns the built tuple unchanged
+    assert (m, o, s) == (model, opt, "sched")
+    # step-hook installed (no main_grad/.grad on the fakes -> logs 'no grad', no crash)
+    o.step()
+    o.step()
+    assert opt.n == 2  # underlying .step still runs through the wrapper

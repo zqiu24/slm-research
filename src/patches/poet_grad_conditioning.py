@@ -5,12 +5,19 @@ Env-gated by SLM_POET_GRAD_CONDITIONING=1 (interval via
 SLM_POET_GRAD_CONDITIONING_INTERVAL, default 2000). Inert otherwise, so it is
 safe in _ALWAYS_ON_PATCHES.
 
-Mechanism: wrap the (possibly poet-routed) ``get_megatron_optimizer`` — which
-receives ``model`` — to (a) pick ~8 representative oft_R blocks and (b) wrap the
-returned optimizer's ``.step`` so that, every ``interval`` steps, it reads each
-block's gradient from ``main_grad`` (the Megatron DDP fp32 buffer; falls back to
-``.grad``), reconstructs the skew, and logs spectral stats to W&B BEFORE the
-optimizer consumes the grad.
+Mechanism: wrap ``setup_model_and_optimizer`` (NOT ``get_megatron_optimizer``).
+The POET path goes through ``poet_optimizer_setup``, which — applied AFTER this
+patch in sorted order — becomes the OUTER wrapper of ``get_megatron_optimizer``
+and, for ``slm_optimizer=='poet'``, routes straight to
+``get_megatron_poet_optimizer`` WITHOUT calling the original it wrapped. So a
+wrapper on ``get_megatron_optimizer`` is dead on the POET path. Instead we wrap
+``setup_model_and_optimizer`` (the same hook ``wandb_trainable_params`` uses),
+which returns the fully-built ``(model, optimizer, scheduler)`` regardless of how
+the optimizer was routed. We then (a) pick ~8 representative oft_R blocks from
+``model`` and (b) wrap the ``optimizer``'s ``.step`` so that, every ``interval``
+steps, it reads each block's gradient from ``main_grad`` (the Megatron DDP fp32
+buffer; falls back to ``.grad``), reconstructs the skew, and logs spectral stats
+to W&B BEFORE the optimizer consumes the grad.
 """
 
 from __future__ import annotations
@@ -20,9 +27,9 @@ import os
 
 from src.patches._registry import register_patch
 
-# Unique label: this patch does NOT own get_megatron_optimizer (poet_optimizer_setup
-# does); it composes on top of whatever that symbol currently is.
-_TARGET = ("slm.diagnostics.poet_grad_conditioning.optimizer_step",)
+# Runtime wrapper with no static target ownership (like wandb_trainable_params):
+# it monkeypatches setup_model_and_optimizer at apply() time and composes with any
+# other wrapper of that symbol, so it registers targets=() to avoid a PatchConflict.
 logger = logging.getLogger(__name__)
 
 # projection name fragments we care about (HF-ish + Megatron names)
@@ -121,18 +128,13 @@ def _install_step_hook(optimizer, targets, interval: int) -> None:
     optimizer.step = _wrapped_step
 
 
-@register_patch(name="poet_grad_conditioning", targets=_TARGET)
-def apply() -> None:
-    if os.environ.get("SLM_POET_GRAD_CONDITIONING") != "1":
-        return  # inert unless explicitly enabled
+def _install_conditioning_on_setup(orig_setup, interval):
+    """Wrap ``setup_model_and_optimizer`` to install the conditioning step-hook on
+    the fully-built optimizer. Factored out so the wrap logic is unit-testable
+    without a real Megatron import."""
 
-    interval = int(os.environ.get("SLM_POET_GRAD_CONDITIONING_INTERVAL", "2000"))
-    from megatron.training import training as _mt
-
-    _orig_get_optimizer = _mt.get_megatron_optimizer
-
-    def _wrapped_get_optimizer(config, model, **kwargs):
-        optimizer = _orig_get_optimizer(config, model, **kwargs)
+    def _wrapped_setup(*args, **kwargs):
+        model, optimizer, opt_param_scheduler = orig_setup(*args, **kwargs)
         chunks = model if isinstance(model, list) else [model]
         named_layers = [
             (name, mod)
@@ -150,6 +152,19 @@ def apply() -> None:
             )
         else:
             logger.warning("[COND] no oft_R layers found; conditioning probe is a no-op")
-        return optimizer
+        return model, optimizer, opt_param_scheduler
 
-    _mt.get_megatron_optimizer = _wrapped_get_optimizer
+    return _wrapped_setup
+
+
+@register_patch(name="poet_grad_conditioning", targets=())
+def apply() -> None:
+    if os.environ.get("SLM_POET_GRAD_CONDITIONING") != "1":
+        return  # inert unless explicitly enabled
+
+    interval = int(os.environ.get("SLM_POET_GRAD_CONDITIONING_INTERVAL", "2000"))
+    from megatron.training import training as _mt
+
+    _mt.setup_model_and_optimizer = _install_conditioning_on_setup(
+        _mt.setup_model_and_optimizer, interval
+    )
