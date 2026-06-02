@@ -224,6 +224,29 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             ]
         )
 
+    if kind == "muon_kimi":
+        adam = optim.get("adam", {})
+        betas = adam.get("betas", [0.9, 0.95])
+        argv = [
+            "--optimizer",
+            "adam",
+            "--slm-optimizer",
+            "muon_kimi",
+            "--muon-momentum",
+            optim.get("muon_momentum", 0.95),
+            "--muon-num-ns-steps",
+            optim.get("muon_num_ns_steps", 5),
+            "--adam-beta1",
+            betas[0],
+            "--adam-beta2",
+            betas[1],
+            "--adam-eps",
+            adam.get("eps", 1.0e-8),
+        ]
+        if bool(optim.get("muon_use_nesterov", True)):
+            argv.append("--muon-use-nesterov")
+        return _sequence(argv)
+
     if kind == "poet":
         poet = optim.poet
         # block_count (decoupled block sizes) takes precedence over block_size.

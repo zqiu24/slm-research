@@ -375,3 +375,32 @@ def test_unfuse_can_be_disabled_per_run():
     args = build_megatron_args(cfg)
     assert "--unfuse-qkv" not in args
     assert "--unfuse-fc1" not in args
+
+
+def test_muon_kimi_argv_routes_through_adam_and_sets_muon_knobs():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "muon_kimi",
+                "lr": 1.0e-3,
+                "weight_decay": 0.1,
+                "muon_momentum": 0.95,
+                "muon_use_nesterov": True,
+                "muon_num_ns_steps": 5,
+                "adam": {"betas": [0.9, 0.95], "eps": 1.0e-8},
+            }
+        }
+    )
+    args = _optimizer_args(cfg)
+    amap = {args[i]: args[i + 1] for i in range(0, len(args) - 1)}
+    assert amap["--optimizer"] == "adam"
+    assert amap["--slm-optimizer"] == "muon_kimi"
+    assert amap["--muon-momentum"] == "0.95"
+    assert amap["--muon-num-ns-steps"] == "5"
+    assert amap["--adam-beta1"] == "0.9"
+    assert amap["--adam-beta2"] == "0.95"
+    assert "--muon-use-nesterov" in args
