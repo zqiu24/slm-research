@@ -254,6 +254,34 @@ def get_weight_poet_decoupled(oft_R_in, oft_R_out,
     R_out = torch.ops.poet.cayley(Q_out)[0]
     return R_out, R_in
 
+
+def _matrix_exp_skew(Q):
+    """exp of a skew batch. matrix_exp is numerically delicate below fp32, so
+    compute in fp32 (or keep fp64) then cast back. Autograd flows through the
+    cast, so gradients return in the input dtype with no custom backward."""
+    compute_dtype = Q.dtype if Q.dtype in (torch.float32, torch.float64) else torch.float32
+    R = torch.linalg.matrix_exp(Q.to(compute_dtype))
+    return R.to(Q.dtype)
+
+
+def get_weight_poet_decoupled_exp(oft_R_in, oft_R_out,
+                                  block_size_in, block_size_out,
+                                  rows_in, cols_in, rows_out, cols_out):
+    """Matrix-exponential twin of ``get_weight_poet_decoupled``.
+
+    Builds (R_out, R_in) as the *exact* matrix exponential of the skew
+    generators instead of the truncated Cayley/Neumann polynomial. R is exactly
+    orthogonal for any Q (no ||Q||<1 ceiling, no truncation error), and the
+    singular values of Q are exactly the rotation angles of R. Same signature
+    and (R_out, R_in) return ordering as ``get_weight_poet_decoupled`` so it is a
+    drop-in for the parameterization dispatch.
+    """
+    Q_in = pytorch_skew_symmetric(oft_R_in, block_size_in, rows_in, cols_in)
+    Q_out = pytorch_skew_symmetric(oft_R_out, block_size_out, rows_out, cols_out)
+    R_in = _matrix_exp_skew(Q_in)
+    R_out = _matrix_exp_skew(Q_out)
+    return R_out, R_in
+
 def torch_bmm(x, R, block_size):
     Bdims = x.shape[:-1]
     xr = x.view(*Bdims, -1, block_size)
