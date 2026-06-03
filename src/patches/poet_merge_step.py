@@ -45,6 +45,25 @@ _TARGET = ("megatron.training.training.train_step",)
 logger = logging.getLogger(__name__)
 
 
+def _merge_decision(iteration: int, merge_period: int, reinit_period: int) -> tuple[bool, bool]:
+    """Decide, for ``iteration``, whether to fold and whether to also reinit.
+
+    Returns ``(folding, reinit)``:
+
+    * ``folding`` — fold ``R(Q)`` into ``W`` and reset ``Q`` this step (cadence
+      ``merge_period``). poet0 sets ``merge_period=1`` → fold every step.
+    * ``reinit`` — *additionally* resample the block permutation Ψ and reset Adam
+      momentum (cadence ``reinit_period``; ``<=0`` falls back to ``merge_period``,
+      reproducing the legacy fused behavior). A reinit can only happen on a step
+      that also folds, so ``reinit_period`` should be a multiple of
+      ``merge_period`` (validated at arg-build time in megatron_args).
+    """
+    if merge_period <= 0 or iteration <= 0 or iteration % merge_period != 0:
+        return (False, False)
+    gap = reinit_period if reinit_period > 0 else merge_period
+    return (True, iteration % gap == 0)
+
+
 @register_patch(name="poet_merge_step", targets=_TARGET)
 def apply() -> None:
     import torch.distributed as dist

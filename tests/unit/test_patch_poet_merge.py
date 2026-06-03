@@ -71,3 +71,30 @@ def test_run_merge_invalidates_cache_on_cached_poet_linear():
     assert layer._R_cache_version == -1
     assert layer._R_out_leaf is None
     assert layer._R_in_leaf is None
+
+
+def test_merge_decision_poet0_folds_every_step_reinits_every_400():
+    from src.patches.poet_merge_step import _merge_decision
+
+    # merge_period=1 (fold every step), reinit_period=400.
+    assert _merge_decision(1, 1, 400) == (True, False)
+    assert _merge_decision(399, 1, 400) == (True, False)
+    assert _merge_decision(400, 1, 400) == (True, True)
+    assert _merge_decision(800, 1, 400) == (True, True)
+
+
+def test_merge_decision_legacy_folds_and_reinits_together():
+    from src.patches.poet_merge_step import _merge_decision
+
+    # merge_period=400, reinit_period=0 -> falls back to merge_period, so fold
+    # and reinit always coincide (byte-identical to today's behavior).
+    assert _merge_decision(200, 400, 0) == (False, False)
+    assert _merge_decision(400, 400, 0) == (True, True)
+    assert _merge_decision(800, 400, 0) == (True, True)
+
+
+def test_merge_decision_disabled_or_iter_zero():
+    from src.patches.poet_merge_step import _merge_decision
+
+    assert _merge_decision(0, 1, 400) == (False, False)  # iteration 0 never merges
+    assert _merge_decision(10, 0, 400) == (False, False)  # merge_period<=0 disables fold
