@@ -22,6 +22,36 @@ from __future__ import annotations
 import torch
 
 
+def _build_lie_param_groups(skew_params, adamw_params, lr, min_lr, scale):
+    """Two param groups carrying lr/max_lr/min_lr so Megatron's scheduler decays
+    group['lr'] (skew side scaled by poet_scale, exactly like the vanilla path
+    scales oft_R). Empty sides are dropped."""
+    groups = []
+    skew_params = list(skew_params)
+    adamw_params = list(adamw_params)
+    if skew_params:
+        groups.append(
+            dict(
+                params=skew_params,
+                use_skew=True,
+                lr=lr * scale,
+                max_lr=lr * scale,
+                min_lr=min_lr * scale,
+            )
+        )
+    if adamw_params:
+        groups.append(
+            dict(
+                params=adamw_params,
+                use_skew=False,
+                lr=lr,
+                max_lr=lr,
+                min_lr=min_lr,
+            )
+        )
+    return groups
+
+
 class LieAlgebraMomentum(torch.optim.Optimizer):
     def __init__(
         self,

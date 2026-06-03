@@ -96,3 +96,24 @@ def test_adamw_branch_steps_without_error():
     opt = LieAlgebraMomentum([dict(params=[p], use_skew=False, lr=1e-2)])
     opt.step()
     assert not torch.allclose(p.data, before)  # standard AdamW moved it
+
+
+def test_build_lie_param_groups_scales_skew_lr():
+    import torch.nn as nn
+
+    from src.optim.poet_lie_momentum import _build_lie_param_groups
+
+    skew = [nn.Parameter(torch.zeros(1, 6))]
+    adamw = [nn.Parameter(torch.zeros(4))]
+    groups = _build_lie_param_groups(skew, adamw, lr=1e-3, min_lr=1e-5, scale=0.5)
+
+    g_skew = next(g for g in groups if g["use_skew"])
+    g_adam = next(g for g in groups if not g["use_skew"])
+    assert g_skew["lr"] == 5e-4 and g_skew["max_lr"] == 5e-4 and g_skew["min_lr"] == 5e-6
+    assert g_adam["lr"] == 1e-3 and g_adam["max_lr"] == 1e-3 and g_adam["min_lr"] == 1e-5
+
+
+def test_build_lie_param_groups_drops_empty_sides():
+    from src.optim.poet_lie_momentum import _build_lie_param_groups
+
+    assert _build_lie_param_groups([], [], 1e-3, 1e-5, 0.5) == []

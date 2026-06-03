@@ -525,6 +525,86 @@ def get_megatron_poet_muon_optimizer(
     return FP32Optimizer(optimizer, config, init_state_fn)
 
 
+def get_megatron_poet_lie_momentum_optimizer(
+    config,
+    model_chunks,
+    *,
+    config_overrides=None,
+    use_gloo_process_groups: bool = True,
+):
+    """POET Lie-algebra momentum: LieAlgebraMomentum on oft_R, AdamW on the rest,
+    wrapped for Megatron. Single-process / DP-replicated (no sharded distributed
+    optimizer), like the muon path. Increment 1 of POET-X x Pion."""
+    _resolve_megatron_handles()
+    from megatron.core import parallel_state as mpu
+    from megatron.core.optimizer.optimizer import (
+        Float16OptimizerWithFloat16Params,
+        FP32Optimizer,
+    )
+
+    from src.optim.poet_lie_momentum import LieAlgebraMomentum, _build_lie_param_groups
+
+    if getattr(config, "use_distributed_optimizer", False):
+        raise ValueError("POET Lie-momentum does not support the distributed optimizer (dev only).")
+    if getattr(config, "fp16", False):
+        raise ValueError("POET Lie-momentum does not support fp16; use bf16.")
+    if mpu.get_tensor_model_parallel_world_size() > 1:
+        raise ValueError("POET Lie-momentum does not support tensor parallelism > 1.")
+    if mpu.get_pipeline_model_parallel_world_size() > 1:
+        raise ValueError("POET Lie-momentum does not support pipeline parallelism > 1.")
+
+    skew_params, adamw_params = _split_poet_muon_params(model_chunks)
+    scale = getattr(config, "poet_scale", 1.0)
+    min_lr = getattr(config, "min_lr", 0.0)
+    logger.info(
+        "[POET] Lie-momentum: %d skew (oft_R) params, %d adamw params (b1=%s, b2=%s, v_mode=%s, scale=%s)",
+        len(skew_params),
+        len(adamw_params),
+        getattr(config, "poet_lie_b1", 0.9),
+        getattr(config, "poet_lie_b2", 0.95),
+        getattr(config, "poet_lie_v_mode", "scalar"),
+        scale,
+    )
+    if not skew_params:
+        logger.warning("[POET] Lie-momentum: no oft_R params found — skew branch is a no-op.")
+
+    param_groups = _build_lie_param_groups(skew_params, adamw_params, config.lr, min_lr, scale)
+    optimizer = LieAlgebraMomentum(
+        param_groups,
+        b1=getattr(config, "poet_lie_b1", 0.9),
+        b2=getattr(config, "poet_lie_b2", 0.95),
+        eps=getattr(config, "poet_lie_eps", 1e-8),
+        v_mode=getattr(config, "poet_lie_v_mode", "scalar"),
+        adamw_betas=(config.adam_beta1, config.adam_beta2),
+        adamw_eps=config.adam_eps,
+        adamw_wd=config.weight_decay,
+    )
+
+    def init_state_fn(opt, _config=None):
+        for group in opt.param_groups:
+            for p in group["params"]:
+                st = opt.state[p]
+                if group["use_skew"]:
+                    st.setdefault("lie_m", torch.zeros_like(p.data))
+                    if group["v_mode"] == "scalar":
+                        st.setdefault(
+                            "lie_v",
+                            torch.zeros(
+                                p.data.shape[0], 1, dtype=p.data.dtype, device=p.data.device
+                            ),
+                        )
+                    else:
+                        st.setdefault("lie_v", torch.zeros_like(p.data))
+                elif "moment1" not in st:
+                    st["step"] = 0
+                    st["moment1"] = torch.zeros_like(p.data)
+                    st["moment2"] = torch.zeros_like(p.data)
+
+    if getattr(config, "bf16", False):
+        return Float16OptimizerWithFloat16Params(optimizer, config, None, init_state_fn)
+    return FP32Optimizer(optimizer, config, init_state_fn)
+
+
 def get_megatron_poet_optimizer(
     config: Any,
     model_chunks: list,
@@ -543,6 +623,14 @@ def get_megatron_poet_optimizer(
     poet_merge_period = getattr(config, "poet_merge_period", 0)
     poet_scale = getattr(config, "poet_scale", 1.0)
     poet_cache_mode = getattr(config, "poet_cache_mode", "none")
+
+    if getattr(config, "poet_q_optimizer", "adam") == "lie_algebra":
+        return get_megatron_poet_lie_momentum_optimizer(
+            config,
+            model_chunks,
+            config_overrides=config_overrides,
+            use_gloo_process_groups=use_gloo_process_groups,
+        )
 
     if getattr(config, "poet_q_optimizer", "adam") == "muon":
         return get_megatron_poet_muon_optimizer(
