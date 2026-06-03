@@ -393,6 +393,25 @@ def test_merge_reinit_perm_true_is_forward_invariant_and_resamples_perm():
     assert torch.count_nonzero(layer.oft_R_in) == 0
 
 
+def test_merge_fold_only_forward_invariant_nonsquare_ffn_shape():
+    # FFN layers are non-square (e.g. hidden->ffn); the decoupled fold path is
+    # where a row/col-perm swap would hide. Verified: diff ~3.6e-7.
+    import torch
+    from poet_torch import POETLinear
+
+    torch.manual_seed(3)
+    layer = POETLinear(
+        in_features=8, out_features=16, block_count=1,
+        dtype=torch.float32, parameterization="exp",
+    )
+    layer.random_init_parameters()
+    x = torch.randn(5, 8, dtype=torch.float32)
+
+    out_before = layer(x).detach().clone()
+    layer.merge_then_reinitialize(reinit_perm=False)
+    assert torch.allclose(out_before, layer(x), atol=1e-4)
+
+
 def test_merge_then_reinitialize_defaults_to_reinit():
     import inspect
     from poet_torch import POETLinear
