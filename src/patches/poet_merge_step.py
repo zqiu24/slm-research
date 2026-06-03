@@ -185,7 +185,6 @@ def _reset_vanilla_oft_state(optimizer, model, iteration: int, reset_moments: bo
         return 1
 
     inner = getattr(optimizer, "chained_optimizers", None) or [optimizer]
-    n_val = 0
     oft_master_ids = set()
     seen_opts = []
 
@@ -204,7 +203,6 @@ def _reset_vanilla_oft_state(optimizer, model, iteration: int, reset_moments: bo
             # spring-back of the just-merged rotation.
             if master_p is not model_p:
                 master_p.detach().zero_()
-            n_val += 1
             # Moments reset only when reinit fires (Ψ changed -> new coordinate
             # frame). poet0 non-boundary steps keep momentum (reset_moments=False).
             if reset_moments:
@@ -214,7 +212,6 @@ def _reset_vanilla_oft_state(optimizer, model, iteration: int, reset_moments: bo
     # per-param reset above doesn't refresh bias correction. Reset the group-level
     # step for any group holding oft_R masters so t -> 0 and the post-merge
     # restart gets fresh bias correction.
-    n_groups = 0
     if reset_moments:
         for torch_opt in seen_opts:
             for group in torch_opt.param_groups:
@@ -226,15 +223,6 @@ def _reset_vanilla_oft_state(optimizer, model, iteration: int, reset_moments: bo
                     group["step"].zero_()
                 else:
                     group["step"] = 0
-                n_groups += 1
-
-    logger.info(
-        "[POET] oft_R reset at iter %d: zeroed value for %d masters; moments %s (%d group-steps)",
-        iteration,
-        n_val,
-        "reset" if reset_moments else "kept",
-        n_groups,
-    )
 
 
 def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
@@ -273,4 +261,3 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
             # upstream POETLinear (cache_mode=none) doesn't have this method.
             if hasattr(pl, "_invalidate_R_cache"):
                 pl._invalidate_R_cache()
-    logger.info("[POET] merged at iteration %d", iteration)
