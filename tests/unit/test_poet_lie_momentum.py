@@ -216,3 +216,78 @@ def test_alternating_false_writes_both_sides():
     p_out.grad = torch.randn(1, ne)
     opt.step()
     assert torch.count_nonzero(p_in.data) > 0 and torch.count_nonzero(p_out.data) > 0
+
+
+def _rms_opt(p, lr, rms, rms_c=0.2, v_mode="elementwise"):
+    from src.optim.poet_lie_momentum import LieAlgebraMomentum
+
+    return LieAlgebraMomentum(
+        [dict(params=[p], use_skew=True, side="out", lr=lr)],
+        v_mode=v_mode,
+        rms=rms,
+        rms_c=rms_c,
+    )
+
+
+def test_rms_scaling_matches_reference():
+    from src.diag.skew_conditioning import block_size_from_nelems
+
+    torch.manual_seed(0)
+    ne, lr, rms_c, b1, b2, eps = 6, 1e-3, 0.2, 0.9, 0.95, 1e-8
+    p = nn.Parameter(torch.zeros(1, ne))
+    p.grad = torch.randn(1, ne)
+    g = p.grad.clone()
+    # Stage 1 (elementwise Adam, first step from 0) then Stage 2 (W-free RMS):
+    m = (1 - b1) * g
+    v = (1 - b2) * (g * g)
+    A = -m / (v.sqrt() + eps)
+    b = block_size_from_nelems(A.shape[1])
+    dim_const = (A.shape[0] * b) ** 0.5
+    alpha = rms_c * dim_const / (torch.linalg.norm(A) + eps)
+    expected = lr * alpha * A
+    _rms_opt(p, lr, rms=True, rms_c=rms_c).step()
+    assert torch.allclose(p.data, expected, atol=1e-7), (p.data - expected).abs().max()
+
+
+def test_rms_makes_oft_r_norm_grad_independent():
+    # The whole point: ‖oft_R‖_F = lr·rms_c·√(n_blocks·block_size), regardless of
+    # the gradient magnitude (scale consistency).
+    from src.diag.skew_conditioning import block_size_from_nelems
+
+    ne, lr, rms_c = 6, 1e-3, 0.2
+    b = block_size_from_nelems(ne)
+    target = lr * rms_c * (1 * b) ** 0.5
+    for scale in (1e-3, 1.0, 1e3):  # wildly different gradient magnitudes
+        p = nn.Parameter(torch.zeros(1, ne))
+        p.grad = scale * torch.randn(1, ne)
+        _rms_opt(p, lr, rms=True, rms_c=rms_c).step()
+        assert abs(float(torch.linalg.norm(p.data)) - target) < 1e-6, scale
+
+
+def test_rms_off_is_unscaled():
+    # rms=False reproduces the current oft_R = lr*A (no Stage 2).
+    torch.manual_seed(2)
+    ne, lr, b1, b2, eps = 6, 1e-3, 0.9, 0.95, 1e-8
+    p = nn.Parameter(torch.zeros(1, ne))
+    p.grad = torch.randn(1, ne)
+    g = p.grad.clone()
+    A = -((1 - b1) * g) / (((1 - b2) * (g * g)).sqrt() + eps)
+    expected = lr * A
+    _rms_opt(p, lr, rms=False).step()
+    assert torch.allclose(p.data, expected, atol=1e-7), (p.data - expected).abs().max()
+
+
+def test_rms_norm_scales_with_sqrt_d_across_sizes():
+    # Two different widths, same rms_c: ‖oft_R‖/√(n_blocks·block_size) is equal.
+    from src.diag.skew_conditioning import block_size_from_nelems
+
+    lr, rms_c = 1e-3, 0.2
+    ratios = []
+    for d in (4, 8):
+        ne = d * (d - 1) // 2
+        p = nn.Parameter(torch.zeros(1, ne))
+        p.grad = torch.randn(1, ne)
+        _rms_opt(p, lr, rms=True, rms_c=rms_c).step()
+        b = block_size_from_nelems(ne)
+        ratios.append(float(torch.linalg.norm(p.data)) / (1 * b) ** 0.5)
+    assert abs(ratios[0] - ratios[1]) < 1e-7, ratios

@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import torch
 
+from src.diag.skew_conditioning import block_size_from_nelems
+
 
 def _split_poet_lie_params(model_chunks):
     """oft_R_in -> in-side, oft_R_out -> out-side, everything else -> adamw.
@@ -84,6 +86,8 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
         v_mode: str = "elementwise",
         alternating: bool = False,
         alternate_every: int = 1,
+        rms: bool = False,
+        rms_c: float = 0.2,
         adamw_betas=(0.9, 0.95),
         adamw_eps: float = 1e-8,
         adamw_wd: float = 0.0,
@@ -95,6 +99,9 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
         self.alternating = bool(alternating)
         self.alternate_every = max(1, int(alternate_every))
         self._alt_step = 0
+        # Stage 2 RMS scaling (§2, W-free): alpha = rms_c*sqrt(n_blocks*block_size)/(‖A‖_F+eps).
+        self.rms = bool(rms)
+        self.rms_c = float(rms_c)
         defaults = dict(
             lr=0.0,
             use_skew=False,
@@ -152,7 +159,15 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
                     if self.alternating and side != active:
                         continue
                     A = -m / (v.sqrt() + eps)
-                    p.add_(A.to(p.dtype), alpha=lr)  # p born at 0 -> p = lr*A
+                    if self.rms:
+                        # Stage 2 (W-free): scale the rotation generator so the
+                        # per-plane angle is dimension-consistent. dim from shape:
+                        # sqrt(n_blocks*block_size) = sqrt(d), blocking-invariant.
+                        bsz = block_size_from_nelems(A.shape[1])
+                        dim_const = (A.shape[0] * bsz) ** 0.5
+                        alpha = self.rms_c * dim_const / (torch.linalg.norm(A) + eps)
+                        A = A * alpha
+                    p.add_(A.to(p.dtype), alpha=lr)  # p born at 0 -> p = lr*(alpha)A
             else:
                 beta1, beta2 = group["adamw_betas"]
                 aeps, wd = group["adamw_eps"], group["adamw_wd"]
