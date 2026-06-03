@@ -8,8 +8,10 @@ ordinary ``nn.Linear`` layers, so it works on the plain AdamW and Muon baselines
 picture. The canonical "why Muon" diagnostic: Adam's Linear-weight gradients tend
 to be low-(stable/effective)-rank / heavy-tailed; Muon orthogonalizes them.
 
-Env-gated by SLM_GRAD_CONDITIONING=1 (interval via SLM_GRAD_CONDITIONING_INTERVAL,
-default 2000). Inert otherwise, so it is safe in _ALWAYS_ON_PATCHES.
+Env-gated by SLM_GRAD_CONDITIONING=1. Interval via SLM_GRAD_CONDITIONING_INTERVAL,
+which falls back to the POET probe's SLM_POET_GRAD_CONDITIONING_INTERVAL (then
+2000) so both diagnostics sample at the same cadence by default. Inert otherwise,
+so it is safe in _ALWAYS_ON_PATCHES.
 
 Mechanism mirrors poet_grad_conditioning: wrap ``setup_model_and_optimizer``
 (composes with the other wrappers of that symbol), pick ~8 representative Linear
@@ -146,12 +148,23 @@ def _install_grad_conditioning_on_setup(orig_setup, interval):
     return _wrapped_setup
 
 
+def _resolve_interval(env) -> int:
+    """Logging interval, kept consistent with the POET conditioning probe: falls
+    back to ``SLM_POET_GRAD_CONDITIONING_INTERVAL`` (then 2000) so both diagnostics
+    sample at the same cadence by default; an explicit
+    ``SLM_GRAD_CONDITIONING_INTERVAL`` still overrides."""
+    val = env.get("SLM_GRAD_CONDITIONING_INTERVAL")
+    if val is None:
+        val = env.get("SLM_POET_GRAD_CONDITIONING_INTERVAL", "2000")
+    return int(val)
+
+
 @register_patch(name="grad_conditioning", targets=())
 def apply() -> None:
     if os.environ.get("SLM_GRAD_CONDITIONING") != "1":
         return  # inert unless explicitly enabled
 
-    interval = int(os.environ.get("SLM_GRAD_CONDITIONING_INTERVAL", "2000"))
+    interval = _resolve_interval(os.environ)
     from megatron.training import training as _mt
 
     _mt.setup_model_and_optimizer = _install_grad_conditioning_on_setup(

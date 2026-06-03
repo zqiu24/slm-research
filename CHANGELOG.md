@@ -6,8 +6,10 @@
 
 - **Per-layer weight-gradient spectrum logging for plain runs** (AdamW, Muon —
   no POET), via the new env-gated patch `src/patches/grad_conditioning.py`
-  (`SLM_GRAD_CONDITIONING=1`, interval `SLM_GRAD_CONDITIONING_INTERVAL`, default
-  2000; added to `_ALWAYS_ON_PATCHES`, inert otherwise). Picks ~8 representative
+  (`SLM_GRAD_CONDITIONING=1`; interval `SLM_GRAD_CONDITIONING_INTERVAL`, which
+  falls back to the POET probe's `SLM_POET_GRAD_CONDITIONING_INTERVAL`, then 2000,
+  so both probes sample at the same cadence; added to `_ALWAYS_ON_PATCHES`, inert
+  otherwise). Picks ~8 representative
   `nn.Linear` weights and, every interval, reads each weight's full accumulated
   `main_grad` *before* the optimizer consumes it and logs
   `grad_cond/<layer>/{condition_number, stable_rank, sigma_max_over_median,

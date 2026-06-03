@@ -85,6 +85,27 @@ def test_log_grad_conditioning_logs_all_four_metrics(monkeypatch):
     assert captured[f"{base}/stable_rank"] < 10.0
 
 
+def test_interval_falls_back_to_poet_interval_for_consistency():
+    """The probe samples at the same cadence as the POET probe: defaults to 2000,
+    follows SLM_POET_GRAD_CONDITIONING_INTERVAL when set, but an explicit
+    SLM_GRAD_CONDITIONING_INTERVAL always wins."""
+    from src.patches.grad_conditioning import _resolve_interval
+
+    assert _resolve_interval({}) == 2000
+    assert _resolve_interval({"SLM_POET_GRAD_CONDITIONING_INTERVAL": "500"}) == 500
+    assert _resolve_interval({"SLM_GRAD_CONDITIONING_INTERVAL": "100"}) == 100
+    # explicit generic var overrides the POET fallback
+    assert (
+        _resolve_interval(
+            {
+                "SLM_GRAD_CONDITIONING_INTERVAL": "100",
+                "SLM_POET_GRAD_CONDITIONING_INTERVAL": "500",
+            }
+        )
+        == 100
+    )
+
+
 def test_install_grad_conditioning_on_setup_wraps_and_hooks():
     """Wrapping setup_model_and_optimizer returns the built tuple unchanged AND
     installs a step-hook that still calls the original .step."""
