@@ -1,0 +1,62 @@
+# @package _global_
+# poet_lie_alt: poet_lie + alternating single-sided update (§6).
+#
+# Identical to poet_lie (Lie-algebra momentum, single-step, block_count=1,
+# reinit_period=-1) but with lie_alternating=true: update ONE rotation side per
+# step (oft_R_out on even steps, oft_R_in on odd), while accumulating momentum on
+# BOTH sides every step. The inactive side stays at identity that step (no-op
+# fold). lie_alternate_every controls how many steps each side is held (1 = flip
+# every step). RMS-alpha, low-order Cayley, and the exact tangent gradient remain
+# DEFERRED.
+experiment:
+  name: poet_lie_alt
+  family: optim
+  description: |
+    POET x Pion: Lie-algebra momentum (q_optimizer=lie_algebra) with the
+    alternating single-sided update (pipeline doc §6, Pion Eq. 8). One side's
+    oft_R is written per step (out even / in odd), momentum accrues on both
+    sides. Same single-step POET stack as poet_lie (merge_period=1, block_count=1,
+    reinit_period=-1, cayley); only lie_alternating differs. Ablate vs poet_lie
+    (two-sided) for the §9 step-4 loss-curve comparison.
+  references:
+    - "POET"
+    - "Pion"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 1.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1
+    reinit_period: -1        # never resample Psi / reset momentum (block_count=1)
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_algebra
+    lie_b1: 0.9
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: scalar        # scalar (pipeline doc §3) | elementwise (paper Algorithm 1)
+    lie_alternating: true     # §6: update one side per step (out even / in odd)
+    lie_alternate_every: 1    # steps to hold each side before flipping
+    train_output_rotation: true
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

@@ -639,3 +639,17 @@ def test_poet_argv_omits_lie_alternating_by_default():
     args = _optimizer_args(_poet_cfg({"block_size": 256}))
     assert "--poet-lie-alternating" not in args
     assert args[args.index("--poet-lie-alternate-every") + 1] == "1"
+
+
+def test_poet_lie_alt_experiment_yaml():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = OmegaConf.load(root / "configs/experiments/optim/poet_lie_alt.yaml")
+    assert cfg.experiment.name == "poet_lie_alt"
+    assert cfg.optim.poet.q_optimizer == "lie_algebra"
+    assert cfg.optim.poet.lie_alternating is True
+    assert cfg.optim.poet.lie_alternate_every == 1
+    assert cfg.optim.poet.reinit_period == -1
