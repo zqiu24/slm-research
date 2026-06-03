@@ -190,3 +190,14 @@ def test_run_merge_forwards_reinit_perm_false_keeps_perm():
 
     assert torch.equal(pl.perm_in, perm_in_before)
     assert torch.count_nonzero(pl.oft_R_in) == 0
+
+
+def test_merge_decision_never_reinit_when_reinit_period_negative():
+    from src.patches.poet_merge_step import _merge_decision
+
+    # reinit_period < 0 -> fold EVERY step, NEVER reinit (no Ψ resample, no
+    # momentum reset): constant-merge persistent-momentum mode for block_count=1.
+    assert _merge_decision(1, 1, -1) == (True, False)
+    assert _merge_decision(20, 1, -1) == (True, False)
+    assert _merge_decision(400, 1, -1) == (True, False)
+    assert _merge_decision(999, 1, -1) == (True, False)

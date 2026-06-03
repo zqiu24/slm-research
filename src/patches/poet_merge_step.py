@@ -53,13 +53,20 @@ def _merge_decision(iteration: int, merge_period: int, reinit_period: int) -> tu
     * ``folding`` — fold ``R(Q)`` into ``W`` and reset ``Q`` this step (cadence
       ``merge_period``). poet0 sets ``merge_period=1`` → fold every step.
     * ``reinit`` — *additionally* resample the block permutation Ψ and reset Adam
-      momentum (cadence ``reinit_period``; ``<=0`` falls back to ``merge_period``,
-      reproducing the legacy fused behavior). A reinit can only happen on a step
-      that also folds, so ``reinit_period`` should be a multiple of
-      ``merge_period`` (validated at arg-build time in megatron_args).
+      momentum. Cadence by ``reinit_period``:
+        - ``> 0``: reinit every ``reinit_period`` steps (must be a multiple of
+          ``merge_period``; validated at arg-build time in megatron_args).
+        - ``== 0``: fall back to ``merge_period`` (legacy fused behavior — reinit
+          on every fold).
+        - ``< 0``: NEVER reinit — constant fold with persistent momentum and a
+          fixed Ψ. Intended for ``block_count=1`` (one block = the full matrix, so
+          permutation resampling adds no coverage and only churns momentum).
+      A reinit can only happen on a step that also folds.
     """
     if merge_period <= 0 or iteration <= 0 or iteration % merge_period != 0:
         return (False, False)
+    if reinit_period < 0:
+        return (True, False)
     gap = reinit_period if reinit_period > 0 else merge_period
     return (True, iteration % gap == 0)
 

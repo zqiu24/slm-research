@@ -561,3 +561,12 @@ def test_poet0_experiment_yaml_sets_single_step_cadences():
     assert cfg.optim.poet.use_poet_adam is False
     assert cfg.optim.poet.parameterization == "cayley"
     assert cfg.optim.poet.q_optimizer == "adam"
+
+
+def test_poet_argv_emits_negative_reinit_period_without_validation_error():
+    from src.utils.megatron_args import _optimizer_args
+
+    # reinit_period < 0 (never reinit) must pass through and NOT trip the
+    # "multiple of merge_period" validation (that guard is for positive periods).
+    args = _optimizer_args(_poet_cfg({"block_size": 256, "merge_period": 1, "reinit_period": -1}))
+    assert args[args.index("--poet-reinit-period") + 1] == "-1"
