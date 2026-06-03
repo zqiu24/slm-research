@@ -109,6 +109,7 @@ def _log_conditioning(targets, iteration: int) -> None:
         if wandb is not None and getattr(wandb, "run", None) is not None:
             wandb.log(
                 {
+                    # raw skew-gradient spectrum (read before the optimizer steps)
                     f"poet_cond/{t['label']}/condition_number": stats["condition_number"]
                     .mean()
                     .item(),
@@ -116,9 +117,17 @@ def _log_conditioning(targets, iteration: int) -> None:
                     f"poet_cond/{t['label']}/sigma_max_over_median": stats["sigma_max_over_median"]
                     .mean()
                     .item(),
+                    f"poet_cond/{t['label']}/effective_rank": stats["effective_rank"].mean().item(),
+                    # post-orthogonalization (SkewMuon update) spectrum. cond_orthogonalized
+                    # is kept as the original key; the rest complete the metric set.
                     f"poet_update/{t['label']}/cond_orthogonalized": upd["condition_number"]
                     .mean()
                     .item(),
+                    f"poet_update/{t['label']}/stable_rank": upd["stable_rank"].mean().item(),
+                    f"poet_update/{t['label']}/sigma_max_over_median": upd["sigma_max_over_median"]
+                    .mean()
+                    .item(),
+                    f"poet_update/{t['label']}/effective_rank": upd["effective_rank"].mean().item(),
                 },
                 step=iteration,
             )

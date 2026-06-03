@@ -77,12 +77,20 @@ def test_log_grad_conditioning_logs_all_four_metrics(monkeypatch):
 
     _log_grad_conditioning([target], iteration=0)
 
-    base = "grad_cond/decoder.layers.0.mlp.linear_fc2"
+    layer = "decoder.layers.0.mlp.linear_fc2"
+    raw = f"grad_cond/{layer}"
+    upd = f"grad_update/{layer}"
     for metric in ("condition_number", "stable_rank", "sigma_max_over_median", "effective_rank"):
-        assert f"{base}/{metric}" in captured
-    # ~rank-4 structure -> effective/stable rank well below the 32 ambient dims
-    assert captured[f"{base}/effective_rank"] < 10.0
-    assert captured[f"{base}/stable_rank"] < 10.0
+        # raw (pre-orthogonalization) AND post-NS update spectrum both logged
+        assert f"{raw}/{metric}" in captured
+        assert f"{upd}/{metric}" in captured
+    # ~rank-4 structure -> raw effective/stable rank well below the 32 ambient dims
+    assert captured[f"{raw}/effective_rank"] < 10.0
+    assert captured[f"{raw}/stable_rank"] < 10.0
+    # Newton-Schulz whitens the update: condition number collapses toward ~1,
+    # well below the heavy-tailed raw gradient's.
+    assert captured[f"{upd}/condition_number"] < captured[f"{raw}/condition_number"] / 3.0
+    assert captured[f"{upd}/effective_rank"] > captured[f"{raw}/effective_rank"]
 
 
 def test_interval_falls_back_to_poet_interval_for_consistency():

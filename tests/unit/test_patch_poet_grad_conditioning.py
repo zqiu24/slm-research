@@ -133,3 +133,11 @@ def test_log_conditioning_also_logs_muon_update_spectrum(monkeypatch):
     assert "poet_update/x/cond_orthogonalized" in captured
     assert captured["poet_cond/x/condition_number"] > 10.0  # raw grad heavy-tailed
     assert captured["poet_update/x/cond_orthogonalized"] < 5.0  # Muon update flattened
+    # full post-orthogonalization spectral stats (not just the condition number),
+    # plus effective_rank on the raw side, so both spectra carry the same metrics.
+    for metric in ("stable_rank", "effective_rank", "sigma_max_over_median"):
+        assert f"poet_cond/x/{metric}" in captured
+        assert f"poet_update/x/{metric}" in captured
+    assert "poet_cond/x/effective_rank" in captured
+    # NS whitens the skew update: effective rank rises vs the heavy-tailed raw grad
+    assert captured["poet_update/x/effective_rank"] > captured["poet_cond/x/effective_rank"]

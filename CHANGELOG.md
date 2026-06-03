@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — post-orthogonalization (Muon update) spectrum on both probes
+
+- **Both conditioning probes now log the post-Newton–Schulz spectrum**, not just
+  the raw gradient — so the "what the optimizer receives" vs "what a Muon-style
+  update applies" contrast is visible on every metric. New CPU-pure helper
+  `newton_schulz_orthogonalize` (`src/diag/orthogonalize.py`): the canonical Muon
+  quintic NS (matching `muon_hybrid`'s `ns_coeffs`/`ns_steps`), with the rows>cols
+  transpose, driving all singular values toward ~1.
+  - Generic probe: adds `grad_update/<layer>/{condition_number, stable_rank,
+    sigma_max_over_median, effective_rank}` alongside the raw `grad_cond/<layer>/*`.
+  - POET probe: `poet_update/<label>/*` expands from just `cond_orthogonalized` to
+    the full set (`stable_rank`, `effective_rank`, `sigma_max_over_median`);
+    `effective_rank` also added to the raw `poet_cond/<label>/*`. `cond_orthogonalized`
+    is kept as-is for dashboard continuity.
+  - Faithfulness: the NS is applied to the read gradient (not the momentum buffer)
+    and, under TP>1, to the local shard — a diagnostic approximation of the realized
+    update, not a bit-identical copy.
+
 ### Added — generic weight-gradient conditioning probe (any optimizer)
 
 - **Per-layer weight-gradient spectrum logging for plain runs** (AdamW, Muon —

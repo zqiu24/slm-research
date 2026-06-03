@@ -73,6 +73,7 @@ def select_linear_grad_targets(named_modules, max_targets: int = 8):
 def _log_grad_conditioning(targets, iteration: int) -> None:
     import torch
 
+    from src.diag.orthogonalize import newton_schulz_orthogonalize
     from src.diag.skew_conditioning import block_spectral_stats
 
     try:
@@ -91,7 +92,13 @@ def _log_grad_conditioning(targets, iteration: int) -> None:
         mat = grad.detach().to(torch.float32)
         if mat.dim() != 2:
             mat = mat.reshape(mat.shape[0], -1)
+        # grad_cond/* = raw gradient spectrum (what the optimizer receives, read
+        # BEFORE .step). grad_update/* = the same gradient after Newton-Schulz
+        # orthogonalization — the Muon update spectrum (condition number ~1). The
+        # contrast is the only way to SEE Muon's whitening; on the Adam run the
+        # post-NS block is the counterfactual ("what Muon would have done").
         stats = block_spectral_stats(mat)  # 2D -> auto-unsqueezed to (1, out, in)
+        upd = block_spectral_stats(newton_schulz_orthogonalize(mat, ns_steps=5))
         if wandb is not None and getattr(wandb, "run", None) is not None:
             wandb.log(
                 {
@@ -101,6 +108,12 @@ def _log_grad_conditioning(targets, iteration: int) -> None:
                         0
                     ].item(),
                     f"grad_cond/{t['label']}/effective_rank": stats["effective_rank"][0].item(),
+                    f"grad_update/{t['label']}/condition_number": upd["condition_number"][0].item(),
+                    f"grad_update/{t['label']}/stable_rank": upd["stable_rank"][0].item(),
+                    f"grad_update/{t['label']}/sigma_max_over_median": upd["sigma_max_over_median"][
+                        0
+                    ].item(),
+                    f"grad_update/{t['label']}/effective_rank": upd["effective_rank"][0].item(),
                 },
                 step=iteration,
             )
