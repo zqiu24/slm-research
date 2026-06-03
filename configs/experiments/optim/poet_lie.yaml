@@ -1,0 +1,61 @@
+# @package _global_
+# poet_lie: POET x Pion increment 1 — Lie-algebra momentum on oft_R.
+#
+# Replaces stock Megatron-Adam on oft_R with Pion's Lie-algebra first+second-
+# moment momentum (q_optimizer=lie_algebra), accumulated in the Lie algebra and
+# PERSISTING across the per-step fold. Single-step regime (merge_period=1) so the
+# ambient oft_R.grad equals the skew tangent gradient to O(angle^2); reinit_period=-1
+# keeps Psi fixed and momentum coordinate-coherent (never reset). block_count=1 is
+# the correctness oracle (one block = full matrix). RMS-alpha, low-order Cayley,
+# alternating, and the exact tangent gradient are DEFERRED (later increments).
+experiment:
+  name: poet_lie
+  family: optim
+  description: |
+    POET x Pion (increment 1): Lie-algebra momentum on POET's block-skew
+    generators. q_optimizer=lie_algebra runs Pion's A = -M/(sqrt(v)+eps) update
+    (lie_v_mode scalar|elementwise) on the identity-point tangent gradient, with
+    momentum persisting across the merge. Same single-step POET stack as poet0
+    (merge_period=1, block_count=1, two-sided, cayley); only the oft_R optimizer
+    changes. Hypothesis: Lie-algebra momentum moves val loss off the POET-Adam
+    baseline toward Muon (pipeline doc §9 step 1).
+  references:
+    - "POET"
+    - "Pion"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 1.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1
+    reinit_period: -1        # never resample Psi / reset momentum (block_count=1)
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_algebra
+    lie_b1: 0.9
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: scalar        # scalar (pipeline doc §3) | elementwise (paper Algorithm 1)
+    train_output_rotation: true
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

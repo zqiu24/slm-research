@@ -599,3 +599,18 @@ def test_poet_argv_lie_args_default_when_unset():
     args = _optimizer_args(_poet_cfg({"block_size": 256}))
     assert args[args.index("--poet-lie-v-mode") + 1] == "scalar"
     assert args[args.index("--poet-q-optimizer") + 1] == "adam"
+
+
+def test_poet_lie_experiment_yaml():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = OmegaConf.load(root / "configs/experiments/optim/poet_lie.yaml")
+    assert cfg.experiment.name == "poet_lie"
+    assert cfg.optim.poet.q_optimizer == "lie_algebra"
+    assert cfg.optim.poet.merge_period == 1
+    assert cfg.optim.poet.reinit_period == -1
+    assert cfg.optim.poet.lie_v_mode == "scalar"
+    assert cfg.optim.poet.use_poet_adam is False
