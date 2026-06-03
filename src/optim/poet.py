@@ -562,7 +562,8 @@ def get_megatron_poet_lie_momentum_optimizer(
     min_lr = getattr(config, "min_lr", 0.0)
     logger.info(
         "[POET] Lie-momentum: %d in + %d out skew (oft_R) params, %d adamw "
-        "(b1=%s, b2=%s, v_mode=%s, scale=%s, alternating=%s, alternate_every=%s)",
+        "(b1=%s, b2=%s, v_mode=%s, scale=%s, alternating=%s, alternate_every=%s, "
+        "rms=%s, rms_c=%s)",
         len(skew_in),
         len(skew_out),
         len(adamw_params),
@@ -572,6 +573,8 @@ def get_megatron_poet_lie_momentum_optimizer(
         scale,
         getattr(config, "poet_lie_alternating", False),
         getattr(config, "poet_lie_alternate_every", 1),
+        getattr(config, "poet_lie_rms", False),
+        getattr(config, "poet_lie_rms_c", 0.2),
     )
     if not (skew_in or skew_out):
         logger.warning("[POET] Lie-momentum: no oft_R params found — skew branch is a no-op.")
@@ -587,6 +590,8 @@ def get_megatron_poet_lie_momentum_optimizer(
         v_mode=getattr(config, "poet_lie_v_mode", "elementwise"),
         alternating=getattr(config, "poet_lie_alternating", False),
         alternate_every=getattr(config, "poet_lie_alternate_every", 1),
+        rms=getattr(config, "poet_lie_rms", False),
+        rms_c=getattr(config, "poet_lie_rms_c", 0.2),
         adamw_betas=(config.adam_beta1, config.adam_beta2),
         adamw_eps=config.adam_eps,
         adamw_wd=config.weight_decay,
