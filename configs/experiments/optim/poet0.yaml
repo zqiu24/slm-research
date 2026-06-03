@@ -1,0 +1,60 @@
+# @package _global_
+# poet0: Single-Step POET.
+#
+# Baseline of the POET-X x Pion pipeline (docs/poetx_pion_pipeline.md S1): the
+# block rotation Q is folded into the live weight W EVERY step (merge_period=1,
+# born at identity, small angle, merged, reset), while the block permutation Psi
+# is resampled AND Adam momentum is reset only every reinit_period steps. Between
+# reinit boundaries the optimizer momentum persists in one coherent coordinate
+# frame; at a boundary Psi changes (for full neuron-pair coverage) and momentum
+# resets with it. Imports NONE of the Pion geometry (tangent grad, scalar-v Lie
+# momentum, RMS-alpha, low-order Cayley, alternating) — those are later ablations.
+experiment:
+  name: poet0
+  family: optim
+  description: |
+    Single-Step POET (merge_period=1, reinit_period=400). Folds R(oft_R) into
+    the base weight every step and resets oft_R to identity, keeping Adam
+    momentum across folds; resamples the block permutation and resets momentum
+    on the slower reinit cadence. Same stock Megatron-Adam path, k=3 Cayley,
+    two-sided rotations, and architectural unfusing as experiment=optim/poet —
+    only the two cadences differ. Hypothesis: born-at-identity per-step folds
+    are stable and train at least as well as the merge_period=400 baseline.
+  references:
+    - "POET"
+  patches:
+    - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 1.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1         # fold R(Q) into W every step (single-step)
+    reinit_period: 400      # resample Psi + reset Adam momentum every N steps
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: adam
+    muon_theta: 0.1
+    muon_ns_steps: 5
+    muon_momentum: 0.95
+    train_output_rotation: true
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

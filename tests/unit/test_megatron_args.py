@@ -545,3 +545,19 @@ def test_poet_argv_rejects_reinit_period_not_multiple_of_merge():
 
     with pytest.raises(ValueError, match="multiple of"):
         _optimizer_args(_poet_cfg({"block_size": 256, "merge_period": 3, "reinit_period": 400}))
+
+
+def test_poet0_experiment_yaml_sets_single_step_cadences():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = OmegaConf.load(root / "configs/experiments/optim/poet0.yaml")
+    assert cfg.experiment.name == "poet0"
+    assert cfg.optim.poet.merge_period == 1
+    assert cfg.optim.poet.reinit_period == 400
+    # poet0 keeps the stock optimizer (no Pion imports yet).
+    assert cfg.optim.poet.use_poet_adam is False
+    assert cfg.optim.poet.parameterization == "cayley"
+    assert cfg.optim.poet.q_optimizer == "adam"
