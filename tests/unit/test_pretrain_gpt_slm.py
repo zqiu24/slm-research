@@ -170,3 +170,29 @@ def test_add_slm_args_lie_alternating_defaults():
     args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
     assert args.poet_lie_alternating is False
     assert args.poet_lie_alternate_every == 1
+
+
+def test_add_slm_args_accepts_lie_rms():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        ["--slm-config-path", "x.yaml", "--poet", "--poet-lie-rms", "--poet-lie-rms-c", "0.3"]
+    )
+    assert args.poet_lie_rms is True
+    assert args.poet_lie_rms_c == 0.3
+
+
+def test_add_slm_args_lie_rms_defaults():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
+    assert args.poet_lie_rms is False
+    assert args.poet_lie_rms_c == 0.2
