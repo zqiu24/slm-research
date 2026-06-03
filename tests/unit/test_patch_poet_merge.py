@@ -201,3 +201,34 @@ def test_merge_decision_never_reinit_when_reinit_period_negative():
     assert _merge_decision(20, 1, -1) == (True, False)
     assert _merge_decision(400, 1, -1) == (True, False)
     assert _merge_decision(999, 1, -1) == (True, False)
+
+
+def test_reset_vanilla_oft_state_never_clobbers_lie_buffers():
+    import torch
+    import torch.nn as nn
+
+    from src.patches.poet_merge_step import _reset_vanilla_oft_state
+
+    model = nn.Module()
+    model.oft_R_in = nn.Parameter(torch.ones(2, 6))  # bf16 model tensor
+    master = nn.Parameter(torch.full((2, 6), 3.0))  # separate fp32 master
+    torch_opt = torch.optim.SGD([master], lr=1e-3)  # any torch optimizer
+    # Lie-momentum-style state on the MASTER param:
+    torch_opt.state[master] = {
+        "lie_m": torch.ones(2, 6),
+        "lie_v": torch.ones(2, 1),
+    }
+
+    class _FakeInner:
+        def __init__(self):
+            self.float16_groups = [[model.oft_R_in]]
+            self.fp32_from_float16_groups = [[master]]
+            self.optimizer = torch_opt
+
+    opt = _FakeInner()
+    # Worst case: reset_moments=True (the reinit boundary).
+    _reset_vanilla_oft_state(opt, model, iteration=400, reset_moments=True)
+
+    assert torch.count_nonzero(master.data) == 0  # master value zeroed
+    assert torch.count_nonzero(torch_opt.state[master]["lie_m"]) == 12  # lie_m intact
+    assert torch.count_nonzero(torch_opt.state[master]["lie_v"]) == 2  # lie_v intact
