@@ -653,3 +653,28 @@ def test_poet_lie_alt_experiment_yaml():
     assert cfg.optim.poet.lie_alternating is True
     assert cfg.optim.poet.lie_alternate_every == 1
     assert cfg.optim.poet.reinit_period == -1
+
+
+def test_poet_argv_emits_lie_rms():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_size": 256,
+                "q_optimizer": "lie_algebra",
+                "lie_rms": True,
+                "lie_rms_c": 0.3,
+            }
+        )
+    )
+    assert "--poet-lie-rms" in args
+    assert args[args.index("--poet-lie-rms-c") + 1] == "0.3"
+
+
+def test_poet_argv_omits_lie_rms_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-lie-rms" not in args
+    assert args[args.index("--poet-lie-rms-c") + 1] == "0.2"

@@ -302,6 +302,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.get("lie_v_mode", "elementwise"),
             "--poet-lie-alternate-every",
             poet.get("lie_alternate_every", 1),
+            "--poet-lie-rms-c",
+            poet.get("lie_rms_c", 0.2),
             "--adam-beta1",
             optim.betas[0],
             "--adam-beta2",
@@ -319,6 +321,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: alternating single-sided update for q_optimizer=lie_algebra (§6).
         if poet.get("lie_alternating", False):
             poet_args.append("--poet-lie-alternating")
+        # store_true: enable Stage 2 RMS scaling (W-free) for q_optimizer=lie_algebra.
+        if poet.get("lie_rms", False):
+            poet_args.append("--poet-lie-rms")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":
