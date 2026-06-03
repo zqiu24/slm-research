@@ -22,28 +22,50 @@ from __future__ import annotations
 import torch
 
 
-def _build_lie_param_groups(skew_params, adamw_params, lr, min_lr, scale):
-    """Two param groups carrying lr/max_lr/min_lr so Megatron's scheduler decays
-    group['lr'] (skew side scaled by poet_scale, exactly like the vanilla path
-    scales oft_R). Empty sides are dropped."""
+def _split_poet_lie_params(model_chunks):
+    """oft_R_in -> in-side, oft_R_out -> out-side, everything else -> adamw.
+
+    The in/out split (vs the muon path's lumped oft_R) is what lets the optimizer
+    update one side per step for the alternating single-sided update (§6).
+    """
+    skew_in, skew_out, adamw = [], [], []
+    for mc in model_chunks:
+        for name, p in mc.named_parameters():
+            if not p.requires_grad:
+                continue
+            if "oft_R_in" in name:
+                skew_in.append(p)
+            elif "oft_R_out" in name:
+                skew_out.append(p)
+            else:
+                adamw.append(p)
+    return skew_in, skew_out, adamw
+
+
+def _build_lie_param_groups(skew_in, skew_out, adamw_params, lr, min_lr, scale):
+    """Side-tagged param groups carrying lr/max_lr/min_lr so Megatron's scheduler
+    decays group['lr'] (skew sides scaled by poet_scale, like the vanilla path
+    scales oft_R). The two skew groups carry side='in'/'out' for the alternating
+    single-sided update (§6); empty sides are dropped."""
     groups = []
-    skew_params = list(skew_params)
-    adamw_params = list(adamw_params)
-    if skew_params:
-        groups.append(
-            dict(
-                params=skew_params,
-                use_skew=True,
-                lr=lr * scale,
-                max_lr=lr * scale,
-                min_lr=min_lr * scale,
+    for side, ps in (("in", list(skew_in)), ("out", list(skew_out))):
+        if ps:
+            groups.append(
+                dict(
+                    params=ps,
+                    use_skew=True,
+                    side=side,
+                    lr=lr * scale,
+                    max_lr=lr * scale,
+                    min_lr=min_lr * scale,
+                )
             )
-        )
     if adamw_params:
         groups.append(
             dict(
-                params=adamw_params,
+                params=list(adamw_params),
                 use_skew=False,
+                side=None,
                 lr=lr,
                 max_lr=lr,
                 min_lr=min_lr,
@@ -60,15 +82,23 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
         b2: float = 0.95,
         eps: float = 1e-8,
         v_mode: str = "scalar",
+        alternating: bool = False,
+        alternate_every: int = 1,
         adamw_betas=(0.9, 0.95),
         adamw_eps: float = 1e-8,
         adamw_wd: float = 0.0,
     ):
         if v_mode not in ("scalar", "elementwise"):
             raise ValueError(f"v_mode must be 'scalar' or 'elementwise', got {v_mode!r}")
+        # Alternating single-sided update (§6): write only one side's oft_R per
+        # step (out on even, in on odd), accumulating momentum on BOTH sides.
+        self.alternating = bool(alternating)
+        self.alternate_every = max(1, int(alternate_every))
+        self._alt_step = 0
         defaults = dict(
             lr=0.0,
             use_skew=False,
+            side=None,
             b1=b1,
             b2=b2,
             eps=eps,
@@ -86,9 +116,16 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
+        # Active side this step (alternating §6): out on even, in on odd
+        # (Eq. 8, ψ=0 even→out). None = write both sides (non-alternating).
+        active = None
+        if self.alternating:
+            active = "out" if (self._alt_step // self.alternate_every) % 2 == 0 else "in"
+
         for group in self.param_groups:
             lr = group["lr"]
             if group["use_skew"]:
+                side = group["side"]
                 b1, b2, eps, v_mode = group["b1"], group["b2"], group["eps"], group["v_mode"]
                 for p in group["params"]:
                     g = p.grad
@@ -103,12 +140,17 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
                         else:
                             st["lie_v"] = torch.zeros_like(g)
                     m, v = st["lie_m"], st["lie_v"]
+                    # Momentum accumulates on BOTH sides every step (paper App. D.1) ...
                     m.mul_(b1).add_(g, alpha=1 - b1)
                     if v_mode == "scalar":
                         # ||vec_to_skew(g)||_F^2 = 2 * sum(g^2) over the upper-tri vec
                         v.mul_(b2).add_(2.0 * (g * g).sum(dim=-1, keepdim=True), alpha=1 - b2)
                     else:
                         v.mul_(b2).add_(g * g, alpha=1 - b2)
+                    # ... but only the ACTIVE side's oft_R is written (the inactive
+                    # side stays 0 -> identity rotation -> no-op fold).
+                    if self.alternating and side != active:
+                        continue
                     A = -m / (v.sqrt() + eps)
                     p.add_(A.to(p.dtype), alpha=lr)  # p born at 0 -> p = lr*A
             else:
@@ -134,4 +176,6 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
                     if wd != 0:
                         p.mul_(1 - lr * wd)
                     p.add_(update, alpha=-lr / scale)
+        if self.alternating:
+            self._alt_step += 1
         return loss

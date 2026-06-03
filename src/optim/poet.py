@@ -542,7 +542,11 @@ def get_megatron_poet_lie_momentum_optimizer(
         FP32Optimizer,
     )
 
-    from src.optim.poet_lie_momentum import LieAlgebraMomentum, _build_lie_param_groups
+    from src.optim.poet_lie_momentum import (
+        LieAlgebraMomentum,
+        _build_lie_param_groups,
+        _split_poet_lie_params,
+    )
 
     if getattr(config, "use_distributed_optimizer", False):
         raise ValueError("POET Lie-momentum does not support the distributed optimizer (dev only).")
@@ -553,28 +557,36 @@ def get_megatron_poet_lie_momentum_optimizer(
     if mpu.get_pipeline_model_parallel_world_size() > 1:
         raise ValueError("POET Lie-momentum does not support pipeline parallelism > 1.")
 
-    skew_params, adamw_params = _split_poet_muon_params(model_chunks)
+    skew_in, skew_out, adamw_params = _split_poet_lie_params(model_chunks)
     scale = getattr(config, "poet_scale", 1.0)
     min_lr = getattr(config, "min_lr", 0.0)
     logger.info(
-        "[POET] Lie-momentum: %d skew (oft_R) params, %d adamw params (b1=%s, b2=%s, v_mode=%s, scale=%s)",
-        len(skew_params),
+        "[POET] Lie-momentum: %d in + %d out skew (oft_R) params, %d adamw "
+        "(b1=%s, b2=%s, v_mode=%s, scale=%s, alternating=%s, alternate_every=%s)",
+        len(skew_in),
+        len(skew_out),
         len(adamw_params),
         getattr(config, "poet_lie_b1", 0.9),
         getattr(config, "poet_lie_b2", 0.95),
         getattr(config, "poet_lie_v_mode", "scalar"),
         scale,
+        getattr(config, "poet_lie_alternating", False),
+        getattr(config, "poet_lie_alternate_every", 1),
     )
-    if not skew_params:
+    if not (skew_in or skew_out):
         logger.warning("[POET] Lie-momentum: no oft_R params found — skew branch is a no-op.")
 
-    param_groups = _build_lie_param_groups(skew_params, adamw_params, config.lr, min_lr, scale)
+    param_groups = _build_lie_param_groups(
+        skew_in, skew_out, adamw_params, config.lr, min_lr, scale
+    )
     optimizer = LieAlgebraMomentum(
         param_groups,
         b1=getattr(config, "poet_lie_b1", 0.9),
         b2=getattr(config, "poet_lie_b2", 0.95),
         eps=getattr(config, "poet_lie_eps", 1e-8),
         v_mode=getattr(config, "poet_lie_v_mode", "scalar"),
+        alternating=getattr(config, "poet_lie_alternating", False),
+        alternate_every=getattr(config, "poet_lie_alternate_every", 1),
         adamw_betas=(config.adam_beta1, config.adam_beta2),
         adamw_eps=config.adam_eps,
         adamw_wd=config.weight_decay,

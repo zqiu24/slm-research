@@ -98,22 +98,121 @@ def test_adamw_branch_steps_without_error():
     assert not torch.allclose(p.data, before)  # standard AdamW moved it
 
 
-def test_build_lie_param_groups_scales_skew_lr():
+def test_build_lie_param_groups_side_tagged_and_scaled():
     import torch.nn as nn
 
     from src.optim.poet_lie_momentum import _build_lie_param_groups
 
-    skew = [nn.Parameter(torch.zeros(1, 6))]
+    skew_in = [nn.Parameter(torch.zeros(1, 6))]
+    skew_out = [nn.Parameter(torch.zeros(1, 6))]
     adamw = [nn.Parameter(torch.zeros(4))]
-    groups = _build_lie_param_groups(skew, adamw, lr=1e-3, min_lr=1e-5, scale=0.5)
+    groups = _build_lie_param_groups(skew_in, skew_out, adamw, lr=1e-3, min_lr=1e-5, scale=0.5)
 
-    g_skew = next(g for g in groups if g["use_skew"])
+    g_in = next(g for g in groups if g.get("side") == "in")
+    g_out = next(g for g in groups if g.get("side") == "out")
     g_adam = next(g for g in groups if not g["use_skew"])
-    assert g_skew["lr"] == 5e-4 and g_skew["max_lr"] == 5e-4 and g_skew["min_lr"] == 5e-6
+    assert (
+        g_in["use_skew"]
+        and g_in["lr"] == 5e-4
+        and g_in["max_lr"] == 5e-4
+        and g_in["min_lr"] == 5e-6
+    )
+    assert g_out["use_skew"] and g_out["side"] == "out" and g_out["lr"] == 5e-4
     assert g_adam["lr"] == 1e-3 and g_adam["max_lr"] == 1e-3 and g_adam["min_lr"] == 1e-5
+    assert g_adam["side"] is None
 
 
 def test_build_lie_param_groups_drops_empty_sides():
+    import torch.nn as nn
+
     from src.optim.poet_lie_momentum import _build_lie_param_groups
 
-    assert _build_lie_param_groups([], [], 1e-3, 1e-5, 0.5) == []
+    assert _build_lie_param_groups([], [], [], 1e-3, 1e-5, 0.5) == []
+    # only out-side present -> single side-tagged group
+    groups = _build_lie_param_groups([], [nn.Parameter(torch.zeros(1, 6))], [], 1e-3, 1e-5, 0.5)
+    assert len(groups) == 1 and groups[0]["side"] == "out"
+
+
+def test_split_poet_lie_params_buckets_by_name():
+    from src.optim.poet_lie_momentum import _split_poet_lie_params
+
+    m = nn.Module()
+    m.q_oft_R_in = nn.Parameter(torch.zeros(1, 6))
+    m.q_oft_R_out = nn.Parameter(torch.zeros(1, 6))
+    m.embed = nn.Parameter(torch.zeros(4))
+    skew_in, skew_out, adamw = _split_poet_lie_params([m])
+    assert len(skew_in) == 1 and skew_in[0] is m.q_oft_R_in
+    assert len(skew_out) == 1 and skew_out[0] is m.q_oft_R_out
+    assert len(adamw) == 1 and adamw[0] is m.embed
+
+
+def _make_alt_opt(p_in, p_out, lr, alternate_every=1, alternating=True):
+    from src.optim.poet_lie_momentum import LieAlgebraMomentum
+
+    return LieAlgebraMomentum(
+        [
+            dict(params=[p_in], use_skew=True, side="in", lr=lr),
+            dict(params=[p_out], use_skew=True, side="out", lr=lr),
+        ],
+        v_mode="scalar",
+        alternating=alternating,
+        alternate_every=alternate_every,
+    )
+
+
+def _alt_run(opt, p_in, p_out, ne, expected_out_active):
+    """Drive `opt` one step per entry, zeroing oft_R between steps (the fold), and
+    assert exactly the active side is written each step."""
+    for expect_out in expected_out_active:
+        p_in.data.zero_()
+        p_out.data.zero_()
+        p_in.grad = torch.randn(1, ne)
+        p_out.grad = torch.randn(1, ne)
+        opt.step()
+        if expect_out:
+            assert torch.count_nonzero(p_out.data) > 0 and torch.count_nonzero(p_in.data) == 0
+        else:
+            assert torch.count_nonzero(p_in.data) > 0 and torch.count_nonzero(p_out.data) == 0
+
+
+def test_alternating_writes_one_side_and_flips():
+    torch.manual_seed(0)
+    ne, lr = 6, 1e-3
+    p_in = nn.Parameter(torch.zeros(1, ne))
+    p_out = nn.Parameter(torch.zeros(1, ne))
+    opt = _make_alt_opt(p_in, p_out, lr)
+    _alt_run(opt, p_in, p_out, ne, [True, False, True, False])  # out, in, out, in
+
+
+def test_alternating_accumulates_momentum_on_inactive_side():
+    torch.manual_seed(1)
+    ne, lr = 6, 1e-3
+    p_in = nn.Parameter(torch.zeros(1, ne))
+    p_out = nn.Parameter(torch.zeros(1, ne))
+    opt = _make_alt_opt(p_in, p_out, lr)
+    p_in.grad = torch.randn(1, ne)
+    p_out.grad = torch.randn(1, ne)
+    opt.step()  # step 0: out active
+    assert torch.count_nonzero(p_in.data) == 0  # in NOT written
+    assert torch.count_nonzero(opt.state[p_in]["lie_m"]) > 0  # but in momentum accumulated
+
+
+def test_alternate_every_2_holds_each_side_two_steps():
+    torch.manual_seed(2)
+    ne, lr = 6, 1e-3
+    p_in = nn.Parameter(torch.zeros(1, ne))
+    p_out = nn.Parameter(torch.zeros(1, ne))
+    opt = _make_alt_opt(p_in, p_out, lr, alternate_every=2)
+    _alt_run(opt, p_in, p_out, ne, [True, True, False, False, True])  # out,out,in,in,out
+
+
+def test_alternating_false_writes_both_sides():
+    torch.manual_seed(3)
+    ne, lr = 6, 1e-3
+    p_in = nn.Parameter(torch.zeros(1, ne))
+    p_out = nn.Parameter(torch.zeros(1, ne))
+    opt = _make_alt_opt(p_in, p_out, lr, alternating=False)
+    p_in.grad = torch.randn(1, ne)
+    p_out.grad = torch.randn(1, ne)
+    opt.step()
+    assert torch.count_nonzero(p_in.data) > 0 and torch.count_nonzero(p_out.data) > 0
