@@ -64,3 +64,13 @@ def test_poet0_script_supports_llama3():
     assert "poet" in proc.stdout
     assert "--poet-merge-period" in proc.stdout
     assert "--poet-reinit-period" in proc.stdout
+
+
+def test_poet_lie_script_supports_llama3():
+    proc = _run("train_poet_lie.sh", "llama3")
+    assert "--slm-optimizer" in proc.stdout and "poet" in proc.stdout
+    assert "--poet-q-optimizer" in proc.stdout
+    assert "lie_algebra" in proc.stdout
+    assert "--poet-lie-v-mode" in proc.stdout
+    assert "--poet-merge-period" in proc.stdout
+    assert "--poet-reinit-period" in proc.stdout
