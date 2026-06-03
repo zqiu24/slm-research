@@ -96,3 +96,44 @@ def test_add_slm_args_poet_reinit_period_defaults_zero():
     add_slm_args(parser)
     args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
     assert args.poet_reinit_period == 0
+
+
+def test_add_slm_args_accepts_lie_algebra_args():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        [
+            "--slm-config-path",
+            "x.yaml",
+            "--poet",
+            "--poet-q-optimizer",
+            "lie_algebra",
+            "--poet-lie-b1",
+            "0.9",
+            "--poet-lie-b2",
+            "0.95",
+            "--poet-lie-eps",
+            "1e-8",
+            "--poet-lie-v-mode",
+            "elementwise",
+        ]
+    )
+    assert args.poet_q_optimizer == "lie_algebra"
+    assert args.poet_lie_b1 == 0.9 and args.poet_lie_b2 == 0.95
+    assert args.poet_lie_eps == 1e-8 and args.poet_lie_v_mode == "elementwise"
+
+
+def test_add_slm_args_lie_defaults():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
+    assert args.poet_lie_b1 == 0.9 and args.poet_lie_b2 == 0.95
+    assert args.poet_lie_eps == 1e-8 and args.poet_lie_v_mode == "scalar"

@@ -67,10 +67,18 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         choices=["cayley", "exp"],
         default="cayley",
     )
-    group.add_argument("--poet-q-optimizer", choices=["adam", "muon"], default="adam")
+    group.add_argument(
+        "--poet-q-optimizer", choices=["adam", "muon", "lie_algebra"], default="adam"
+    )
     group.add_argument("--poet-muon-theta", type=float, default=0.1)
     group.add_argument("--poet-muon-ns-steps", type=int, default=5)
     group.add_argument("--poet-muon-momentum", type=float, default=0.95)
+    # Lie-algebra momentum (q_optimizer=lie_algebra): Pion first/second-moment
+    # momentum on oft_R, accumulated in the Lie algebra (persists across merges).
+    group.add_argument("--poet-lie-b1", type=float, default=0.9)
+    group.add_argument("--poet-lie-b2", type=float, default=0.95)
+    group.add_argument("--poet-lie-eps", type=float, default=1e-8)
+    group.add_argument("--poet-lie-v-mode", choices=["scalar", "elementwise"], default="scalar")
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")
