@@ -81,7 +81,7 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
         b1: float = 0.9,
         b2: float = 0.95,
         eps: float = 1e-8,
-        v_mode: str = "scalar",
+        v_mode: str = "elementwise",
         alternating: bool = False,
         alternate_every: int = 1,
         adamw_betas=(0.9, 0.95),

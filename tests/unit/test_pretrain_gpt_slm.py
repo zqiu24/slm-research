@@ -136,7 +136,7 @@ def test_add_slm_args_lie_defaults():
     add_slm_args(parser)
     args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
     assert args.poet_lie_b1 == 0.9 and args.poet_lie_b2 == 0.95
-    assert args.poet_lie_eps == 1e-8 and args.poet_lie_v_mode == "scalar"
+    assert args.poet_lie_eps == 1e-8 and args.poet_lie_v_mode == "elementwise"
 
 
 def test_add_slm_args_accepts_lie_alternating():

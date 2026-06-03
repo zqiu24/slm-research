@@ -299,7 +299,7 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             "--poet-lie-eps",
             poet.get("lie_eps", 1.0e-8),
             "--poet-lie-v-mode",
-            poet.get("lie_v_mode", "scalar"),
+            poet.get("lie_v_mode", "elementwise"),
             "--poet-lie-alternate-every",
             poet.get("lie_alternate_every", 1),
             "--adam-beta1",

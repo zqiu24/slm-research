@@ -52,7 +52,7 @@ optim:
     lie_b1: 0.9
     lie_b2: 0.95
     lie_eps: 1.0e-8
-    lie_v_mode: scalar        # scalar (pipeline doc §3) | elementwise (paper Algorithm 1)
+    lie_v_mode: elementwise   # elementwise (paper Algorithm 1; default, works without RMS-α) | scalar (pipeline doc §3, needs RMS-α to scale)
     train_output_rotation: true
 
 base:

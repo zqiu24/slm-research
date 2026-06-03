@@ -78,7 +78,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-lie-b1", type=float, default=0.9)
     group.add_argument("--poet-lie-b2", type=float, default=0.95)
     group.add_argument("--poet-lie-eps", type=float, default=1e-8)
-    group.add_argument("--poet-lie-v-mode", choices=["scalar", "elementwise"], default="scalar")
+    group.add_argument(
+        "--poet-lie-v-mode", choices=["scalar", "elementwise"], default="elementwise"
+    )
     # Alternating single-sided update (§6): write one rotation side per step
     # (out on even, in on odd), accumulating momentum on both sides.
     group.add_argument("--poet-lie-alternating", action="store_true")

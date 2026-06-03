@@ -46,7 +46,7 @@ def apply() -> None:
         config.poet_lie_b1 = getattr(args, "poet_lie_b1", 0.9)
         config.poet_lie_b2 = getattr(args, "poet_lie_b2", 0.95)
         config.poet_lie_eps = getattr(args, "poet_lie_eps", 1.0e-8)
-        config.poet_lie_v_mode = getattr(args, "poet_lie_v_mode", "scalar")
+        config.poet_lie_v_mode = getattr(args, "poet_lie_v_mode", "elementwise")
         config.poet_lie_alternating = getattr(args, "poet_lie_alternating", False)
         config.poet_lie_alternate_every = getattr(args, "poet_lie_alternate_every", 1)
         return config, overrides
