@@ -27,6 +27,29 @@ def test_block_spectral_stats_on_known_skew():
     assert math.isclose(stats["sigma_max_over_median"][0].item(), a / ((a + b) / 2), rel_tol=1e-5)
 
 
+def test_block_spectral_stats_effective_rank():
+    # entropy effective rank (Roy-Vetterli): erank = exp(-sum p_i log p_i),
+    # p_i = sigma_i / sum(sigma). Uniform spectrum -> erank == #singular values.
+    a = 2.0
+    q_uniform = torch.zeros(1, 4, 4)
+    q_uniform[0, 0, 1], q_uniform[0, 1, 0] = a, -a
+    q_uniform[0, 2, 3], q_uniform[0, 3, 2] = a, -a  # sigmas {a,a,a,a}
+    er_uniform = block_spectral_stats(q_uniform)["effective_rank"][0].item()
+    assert math.isclose(er_uniform, 4.0, rel_tol=1e-5)
+
+    # Heavy-tailed {3,3,1,1}: 1 < erank < 4, and matches exp(entropy) exactly.
+    a, b = 3.0, 1.0
+    q = torch.zeros(1, 4, 4)
+    q[0, 0, 1], q[0, 1, 0] = a, -a
+    q[0, 2, 3], q[0, 3, 2] = b, -b
+    er = block_spectral_stats(q)["effective_rank"][0].item()
+    sig = torch.tensor([a, a, b, b])
+    p = sig / sig.sum()
+    expected = math.exp(-(p * p.log()).sum().item())
+    assert math.isclose(er, expected, rel_tol=1e-5)
+    assert 1.0 < er < 4.0
+
+
 def test_vec_to_skew_is_skew_symmetric_and_matches_layout():
     b = 4
     # b(b-1)/2 = 6 upper-tri entries, two blocks stacked

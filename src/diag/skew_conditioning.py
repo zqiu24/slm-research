@@ -25,6 +25,8 @@ def block_spectral_stats(skew: torch.Tensor, eps: float = 1e-12) -> dict[str, to
         condition_number   = sigma_max / max(sigma_min, eps)
         stable_rank        = ||.||_F^2 / sigma_max^2
         sigma_max_over_median = sigma_max / median(sigma)
+        effective_rank     = exp(-sum p_i log p_i), p_i = sigma_i / sum(sigma)
+                             (Roy-Vetterli entropy effective rank)
     """
     if skew.dim() == 2:
         skew = skew.unsqueeze(0)
@@ -33,10 +35,15 @@ def block_spectral_stats(skew: torch.Tensor, eps: float = 1e-12) -> dict[str, to
     sigma_min = sv[:, -1].clamp_min(eps)
     fro_sq = (sv * sv).sum(dim=1)
     median = torch.quantile(sv, 0.5, dim=1)
+    # entropy effective rank: normalize singular values to a distribution and
+    # exponentiate the Shannon entropy. p*log(p+eps) sends the p=0 terms to 0.
+    p = sv / sv.sum(dim=1, keepdim=True).clamp_min(eps)
+    entropy = -(p * (p + eps).log()).sum(dim=1)
     return {
         "condition_number": sigma_max / sigma_min,
         "stable_rank": fro_sq / (sigma_max * sigma_max),
         "sigma_max_over_median": sigma_max / median.clamp_min(eps),
+        "effective_rank": entropy.exp(),
     }
 
 
