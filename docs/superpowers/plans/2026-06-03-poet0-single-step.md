@@ -13,6 +13,7 @@
 **Conventions used throughout:**
 - Repo root: `/lustre/fast/fast/zqiu/slm-research` (run all commands from here).
 - CPU test interpreter: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python` (the base `python` lacks omegaconf/torch — see project memory).
+- **Script dry-run tests (Task 7 only) need the venv on `PATH`.** `scripts/train_*.sh` shell out to a bare `python -m launchers.train_megatron`; on the login node bare `python` lacks the repo deps, so the dry-run subprocess fails with `ModuleNotFoundError: omegaconf` *unless* the venv bin is first on `PATH`. Prefix those test commands with `PATH=/lustre/fast/fast/zqiu/slm_env/.venv/bin:$PATH`. (Verified: the pre-existing `test_poet_script_supports_llama3` is red without this prefix and green with it — this is an environment quirk, not a code bug. Tasks 1-6 are pure in-process pytest and do **not** need it.)
 - Commit style: single short conventional-commit sentence, anonymous (no co-author trailer). The repo has a pre-commit hook; let it run (do **not** pass `--no-verify`).
 
 ---
@@ -333,8 +334,13 @@ is pure torch).
 
 Append to `tests/unit/test_poet_layers.py`:
 
+The key correctness property of *any* merge is **forward-invariance**: folding
+`R(oft_R)` into `W` and zeroing `oft_R` moves the rotation but must NOT change the
+layer's output. A wrong fold-only re-permutation would silently break this, so we
+assert it directly (verified on CPU with `exp`: legacy merge diff ~1.8e-7).
+
 ```python
-def test_merge_fold_only_keeps_permutation_and_zeros_oft_r():
+def test_merge_fold_only_is_forward_invariant_and_keeps_perm():
     import torch
     from poet_torch import POETLinear
 
@@ -343,15 +349,19 @@ def test_merge_fold_only_keeps_permutation_and_zeros_oft_r():
         in_features=8, out_features=8, block_count=1,
         dtype=torch.float32, parameterization="exp",
     )
-    layer.random_init_parameters()  # nonzero oft_R so the fold changes W
+    layer.random_init_parameters()  # nonzero oft_R so the fold actually changes W
+    x = torch.randn(4, 8, dtype=torch.float32)
 
+    out_before = layer(x).detach().clone()
     perm_in_before = layer.perm_in.clone()
     perm_out_before = layer.perm_out.clone()
     weight_before = layer.weight.clone()
 
     layer.merge_then_reinitialize(reinit_perm=False)
 
-    # Ψ unchanged (fold-only); oft_R reset to zero; weight absorbed the rotation.
+    # Forward output unchanged (rotation moved into W, not lost) ...
+    assert torch.allclose(out_before, layer(x), atol=1e-4)
+    # ... Ψ unchanged (fold-only) ... oft_R reset ... weight absorbed the rotation.
     assert torch.equal(layer.perm_in, perm_in_before)
     assert torch.equal(layer.perm_out, perm_out_before)
     assert torch.count_nonzero(layer.oft_R_in) == 0
@@ -359,7 +369,7 @@ def test_merge_fold_only_keeps_permutation_and_zeros_oft_r():
     assert not torch.allclose(layer.weight, weight_before)
 
 
-def test_merge_reinit_perm_true_resamples_permutation():
+def test_merge_reinit_perm_true_is_forward_invariant_and_resamples_perm():
     import torch
     from poet_torch import POETLinear
 
@@ -369,12 +379,16 @@ def test_merge_reinit_perm_true_resamples_permutation():
         dtype=torch.float32, parameterization="exp",
     )
     layer.random_init_parameters()
+    x = torch.randn(4, 8, dtype=torch.float32)
 
+    out_before = layer(x).detach().clone()
     perm_in_before = layer.perm_in.clone()
 
     layer.merge_then_reinitialize(reinit_perm=True)
 
-    # default/legacy mode resamples Ψ (collision prob for 8! is negligible).
+    # Still forward-invariant (weight re-permuted to match the new Ψ) ...
+    assert torch.allclose(out_before, layer(x), atol=1e-4)
+    # ... but Ψ WAS resampled (collision prob for 8! is negligible).
     assert not torch.equal(layer.perm_in, perm_in_before)
     assert torch.count_nonzero(layer.oft_R_in) == 0
 
@@ -902,9 +916,10 @@ def test_poet0_script_supports_llama3():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run:
+Run (note the `PATH` prefix — see Conventions):
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research && \
+PATH=/lustre/fast/fast/zqiu/slm_env/.venv/bin:$PATH \
 /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest \
   tests/unit/test_train_scripts.py -k poet0 -v
 ```
@@ -946,9 +961,10 @@ Expected: a single hunk changing `experiment=optim/poet` to `experiment=optim/po
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run:
+Run (note the `PATH` prefix — see Conventions):
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research && \
+PATH=/lustre/fast/fast/zqiu/slm_env/.venv/bin:$PATH \
 /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest \
   tests/unit/test_train_scripts.py -k poet0 -v
 ```
@@ -969,7 +985,7 @@ EOF
 
 ## Final verification (after all tasks)
 
-- [ ] **Run the full set of touched test files:**
+- [ ] **Run the in-process unit tests (Tasks 1-6):**
 
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research && \
@@ -977,10 +993,21 @@ cd /lustre/fast/fast/zqiu/slm-research && \
   tests/unit/test_patch_poet_merge.py \
   tests/unit/test_megatron_args.py \
   tests/unit/test_pretrain_gpt_slm.py \
-  tests/unit/test_poet_layers.py \
-  tests/unit/test_train_scripts.py -v
+  tests/unit/test_poet_layers.py -v
 ```
 Expected: all new tests PASS. Pre-existing reds (e.g. the `--poet-merge-period == "200"` assertion against `experiment=optim/poet`, noted in project memory) are unrelated to this change — confirm they were red *before* this work and leave them.
+
+- [ ] **Run the script dry-run test (Task 7) with the venv on `PATH`:**
+
+```bash
+cd /lustre/fast/fast/zqiu/slm-research && \
+PATH=/lustre/fast/fast/zqiu/slm_env/.venv/bin:$PATH \
+/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest \
+  tests/unit/test_train_scripts.py -k poet -v
+```
+Expected: `test_poet0_script_supports_llama3` and the pre-existing
+`test_poet_script_supports_llama3` both PASS (the `PATH` prefix lets the script's
+bare `python` resolve to the venv — without it, both are red on the login node).
 
 - [ ] **Static checks on edited Python:**
 
