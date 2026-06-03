@@ -81,3 +81,10 @@ def test_poet_lie_alt_script_supports_llama3():
     assert "--poet-q-optimizer" in proc.stdout and "lie_algebra" in proc.stdout
     assert "--poet-lie-alternating" in proc.stdout
     assert "--poet-lie-alternate-every" in proc.stdout
+
+
+def test_poet_lie_rms_script_supports_llama3():
+    proc = _run("train_poet_lie_rms.sh", "llama3")
+    assert "--poet-q-optimizer" in proc.stdout and "lie_algebra" in proc.stdout
+    assert "--poet-lie-rms" in proc.stdout
+    assert "--poet-lie-rms-c" in proc.stdout

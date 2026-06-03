@@ -1,0 +1,59 @@
+# @package _global_
+# poet_lie_rms: poet_lie + Stage 2 W-free RMS scaling (§2).
+#
+# Identical to poet_lie (Lie-algebra momentum, element-wise v, single-step,
+# block_count=1, reinit_period=-1) but with lie_rms=true: after the Adam direction
+# A, scale the rotation generator by alpha = rms_c*sqrt(n_blocks*block_size)/(‖A‖+eps)
+# so the per-plane rotation angle is dimension-consistent across matrices. W-free:
+# no W access, no merge change. The Pion-faithful ‖A·W‖ variant is deferred.
+experiment:
+  name: poet_lie_rms
+  family: optim
+  description: |
+    POET x Pion: element-wise Lie-algebra momentum (Stage 1) + W-free RMS scaling
+    (Stage 2). q_optimizer=lie_algebra with lie_rms=true normalizes the rotation
+    generator's per-plane angle via alpha=rms_c*sqrt(n_blocks*block_size)/‖A‖. Same
+    single-step POET stack as poet_lie (merge_period=1, block_count=1,
+    reinit_period=-1, cayley); only lie_rms differs. Ablate vs poet_lie; tune lr/c.
+  references:
+    - "POET"
+    - "Pion"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 1.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1
+    reinit_period: -1
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_algebra
+    lie_b1: 0.9
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: elementwise
+    lie_rms: true             # Stage 2: W-free RMS scaling
+    lie_rms_c: 0.2            # RMS target constant (the one new hyperparameter)
+    train_output_rotation: true
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

@@ -678,3 +678,17 @@ def test_poet_argv_omits_lie_rms_by_default():
     args = _optimizer_args(_poet_cfg({"block_size": 256}))
     assert "--poet-lie-rms" not in args
     assert args[args.index("--poet-lie-rms-c") + 1] == "0.2"
+
+
+def test_poet_lie_rms_experiment_yaml():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = OmegaConf.load(root / "configs/experiments/optim/poet_lie_rms.yaml")
+    assert cfg.experiment.name == "poet_lie_rms"
+    assert cfg.optim.poet.q_optimizer == "lie_algebra"
+    assert cfg.optim.poet.lie_rms is True
+    assert cfg.optim.poet.lie_rms_c == 0.2
+    assert cfg.optim.poet.lie_v_mode == "elementwise"
