@@ -43,6 +43,12 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     group.add_argument("--poet-mup-alpha", type=float, default=1.0)
     group.add_argument("--poet-merge-period", type=int, default=0)
+    # Cadence (optimizer steps) at which the block permutation is resampled AND
+    # Adam momentum is reset. 0 = fall back to --poet-merge-period (legacy: fold,
+    # resample, reset all fire together). poet0 sets merge_period=1 (fold each
+    # step) + reinit_period=400 so Ψ and momentum stay coherent for 400-step
+    # stretches while Q is folded into W every step.
+    group.add_argument("--poet-reinit-period", type=int, default=0)
     group.add_argument("--poet-scale", type=float, default=1.0)
     # Optimizer impl: default (flag absent) uses the stock Megatron-Adam path
     # (oft_R LR override + poet_merge_step momentum reset). Pass this flag to use

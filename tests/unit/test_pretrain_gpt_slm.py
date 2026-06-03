@@ -63,3 +63,36 @@ def test_unfuse_flags_default_false():
     args = parser.parse_args(["--slm-config-path", "x.yaml"])
     assert args.unfuse_qkv is False
     assert args.unfuse_fc1 is False
+
+
+def test_add_slm_args_accepts_poet_reinit_period():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        [
+            "--slm-config-path",
+            "x.yaml",
+            "--poet",
+            "--poet-merge-period",
+            "1",
+            "--poet-reinit-period",
+            "400",
+        ]
+    )
+    assert args.poet_merge_period == 1
+    assert args.poet_reinit_period == 400
+
+
+def test_add_slm_args_poet_reinit_period_defaults_zero():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
+    assert args.poet_reinit_period == 0
