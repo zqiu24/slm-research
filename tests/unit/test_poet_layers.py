@@ -182,3 +182,93 @@ def test_block_count_validation_raises_at_layer_construction():
 
     with pytest.raises(ValueError, match="block_count 7 doesn't divide"):
         POETLinear(in_features=1536, out_features=1536, block_count=7, dtype=torch.float32)
+
+
+def test_merge_fold_only_is_forward_invariant_and_keeps_perm():
+    import torch
+    from poet_torch import POETLinear
+
+    torch.manual_seed(0)
+    layer = POETLinear(
+        in_features=8,
+        out_features=8,
+        block_count=1,
+        dtype=torch.float32,
+        parameterization="exp",
+    )
+    layer.random_init_parameters()  # nonzero oft_R so the fold actually changes W
+    x = torch.randn(4, 8, dtype=torch.float32)
+
+    out_before = layer(x).detach().clone()
+    perm_in_before = layer.perm_in.clone()
+    perm_out_before = layer.perm_out.clone()
+    weight_before = layer.weight.clone()
+
+    layer.merge_then_reinitialize(reinit_perm=False)
+
+    # Forward output unchanged (rotation moved into W, not lost) ...
+    assert torch.allclose(out_before, layer(x), atol=1e-4)
+    # ... Ψ unchanged (fold-only) ... oft_R reset ... weight absorbed the rotation.
+    assert torch.equal(layer.perm_in, perm_in_before)
+    assert torch.equal(layer.perm_out, perm_out_before)
+    assert torch.count_nonzero(layer.oft_R_in) == 0
+    assert torch.count_nonzero(layer.oft_R_out) == 0
+    assert not torch.allclose(layer.weight, weight_before)
+
+
+def test_merge_reinit_perm_true_is_forward_invariant_and_resamples_perm():
+    import torch
+    from poet_torch import POETLinear
+
+    torch.manual_seed(0)
+    layer = POETLinear(
+        in_features=8,
+        out_features=8,
+        block_count=1,
+        dtype=torch.float32,
+        parameterization="exp",
+    )
+    layer.random_init_parameters()
+    x = torch.randn(4, 8, dtype=torch.float32)
+
+    out_before = layer(x).detach().clone()
+    perm_in_before = layer.perm_in.clone()
+
+    layer.merge_then_reinitialize(reinit_perm=True)
+
+    # Still forward-invariant (weight re-permuted to match the new Ψ) ...
+    assert torch.allclose(out_before, layer(x), atol=1e-4)
+    # ... but Ψ WAS resampled (collision prob for 8! is negligible).
+    assert not torch.equal(layer.perm_in, perm_in_before)
+    assert torch.count_nonzero(layer.oft_R_in) == 0
+
+
+def test_merge_fold_only_forward_invariant_nonsquare_ffn_shape():
+    # FFN layers are non-square (e.g. hidden->ffn); the decoupled fold path is
+    # where a row/col-perm swap would hide. Verified: diff ~3.6e-7.
+    import torch
+    from poet_torch import POETLinear
+
+    torch.manual_seed(3)
+    layer = POETLinear(
+        in_features=8,
+        out_features=16,
+        block_count=1,
+        dtype=torch.float32,
+        parameterization="exp",
+    )
+    layer.random_init_parameters()
+    x = torch.randn(5, 8, dtype=torch.float32)
+
+    out_before = layer(x).detach().clone()
+    layer.merge_then_reinitialize(reinit_perm=False)
+    assert torch.allclose(out_before, layer(x), atol=1e-4)
+
+
+def test_merge_then_reinitialize_defaults_to_reinit():
+    import inspect
+
+    from poet_torch import POETLinear
+
+    sig = inspect.signature(POETLinear.merge_then_reinitialize)
+    assert sig.parameters["reinit_perm"].default is True

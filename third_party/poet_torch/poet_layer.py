@@ -679,7 +679,7 @@ class POETLinear(nn.Module):
         self.update_permutation()
 
     @torch.no_grad()
-    def merge_then_reinitialize(self) -> None:
+    def merge_then_reinitialize(self, reinit_perm: bool = True) -> None:
         # Same math as POETLinear.merge_then_reinitialize, but float compute + requantize
         R_out, R_in = self._merge_R()
 
@@ -690,23 +690,29 @@ class POETLinear(nn.Module):
         tmp = tmp.index_select(1, self.perm_out)
         expected = tmp.t()
 
-        # Generate NEW permutation BEFORE quantizing
-        device = self.weight.device
-        perm_in = torch.randperm(self.in_features, device=device).to(torch.int32)
-        perm_out = torch.randperm(self.out_features, device=device).to(torch.int32)
-        perm_in_inv = torch.argsort(perm_in).to(torch.int32)
-        perm_out_inv = torch.argsort(perm_out).to(torch.int32)
+        if reinit_perm:
+            # Legacy: generate a NEW permutation, re-permute the folded weight into
+            # the new block-aligned layout, and update the perm buffers.
+            device = self.weight.device
+            perm_in = torch.randperm(self.in_features, device=device).to(torch.int32)
+            perm_out = torch.randperm(self.out_features, device=device).to(torch.int32)
+            perm_in_inv = torch.argsort(perm_in).to(torch.int32)
+            perm_out_inv = torch.argsort(perm_out).to(torch.int32)
 
-        # Apply NEW permutation to float weight before quantizing (avoids double quantization)
-        expected = expected.index_select(0, perm_out_inv).index_select(1, perm_in_inv)
+            expected = expected.index_select(0, perm_out_inv).index_select(1, perm_in_inv)
+            self.weight.detach().copy_(expected)
 
-        self.weight.detach().copy_(expected)
-
-        # Update buffers to match the quantized weight
-        self.perm_in.copy_(perm_in)
-        self.perm_in_inv.copy_(perm_in_inv)
-        self.perm_out.copy_(perm_out)
-        self.perm_out_inv.copy_(perm_out_inv)
+            self.perm_in.copy_(perm_in)
+            self.perm_in_inv.copy_(perm_in_inv)
+            self.perm_out.copy_(perm_out)
+            self.perm_out_inv.copy_(perm_out_inv)
+        else:
+            # Fold-only (poet0 non-boundary step): keep the CURRENT permutation.
+            # Re-permute the folded weight back into the current block-aligned
+            # layout using the existing inverse perms so the next forward with the
+            # unchanged Ψ is consistent. Perm buffers are left untouched.
+            expected = expected.index_select(0, self.perm_out_inv).index_select(1, self.perm_in_inv)
+            self.weight.detach().copy_(expected)
 
         self.oft_R_in.zero_()
         self.oft_R_out.zero_()
