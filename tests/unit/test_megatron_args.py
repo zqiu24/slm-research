@@ -614,3 +614,28 @@ def test_poet_lie_experiment_yaml():
     assert cfg.optim.poet.reinit_period == -1
     assert cfg.optim.poet.lie_v_mode == "scalar"
     assert cfg.optim.poet.use_poet_adam is False
+
+
+def test_poet_argv_emits_lie_alternating():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_size": 256,
+                "q_optimizer": "lie_algebra",
+                "lie_alternating": True,
+                "lie_alternate_every": 2,
+            }
+        )
+    )
+    assert "--poet-lie-alternating" in args
+    assert args[args.index("--poet-lie-alternate-every") + 1] == "2"
+
+
+def test_poet_argv_omits_lie_alternating_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-lie-alternating" not in args
+    assert args[args.index("--poet-lie-alternate-every") + 1] == "1"

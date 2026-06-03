@@ -300,6 +300,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.get("lie_eps", 1.0e-8),
             "--poet-lie-v-mode",
             poet.get("lie_v_mode", "scalar"),
+            "--poet-lie-alternate-every",
+            poet.get("lie_alternate_every", 1),
             "--adam-beta1",
             optim.betas[0],
             "--adam-beta2",
@@ -314,6 +316,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: freeze the output-side rotation (train the input rotation only).
         if not poet.get("train_output_rotation", True):
             poet_args.append("--poet-freeze-output-rotation")
+        # store_true: alternating single-sided update for q_optimizer=lie_algebra (§6).
+        if poet.get("lie_alternating", False):
+            poet_args.append("--poet-lie-alternating")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":

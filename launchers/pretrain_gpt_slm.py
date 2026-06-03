@@ -79,6 +79,10 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-lie-b2", type=float, default=0.95)
     group.add_argument("--poet-lie-eps", type=float, default=1e-8)
     group.add_argument("--poet-lie-v-mode", choices=["scalar", "elementwise"], default="scalar")
+    # Alternating single-sided update (§6): write one rotation side per step
+    # (out on even, in on odd), accumulating momentum on both sides.
+    group.add_argument("--poet-lie-alternating", action="store_true")
+    group.add_argument("--poet-lie-alternate-every", type=int, default=1)
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")
