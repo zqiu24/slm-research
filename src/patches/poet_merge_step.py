@@ -77,29 +77,28 @@ def apply() -> None:
         opts = get_args()
         if not getattr(opts, "poet", False):
             return ret
-        gap = getattr(opts, "poet_merge_period", 0)
-        if gap <= 0:
-            return ret
+        merge_period = getattr(opts, "poet_merge_period", 0)
+        reinit_period = getattr(opts, "poet_reinit_period", 0)
         iteration = kwargs.get("iteration")
         if iteration is None and len(args) >= 8:
             iteration = args[7]
         if iteration is None:
             iteration = getattr(opts, "iteration", 0)
-        if iteration <= 0 or iteration % gap != 0:
+        folding, do_reinit = _merge_decision(iteration, merge_period, reinit_period)
+        if not folding:
             return ret
         model = args[2] if len(args) >= 3 else kwargs.get("model")
         if model is None:
             logger.warning("[POET] merge step skipped: model not found in train_step args")
             return ret
-        _run_merge(model, dist, iteration)
-        # Megatron-Adam path (default): POETAdam isn't in the loop to reset
-        # momentum, so do it here (same cadence as the weight merge). The custom
-        # POETAdam path (optim.poet.use_poet_adam=true) resets momentum itself,
-        # so skip it there.
+        _run_merge(model, dist, iteration, reinit_perm=do_reinit)
+        # Megatron-Adam path (default): reset momentum ONLY when Ψ is resampled
+        # (do_reinit) — otherwise momentum persists across the per-step fold. The
+        # master VALUE is zeroed every fold regardless (inside _reset_vanilla_oft_state).
         if not getattr(opts, "poet_use_poet_adam", False):
             optimizer = args[3] if len(args) >= 4 else kwargs.get("optimizer")
             if optimizer is not None:
-                _reset_vanilla_oft_state(optimizer, model, iteration)
+                _reset_vanilla_oft_state(optimizer, model, iteration, reset_moments=do_reinit)
         return ret
 
     _mt.train_step = _wrapped
@@ -144,7 +143,7 @@ def _iter_model_master_pairs(opt):
                 yield p, p
 
 
-def _reset_vanilla_oft_state(optimizer, model, iteration: int) -> None:
+def _reset_vanilla_oft_state(optimizer, model, iteration: int, reset_moments: bool = True) -> None:
     """POETAdam-faithful per-merge reset for the Megatron-Adam POET path (default).
 
     For the oft_R params ONLY (leaving embedding/norm state untouched), this:
@@ -201,38 +200,44 @@ def _reset_vanilla_oft_state(optimizer, model, iteration: int) -> None:
                 continue
             oft_master_ids.add(id(master_p))
             # Zero the fp32 master VALUE (no-op if master IS the model tensor,
-            # which the merge already zeroed).
+            # which the merge already zeroed). ALWAYS done — load-bearing against
+            # spring-back of the just-merged rotation.
             if master_p is not model_p:
                 master_p.detach().zero_()
             n_val += 1
-            _zero_moments(master_p, torch_opt)
+            # Moments reset only when reinit fires (Ψ changed -> new coordinate
+            # frame). poet0 non-boundary steps keep momentum (reset_moments=False).
+            if reset_moments:
+                _zero_moments(master_p, torch_opt)
 
     # This Megatron Adam stores ``step`` PER param-group (not per-param), so the
     # per-param reset above doesn't refresh bias correction. Reset the group-level
     # step for any group holding oft_R masters so t -> 0 and the post-merge
     # restart gets fresh bias correction.
     n_groups = 0
-    for torch_opt in seen_opts:
-        for group in torch_opt.param_groups:
-            if "step" not in group:
-                continue
-            if not any(id(p) in oft_master_ids for p in group["params"]):
-                continue
-            if torch.is_tensor(group["step"]):
-                group["step"].zero_()
-            else:
-                group["step"] = 0
-            n_groups += 1
+    if reset_moments:
+        for torch_opt in seen_opts:
+            for group in torch_opt.param_groups:
+                if "step" not in group:
+                    continue
+                if not any(id(p) in oft_master_ids for p in group["params"]):
+                    continue
+                if torch.is_tensor(group["step"]):
+                    group["step"].zero_()
+                else:
+                    group["step"] = 0
+                n_groups += 1
 
     logger.info(
-        "[POET] oft_R reset at iter %d: zeroed value+momentum for %d masters (%d group-steps)",
+        "[POET] oft_R reset at iter %d: zeroed value for %d masters; moments %s (%d group-steps)",
         iteration,
         n_val,
+        "reset" if reset_moments else "kept",
         n_groups,
     )
 
 
-def _run_merge(model, dist, iteration: int) -> None:
+def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
     import torch
     from poet_torch import POETLinear
 
@@ -251,7 +256,7 @@ def _run_merge(model, dist, iteration: int) -> None:
                 continue
             with torch.no_grad():
                 if rank == 0:
-                    pl.merge_then_reinitialize()
+                    pl.merge_then_reinitialize(reinit_perm=reinit_perm)
                 if is_dist:
                     for buf in (
                         pl.oft_R_in.data,
