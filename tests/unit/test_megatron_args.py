@@ -520,3 +520,28 @@ def test_poet_argv_q_optimizer_defaults_to_adam():
     )
     args = _optimizer_args(cfg)
     assert args[args.index("--poet-q-optimizer") + 1] == "adam"
+
+
+def test_poet_argv_emits_reinit_period_zero_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-reinit-period" in args
+    assert args[args.index("--poet-reinit-period") + 1] == "0"
+
+
+def test_poet_argv_emits_reinit_period_when_set():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256, "merge_period": 1, "reinit_period": 400}))
+    assert args[args.index("--poet-merge-period") + 1] == "1"
+    assert args[args.index("--poet-reinit-period") + 1] == "400"
+
+
+def test_poet_argv_rejects_reinit_period_not_multiple_of_merge():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    with pytest.raises(ValueError, match="multiple of"):
+        _optimizer_args(_poet_cfg({"block_size": 256, "merge_period": 3, "reinit_period": 400}))

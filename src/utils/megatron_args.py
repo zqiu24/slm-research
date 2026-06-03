@@ -249,6 +249,14 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
 
     if kind == "poet":
         poet = optim.poet
+        reinit_period = int(poet.get("reinit_period", 0))
+        merge_period = int(poet.merge_period)
+        if reinit_period > 0 and merge_period > 0 and reinit_period % merge_period != 0:
+            raise ValueError(
+                f"poet.reinit_period ({reinit_period}) must be a multiple of "
+                f"poet.merge_period ({merge_period}); reinit boundaries must land "
+                "on a folding step."
+            )
         # block_count (decoupled block sizes) takes precedence over block_size.
         block_count = poet.get("block_count", None)
         if block_count is not None:
@@ -268,6 +276,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.mup_alpha,
             "--poet-merge-period",
             poet.merge_period,
+            "--poet-reinit-period",
+            reinit_period,
             "--poet-scale",
             poet.scale,
             "--poet-cache-mode",
