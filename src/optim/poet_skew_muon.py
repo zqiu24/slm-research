@@ -38,6 +38,27 @@ def orthogonalize_skew_blocks(Q: torch.Tensor, ns_steps: int) -> torch.Tensor:
     return X
 
 
+def muon_update_spectral_stats(skew_grad: torch.Tensor, ns_steps: int = 5) -> dict:
+    """Spectral stats of the SkewMuon UPDATE direction for a per-block skew
+    gradient ``skew_grad`` ((num_blocks, b, b)): NS-orthogonalize then re-skew to
+    so(b) — exactly the transform ``SkewMuon.step`` applies before the constant-
+    angle rescale (which is scale-only and leaves the spectrum's *shape*, hence the
+    condition number, unchanged) — then ``block_spectral_stats``.
+
+    The condition number should be ~1 (NS flattens the spectrum) even when
+    ``skew_grad`` is heavy-tailed. This is what makes Muon's step well-conditioned
+    regardless of how ill-conditioned ∂f/∂Q is, and it is the metric the raw-grad
+    conditioning probe cannot show (it reads the gradient *before* the optimizer).
+    Doubles as an ``ns_steps`` health check: cond drifting well above 1 on real
+    gradients means Newton-Schulz is under-iterating.
+    """
+    from src.diag.skew_conditioning import block_spectral_stats
+
+    X = orthogonalize_skew_blocks(skew_grad.float(), ns_steps)
+    X = (X - X.transpose(-2, -1)) / 2  # re-skew to so(b), as in SkewMuon.step
+    return block_spectral_stats(X)
+
+
 class SkewMuon(torch.optim.Optimizer):
     def __init__(
         self,

@@ -101,3 +101,35 @@ def test_install_conditioning_on_setup_wraps_and_hooks():
     o.step()
     o.step()
     assert opt.n == 2  # underlying .step still runs through the wrapper
+
+
+def test_log_conditioning_also_logs_muon_update_spectrum(monkeypatch):
+    """_log_conditioning must log poet_update/<label>/cond_orthogonalized — the
+    Muon-update spectrum (~1) — alongside the heavy-tailed raw-grad
+    poet_cond/<label>/condition_number. The contrast is the only way to SEE Muon's
+    preconditioning (the raw-grad probe alone never can)."""
+    import sys
+    import types
+
+    import torch
+
+    from src.patches.poet_grad_conditioning import _log_conditioning
+
+    captured = {}
+    fake_wandb = types.SimpleNamespace(run=object(), log=lambda d, step=None: captured.update(d))
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    b, ne = 16, 16 * 15 // 2
+    torch.manual_seed(0)
+    v = torch.randn(2, ne)
+    v[:, :3] *= 6.0  # heavy-tailed raw gradient (the (n_blocks, n_elems) vec form)
+    param = torch.nn.Parameter(torch.zeros(2, ne))
+    param.main_grad = v
+    target = {"label": "x", "factor": "R_in", "param": param, "block_size": b, "layer": None}
+
+    _log_conditioning([target], iteration=0)
+
+    assert "poet_cond/x/condition_number" in captured
+    assert "poet_update/x/cond_orthogonalized" in captured
+    assert captured["poet_cond/x/condition_number"] > 10.0  # raw grad heavy-tailed
+    assert captured["poet_update/x/cond_orthogonalized"] < 5.0  # Muon update flattened

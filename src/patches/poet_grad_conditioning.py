@@ -81,6 +81,7 @@ def _log_conditioning(targets, iteration: int) -> None:
     import torch
 
     from src.diag.skew_conditioning import block_spectral_stats, vec_to_skew
+    from src.optim.poet_skew_muon import muon_update_spectral_stats
 
     try:
         import wandb
@@ -98,6 +99,13 @@ def _log_conditioning(targets, iteration: int) -> None:
         vec = grad.detach().to(torch.float32).reshape(param.shape[0], -1)
         skew = vec_to_skew(vec, t["block_size"])
         stats = block_spectral_stats(skew)
+        # The SAME gradient, NS-orthogonalized = what SkewMuon's update applies.
+        # Its condition number ~1 (vs the raw grad's heavy tail above) is the only
+        # direct evidence of Muon's preconditioning — poet_cond reads the grad
+        # BEFORE the optimizer, so it can't show it. Logged on every arm: it is the
+        # realized update spectrum on the muon arms and the counterfactual on the
+        # adam arms. ns_steps=5 matches the SkewMuon default these runs use.
+        upd = muon_update_spectral_stats(skew, ns_steps=5)
         if wandb is not None and getattr(wandb, "run", None) is not None:
             wandb.log(
                 {
@@ -106,6 +114,9 @@ def _log_conditioning(targets, iteration: int) -> None:
                     .item(),
                     f"poet_cond/{t['label']}/stable_rank": stats["stable_rank"].mean().item(),
                     f"poet_cond/{t['label']}/sigma_max_over_median": stats["sigma_max_over_median"]
+                    .mean()
+                    .item(),
+                    f"poet_update/{t['label']}/cond_orthogonalized": upd["condition_number"]
                     .mean()
                     .item(),
                 },

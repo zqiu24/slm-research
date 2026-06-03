@@ -83,3 +83,26 @@ def test_split_skew_vs_adamw_by_name():
     skew, adamw = _split_poet_muon_params([chunk])
     assert len(skew) == 2  # oft_R_in, oft_R_out
     assert len(adamw) == 1  # embedding
+
+
+def test_muon_update_spectral_stats_flattens_condition_number():
+    """The SkewMuon UPDATE spectrum (NS-orthogonalize -> re-skew, exactly what
+    SkewMuon.step applies) is well-conditioned (cond ~1) even when the raw skew
+    gradient is heavy-tailed. This is the metric that makes Muon's preconditioning
+    visible: poet_cond reads the RAW gradient (stays heavy-tailed), so it can never
+    show what Muon does to the update. Mirrors test_ns_flattens_the_skew_spectrum
+    but for the packaged helper + its dict return."""
+    from src.diag.skew_conditioning import block_spectral_stats, vec_to_skew
+    from src.optim.poet_skew_muon import muon_update_spectral_stats
+
+    torch.manual_seed(0)
+    b, ne = 16, 16 * 15 // 2
+    v = torch.randn(2, ne)
+    v[:, :3] *= 6.0  # full-rank but heavy-tailed
+    Q = vec_to_skew(v, b)
+    cond_raw = block_spectral_stats(Q)["condition_number"].mean().item()
+    stats = muon_update_spectral_stats(Q, ns_steps=5)
+    cond_update = stats["condition_number"].mean().item()
+    assert cond_raw > 10.0  # raw gradient heavy-tailed (the conditioning problem)
+    assert cond_update < 5.0  # Muon update spectrum flattened (~1)
+    assert set(stats) >= {"condition_number", "stable_rank", "sigma_max_over_median"}

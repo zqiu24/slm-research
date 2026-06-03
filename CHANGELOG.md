@@ -14,6 +14,13 @@
   Motivated by Probe 0B (heavy-tailed `∂f/∂Q`). Per-block `‖G−I‖`/`‖RRᵀ−I‖`
   diagnostics added. Default (`adam`) unchanged. Intended for the no-reset regime
   (`merge_period=0`).
+- **Update-spectrum diagnostic** `poet_update/<label>/cond_orthogonalized`: the
+  condition number of the NS-orthogonalized skew gradient — i.e. SkewMuon's actual
+  update spectrum (~1) — logged next to the heavy-tailed raw-grad
+  `poet_cond/<label>/condition_number`. The raw-grad probe reads `∂f/∂Q` *before*
+  the optimizer, so it can't show Muon's preconditioning; this contrast can. Also
+  serves as an `ns_steps` health check. New helper `muon_update_spectral_stats`
+  (`src/optim/poet_skew_muon.py`); same `SLM_POET_GRAD_CONDITIONING=1` gate.
 
 ### Added — POET single-sided (input-only) rotation ablation
 
