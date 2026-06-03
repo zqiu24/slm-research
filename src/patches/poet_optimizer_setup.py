@@ -43,6 +43,10 @@ def apply() -> None:
         config.poet_muon_theta = getattr(args, "poet_muon_theta", 0.1)
         config.poet_muon_ns_steps = getattr(args, "poet_muon_ns_steps", 5)
         config.poet_muon_momentum = getattr(args, "poet_muon_momentum", 0.95)
+        config.poet_lie_b1 = getattr(args, "poet_lie_b1", 0.9)
+        config.poet_lie_b2 = getattr(args, "poet_lie_b2", 0.95)
+        config.poet_lie_eps = getattr(args, "poet_lie_eps", 1.0e-8)
+        config.poet_lie_v_mode = getattr(args, "poet_lie_v_mode", "scalar")
         return config, overrides
 
     def _wrapped_get_optimizer(config, model, **kwargs):

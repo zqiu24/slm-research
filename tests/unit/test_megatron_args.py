@@ -570,3 +570,32 @@ def test_poet_argv_emits_negative_reinit_period_without_validation_error():
     # "multiple of merge_period" validation (that guard is for positive periods).
     args = _optimizer_args(_poet_cfg({"block_size": 256, "merge_period": 1, "reinit_period": -1}))
     assert args[args.index("--poet-reinit-period") + 1] == "-1"
+
+
+def test_poet_argv_emits_lie_args():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_size": 256,
+                "q_optimizer": "lie_algebra",
+                "lie_b1": 0.9,
+                "lie_b2": 0.95,
+                "lie_eps": 1e-8,
+                "lie_v_mode": "elementwise",
+            }
+        )
+    )
+    assert args[args.index("--poet-q-optimizer") + 1] == "lie_algebra"
+    assert args[args.index("--poet-lie-b1") + 1] == "0.9"
+    assert args[args.index("--poet-lie-b2") + 1] == "0.95"
+    assert args[args.index("--poet-lie-v-mode") + 1] == "elementwise"
+
+
+def test_poet_argv_lie_args_default_when_unset():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert args[args.index("--poet-lie-v-mode") + 1] == "scalar"
+    assert args[args.index("--poet-q-optimizer") + 1] == "adam"
