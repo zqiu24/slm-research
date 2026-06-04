@@ -31,6 +31,36 @@ _UNFUSED_SEGMENT_NAMES = frozenset(
     {"linear_q", "linear_k", "linear_v", "linear_fc1_gate", "linear_fc1_up"}
 )
 
+# Attention projections that take head-aligned rotation, and which side carries
+# the heads. q/k/v rows are heads (out); the output projection's cols are (in).
+_HEAD_ALIGNED_SIDES = {
+    "linear_q": "out",
+    "linear_k": "out",
+    "linear_v": "out",
+    "linear_proj": "in",
+}
+
+
+def _copy_and_init_weight(pl, child, init_type, mup_alpha):
+    """Copy child's weight (+bias) into the POET layer's frozen base, applying
+    init_type. Shared by the stock and head-aligned branches."""
+    out_f, in_f = child.weight.shape
+    has_bias = child.bias is not None and child.bias.numel() > 0
+    with torch.no_grad():
+        w = child.weight.data.clone()
+        if init_type == "normalized":
+            w = w / torch.norm(w, dim=1, keepdim=True)
+        elif init_type == "mup_normalized":
+            d_in = torch.tensor(float(in_f))
+            d_out = torch.tensor(float(out_f))
+            w = w / torch.norm(w, dim=1, keepdim=True)
+            target = mup_alpha * torch.sqrt(d_out / d_in)
+            current = torch.linalg.norm(w.float(), ord=2).item()
+            w = w * (target / current).to(dtype=w.dtype, device=w.device)
+        pl.weight.copy_(w.to(pl.weight.dtype))
+        if has_bias:
+            pl.bias.copy_(child.bias.data.to(pl.bias.dtype))
+
 
 class POETMegatronLinear(nn.Module):
     """Wraps a :class:`POETLinear` to match Megatron's parallel-linear
@@ -119,6 +149,9 @@ def replace_linears_with_poet(
     cache_mode: str = "none",
     parameterization: str = "cayley",
     freeze_output_rotation: bool = False,
+    head_aligned_attn: bool = False,
+    head_dim: int | None = None,
+    resid_permute: bool = True,
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -164,6 +197,42 @@ def replace_linears_with_poet(
             if isinstance(child, linear_types):
                 if skip_lm_head and "output_layer" in full:
                     skipped += 1
+                    continue
+                if head_aligned_attn and name == "linear_qkv":
+                    raise ValueError(
+                        f"[POET] head_aligned_attn requires unfused q/k/v "
+                        f"(set base.model.unfuse_qkv=true); found fused {full}"
+                    )
+                if head_aligned_attn and name in _HEAD_ALIGNED_SIDES:
+                    from poet_torch import HeadAlignedPOETLinear
+
+                    if head_dim is None:
+                        raise ValueError("[POET] head_aligned_attn requires head_dim")
+                    out_f, in_f = child.weight.shape
+                    has_bias = child.bias is not None and child.bias.numel() > 0
+                    resid_kwargs = (
+                        {"resid_block_count": block_count}
+                        if block_count is not None
+                        else {"resid_block_size": block_size}
+                    )
+                    pl = HeadAlignedPOETLinear(
+                        in_features=in_f,
+                        out_features=out_f,
+                        head_side=_HEAD_ALIGNED_SIDES[name],
+                        head_dim=head_dim,
+                        resid_permute=resid_permute,
+                        bias=has_bias,
+                        device=child.weight.device,
+                        dtype=child.weight.dtype,
+                        parameterization=parameterization,
+                        **resid_kwargs,
+                    )
+                    _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                    wrapper = POETMegatronLinear(
+                        pl, skip_bias_add=getattr(child, "skip_bias_add", False)
+                    )
+                    setattr(parent, name, wrapper)
+                    replaced += 1
                     continue
                 out_f, in_f = child.weight.shape
                 # block_count (when set) takes precedence over block_size.
@@ -223,21 +292,7 @@ def replace_linears_with_poet(
                     # pre-DDP, so oft_R_out is excluded from the grad buffer and the
                     # optimizer param groups (which only take requires_grad params).
                     pl.oft_R_out.requires_grad_(False)
-                with torch.no_grad():
-                    w = child.weight.data.clone()
-                    if init_type == "normalized":
-                        w = w / torch.norm(w, dim=1, keepdim=True)
-                    elif init_type == "mup_normalized":
-                        d_in = torch.tensor(float(in_f))
-                        d_out = torch.tensor(float(out_f))
-                        w = w / torch.norm(w, dim=1, keepdim=True)
-                        target = mup_alpha * torch.sqrt(d_out / d_in)
-                        current = torch.linalg.norm(w.float(), ord=2).item()
-                        w = w * (target / current).to(dtype=w.dtype, device=w.device)
-                    # init_type == "none": leave w unchanged.
-                    pl.weight.copy_(w.to(pl.weight.dtype))
-                    if has_bias:
-                        pl.bias.copy_(child.bias.data.to(pl.bias.dtype))
+                _copy_and_init_weight(pl, child, init_type, mup_alpha)
 
                 wrapper = POETMegatronLinear(
                     pl, skip_bias_add=getattr(child, "skip_bias_add", False)

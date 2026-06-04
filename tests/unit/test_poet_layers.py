@@ -272,3 +272,73 @@ def test_merge_then_reinitialize_defaults_to_reinit():
 
     sig = inspect.signature(POETLinear.merge_then_reinitialize)
     assert sig.parameters["reinit_perm"].default is True
+
+
+def test_head_aligned_routing_and_gqa():
+    import torch.nn as nn
+    from poet_torch import HeadAlignedPOETLinear, POETLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    class Attn(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_q = nn.Linear(512, 512, bias=False)  # 8 q heads
+            self.linear_k = nn.Linear(512, 256, bias=False)  # 4 kv heads (GQA)
+            self.linear_v = nn.Linear(512, 256, bias=False)
+            self.linear_proj = nn.Linear(512, 512, bias=False)  # o: head side = in
+
+    class Block(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.self_attention = Attn()
+            self.linear_fc1_gate = nn.Linear(512, 1536, bias=False)
+            self.linear_fc2 = nn.Linear(1536, 512, bias=False)
+
+    m = Block()
+    n = replace_linears_with_poet(
+        m,
+        block_count=1,
+        head_aligned_attn=True,
+        head_dim=64,
+        extra_linear_types=(nn.Linear,),
+    )
+    assert n == 6
+
+    def inner(mod):
+        assert isinstance(mod, POETMegatronLinear)
+        return mod.poet_linear
+
+    q = inner(m.self_attention.linear_q)
+    assert isinstance(q, HeadAlignedPOETLinear) and q.head_side == "out" and q.head_count == 8
+    k = inner(m.self_attention.linear_k)
+    assert (
+        isinstance(k, HeadAlignedPOETLinear) and k.head_side == "out" and k.head_count == 4
+    )  # GQA
+    o = inner(m.self_attention.linear_proj)
+    assert isinstance(o, HeadAlignedPOETLinear) and o.head_side == "in" and o.head_count == 8
+    # MLP stays stock POETLinear.
+    assert isinstance(inner(m.linear_fc1_gate), POETLinear)
+    assert not isinstance(inner(m.linear_fc1_gate), HeadAlignedPOETLinear)
+
+
+def test_head_aligned_requires_unfused_qkv():
+    import torch.nn as nn
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    class Attn(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_qkv = nn.Linear(512, 1024, bias=False)  # still fused
+
+    import pytest
+
+    with pytest.raises(ValueError, match="unfused"):
+        replace_linears_with_poet(
+            Attn(),
+            block_count=1,
+            head_aligned_attn=True,
+            head_dim=64,
+            extra_linear_types=(nn.Linear,),
+        )
