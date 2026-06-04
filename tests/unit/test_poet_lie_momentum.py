@@ -291,3 +291,81 @@ def test_rms_norm_scales_with_sqrt_d_across_sizes():
         b = block_size_from_nelems(ne)
         ratios.append(float(torch.linalg.norm(p.data)) / (1 * b) ** 0.5)
     assert abs(ratios[0] - ratios[1]) < 1e-7, ratios
+
+
+def test_rms_is_per_block_consistent():
+    """With RMS on, each block's applied update has Frobenius norm
+    rms_c*sqrt(block_size) regardless of that block's update magnitude.
+
+    The generators A=-m/(sqrt(v)+eps) are seeded with genuinely DIFFERENT
+    per-block magnitudes (b1=b2=1 so step() leaves the seeded state untouched).
+    The OLD global-alpha formula scales every block by one shared factor, so the
+    resulting per-block norms stay unequal -> this assertion fails on it. Only
+    the per-block formula renormalizes each block to the same target.
+    """
+    import torch
+
+    from src.optim.poet_lie_momentum import LieAlgebraMomentum
+
+    torch.manual_seed(0)
+    bsz = 8
+    n_elems = bsz * (bsz - 1) // 2  # 28
+    n_blocks = 4
+    p = torch.nn.Parameter(torch.zeros(n_blocks, n_elems, dtype=torch.float64))
+    p.grad = torch.zeros(n_blocks, n_elems, dtype=torch.float64)  # non-None; b1=b2=1 -> ignored
+
+    rms_c = 0.2
+    opt = LieAlgebraMomentum(
+        [{"params": [p], "use_skew": True, "side": "out", "lr": 1.0}],
+        b1=1.0,
+        b2=1.0,
+        eps=1e-12,
+        v_mode="elementwise",
+        rms=True,
+        rms_c=rms_c,
+    )
+    # Seed per-block-DIFFERENT momentum (block scales 10 / 0.1 / 1 / 5) with v=1,
+    # so A=-m has genuinely different per-block Frobenius norms. b1=b2=1 means
+    # step() does not overwrite these from the (zero) grad.
+    m = torch.randn(n_blocks, n_elems, dtype=torch.float64)
+    m[0] *= 10.0
+    m[1] *= 0.1
+    m[2] *= 1.0
+    m[3] *= 5.0
+    opt.state[p]["lie_m"] = m.clone()
+    opt.state[p]["lie_v"] = torch.ones(n_blocks, n_elems, dtype=torch.float64)
+    opt.step()
+
+    target = rms_c * (bsz**0.5)  # per-block Frobenius of the (lr=1) update
+    per_block = torch.linalg.norm(p.detach(), dim=1)
+    assert torch.allclose(
+        per_block, torch.full((n_blocks,), target, dtype=torch.float64), atol=1e-6
+    ), per_block
+
+
+def test_rms_block_count_1_unchanged():
+    """At n_blocks==1 the per-block RMS equals the old global formula."""
+    import torch
+
+    from src.optim.poet_lie_momentum import LieAlgebraMomentum
+
+    torch.manual_seed(1)
+    bsz = 8
+    n_elems = bsz * (bsz - 1) // 2
+    p = torch.nn.Parameter(torch.zeros(1, n_elems, dtype=torch.float64))
+    p.grad = torch.randn(1, n_elems, dtype=torch.float64)
+    opt = LieAlgebraMomentum(
+        [{"params": [p], "use_skew": True, "side": "out", "lr": 1.0}],
+        b1=0.0,
+        b2=0.0,
+        eps=1e-12,
+        v_mode="elementwise",
+        rms=True,
+        rms_c=0.2,
+    )
+    opt.step()
+    assert torch.isclose(
+        torch.linalg.norm(p.detach()),
+        torch.tensor(0.2 * (bsz**0.5), dtype=torch.float64),
+        atol=1e-6,
+    )

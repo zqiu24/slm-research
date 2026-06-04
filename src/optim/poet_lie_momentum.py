@@ -99,7 +99,7 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
         self.alternating = bool(alternating)
         self.alternate_every = max(1, int(alternate_every))
         self._alt_step = 0
-        # Stage 2 RMS scaling (§2, W-free): alpha = rms_c*sqrt(n_blocks*block_size)/(‖A‖_F+eps).
+        # Stage 2 RMS scaling (§2, W-free), per block: alpha = rms_c*sqrt(block_size)/(‖A_block‖_F+eps).
         self.rms = bool(rms)
         self.rms_c = float(rms_c)
         defaults = dict(
@@ -160,12 +160,15 @@ class LieAlgebraMomentum(torch.optim.Optimizer):
                         continue
                     A = -m / (v.sqrt() + eps)
                     if self.rms:
-                        # Stage 2 (W-free): scale the rotation generator so the
-                        # per-plane angle is dimension-consistent. dim from shape:
-                        # sqrt(n_blocks*block_size) = sqrt(d), blocking-invariant.
+                        # Stage 2 (W-free), PER BLOCK: normalize each block's
+                        # generator so its per-plane angle is dimension-consistent.
+                        # dim_const = sqrt(block_size); block_norm reduces over the
+                        # n_elems axis only -> alpha is (n_blocks, 1). Identical to
+                        # the old global formula when n_blocks == 1.
                         bsz = block_size_from_nelems(A.shape[1])
-                        dim_const = (A.shape[0] * bsz) ** 0.5
-                        alpha = self.rms_c * dim_const / (torch.linalg.norm(A) + eps)
+                        dim_const = bsz**0.5
+                        block_norm = torch.linalg.norm(A, dim=1, keepdim=True)
+                        alpha = self.rms_c * dim_const / (block_norm + eps)
                         A = A * alpha
                     p.add_(A.to(p.dtype), alpha=lr)  # p born at 0 -> p = lr*(alpha)A
             else:
