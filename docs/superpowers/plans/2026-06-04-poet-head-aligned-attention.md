@@ -157,7 +157,7 @@ def test_constructor_out_head_side_shapes():
     assert layer.oft_R_in.shape == (1, 512 * 511 // 2)
     assert layer.oft_R_in.requires_grad and layer.oft_R_out.requires_grad
     assert layer.weight.requires_grad is False
-    # Head side (out) has identity permutation; residual (in) is one block -> also identity here.
+    # Head side (out) has identity Psi; residual (in) is a random permutation (resid_permute defaults True).
     assert torch.equal(layer.perm_out, torch.arange(512, dtype=torch.int32))
 
 
@@ -331,12 +331,11 @@ class HeadAlignedPOETLinear(POETLinear):
         raise NotImplementedError
 ```
 
-Then in `third_party/poet_torch/__init__.py` add the export (match the existing import/`__all__` style — append `HeadAlignedPOETLinear`):
+Then append to `third_party/poet_torch/__init__.py` (the file is a flat list of `from .module import X as X` re-exports, no `__all__`; `poet_layer` is imported earlier in the file, so importing `head_aligned_layer` — which does `from .poet_layer import ...` — creates no circular import):
 
 ```python
-from .head_aligned_layer import HeadAlignedPOETLinear  # noqa: F401
+from .head_aligned_layer import HeadAlignedPOETLinear as HeadAlignedPOETLinear
 ```
-(If `__all__` is defined in that file, add `"HeadAlignedPOETLinear"` to it.)
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -517,7 +516,7 @@ def test_merge_preserves_singular_values():
         layer.oft_R_out.normal_(std=1e-2)
     layer.merge_then_reinitialize(reinit_perm=False)
     sv_after = torch.linalg.svdvals(layer.weight.double())
-    assert torch.allclose(sv_before, sv_after, atol=1e-8)
+    assert torch.allclose(sv_before, sv_after, atol=1e-6)  # exact-orthogonal exp; loose for the 512-block
 
 
 def test_no_cross_head_mixing():
@@ -838,27 +837,41 @@ def test_add_slm_args_head_aligned_defaults():
     assert args.poet_no_head_resid_perm is False
 ```
 
-Append to `tests/unit/test_megatron_args.py` (mirror the existing POET emission test style in that file):
+Append to `tests/unit/test_megatron_args.py`. NOTE: `_optimizer_args(cfg)` takes the **full** cfg (it does `optim = cfg.optim; kind = str(optim.type)` — [megatron_args.py:188-190](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L188)), and the unfuse guard reads `cfg.base.model.unfuse_qkv`, so the test must pass a cfg with both `optim` and `base`:
 
 ```python
-def test_poet_head_aligned_args_emitted():
+def test_poet_head_aligned_args_emitted_and_guard():
+    import pytest
     from omegaconf import OmegaConf
-    from src.utils.megatron_args import _optimizer_args  # adjust import to match the file
+    from src.utils.megatron_args import _optimizer_args
 
-    optim = OmegaConf.create({
-        "type": "poet", "lr": 1e-3, "weight_decay": 0.1, "betas": [0.9, 0.95], "eps": 1e-8,
-        "poet": {
-            "block_count": 1, "merge_period": 1, "reinit_period": -1, "scale": 0.5,
-            "init_type": "normalized", "mup_alpha": 1.0, "cache_mode": "none",
-            "parameterization": "cayley", "q_optimizer": "lie_algebra",
-            "head_aligned_attn": True, "head_resid_perm": False,
-        },
-    })
-    emitted = list(_optimizer_args(optim))
+    def make_cfg(head_aligned, head_resid_perm, unfuse_qkv):
+        return OmegaConf.create({
+            "optim": {
+                "type": "poet", "lr": 1e-3, "betas": [0.9, 0.95], "eps": 1e-8,
+                "poet": {
+                    "block_count": 1, "merge_period": 1, "reinit_period": -1, "scale": 0.5,
+                    "init_type": "normalized", "mup_alpha": 1.0, "cache_mode": "none",
+                    "parameterization": "cayley", "q_optimizer": "lie_algebra",
+                    "head_aligned_attn": head_aligned, "head_resid_perm": head_resid_perm,
+                },
+            },
+            "base": {"model": {"unfuse_qkv": unfuse_qkv}},
+        })
+
+    emitted = list(_optimizer_args(make_cfg(True, False, True)))
     assert "--poet-head-aligned-attn" in emitted
     assert "--poet-no-head-resid-perm" in emitted
+
+    # Off by default -> neither flag emitted.
+    off = list(_optimizer_args(make_cfg(False, True, True)))
+    assert "--poet-head-aligned-attn" not in off
+    assert "--poet-no-head-resid-perm" not in off
+
+    # Guard: head-aligned without unfused qkv -> ValueError.
+    with pytest.raises(ValueError, match="unfuse_qkv"):
+        _optimizer_args(make_cfg(True, True, False))
 ```
-(If the helper that emits POET args has a different name/signature in `megatron_args.py`, call that one; the assertion on the emitted token list is the point.)
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -889,7 +902,7 @@ In `src/utils/megatron_args.py`, in the `kind == "poet"` branch, after the exist
             poet_args.append("--poet-no-head-resid-perm")
 ```
 
-Add the unfuse guard at the top of the same `poet` branch (after `poet = optim.poet`), using whatever handle the function already has to the resolved config's `base.model.unfuse_qkv` (the function builds the full Megatron arg list, so it has access to the model section; if it does not, place this guard in `_apply_poet_to_chunk` instead, raising the same message):
+Add the unfuse guard at the top of the same `poet` branch (after `poet = optim.poet`). `cfg` is the `_optimizer_args(cfg)` parameter (confirmed [megatron_args.py:188](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L188)), so `cfg.base.model.unfuse_qkv` is in scope:
 
 ```python
         if poet.get("head_aligned_attn", False) and not bool(
@@ -1014,15 +1027,22 @@ chmod +x scripts/train_poet_lie_head.sh
 
 (Also update the leading comment block in the new file to describe head-aligned attention rather than RMS.)
 
-- [ ] **Step 4: Dry-run the script to verify it resolves and emits the flag**
+- [ ] **Step 4: Syntax-check the script and dry-run config resolution**
 
-Run:
+`launchers.train_megatron` resolves the config and, with `--dry-run` ([train_megatron.py:56,70](/lustre/fast/fast/zqiu/slm-research/launchers/train_megatron.py#L56)), prints a JSON payload whose `command` array is the full torchrun + Megatron arg list — then returns before launching. Run (mirroring the override set in `scripts/train_poet_lie_rms.sh`):
+
 ```bash
+bash -n scripts/train_poet_lie_head.sh
 PATH=/lustre/fast/fast/zqiu/slm_env/.venv/bin:$PATH \
-  python -m launchers.train_megatron experiment=optim/poet_lie_head \
-  base/family=llama3 base/scale=60m --print-args 2>&1 | grep -- "--poet-head-aligned-attn"
+  python -m launchers.train_megatron \
+  base/family=llama3 base/scale=60m training_regime=ablation_40x \
+  base.model.seq_length=256 scheduler=cosine_poet cluster=h100_de \
+  experiment=optim/poet_lie_head training.global_batch_size=1024 \
+  training.micro_batch_size=128 base.model.transformer_impl=local \
+  base.model.tie_embeddings=false optim.weight_decay=0.1 \
+  --dry-run 2>&1 | grep -- "--poet-head-aligned-attn"
 ```
-Expected: the line `--poet-head-aligned-attn` appears in the resolved Megatron args. (If `train_megatron` has no `--print-args`, use the repo's standard resolve/dry-run entrypoint as in `train_poet_lie_rms.sh`; the assertion is that resolution succeeds and the flag is emitted.)
+Expected: `bash -n` clean; the dry-run JSON `command` array contains `--poet-head-aligned-attn` (grep matches). This also exercises the unfuse guard end-to-end (the config sets `unfuse_qkv=true`, so resolution succeeds). If resolution needs extra overrides, mirror the exact set in the script.
 
 - [ ] **Step 5: Commit**
 
@@ -1151,4 +1171,6 @@ Ablate val loss vs `poet_lie` (dense both sides) and `poet_lie_rms`. Optional re
 
 **Type/name consistency:** `head_side`/`head_dim`/`resid_block_count`/`resid_block_size`/`resid_permute`/`head_count` consistent across the class, the apply branch, and the tests; flag `--poet-head-aligned-attn` / `--poet-no-head-resid-perm` and config keys `head_aligned_attn` / `head_resid_perm` consistent across launcher, megatron_args, apply patch, and config. `_HEAD_ALIGNED_SIDES` and `_copy_and_init_weight` referenced only where defined.
 
-**Note for the executor:** `merge_then_reinitialize` is stubbed in Task 2 and implemented in Task 3 — run them in order. If `megatron_args.py`'s POET-arg helper has a different name/`cfg` handle than assumed in Task 7, adapt the call/guard placement; the behavioral assertions (emitted flags; ValueError on fused qkv) are the contract.
+**Note for the executor:** `merge_then_reinitialize` is stubbed in Task 2 and implemented in Task 3 — run them in order.
+
+**Review pass (2026-06-04) — verified against source, fixed inline:** (1) `_optimizer_args(cfg)` takes the full cfg, not `optim` — Task 7 test rewritten to pass `{optim, base}` and the guard reads `cfg.base.model.unfuse_qkv` (in scope). (2) the dry-run flag is `--dry-run` (prints a JSON `command` array), not `--print-args` — Task 8 rewritten with the full override set + `bash -n`. (3) `poet_torch/__init__.py` export pinned to the exact `as`-re-export line (no `__all__`, no circular import). (4) Task 4 singular-value `atol` relaxed 1e-8→1e-6. Confirmed **no merge-patch or optimizer-routing changes are needed** (inheritance + `oft_R_*` name matching); only the per-block RMS.
