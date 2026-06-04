@@ -83,6 +83,45 @@ class POETMegatronLinear(nn.Module):
         output = self.poet_linear(input_)
         return output, None
 
+    def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
+        """Distributed-checkpoint (``torch_dist``) sharding for the POET wrapper.
+
+        Megatron's ``torch_dist`` save walks the model and calls
+        ``sharded_state_dict()`` on every submodule (transformer_block → layer →
+        mlp/attention → linear). The ``ColumnParallelLinear`` /
+        ``RowParallelLinear`` we replaced implement this; this plain
+        ``nn.Module`` wrapper must too, or the save aborts at the first
+        checkpoint with ``AttributeError: 'POETMegatronLinear' object has no
+        attribute 'sharded_state_dict'``.
+
+        POET runs at ``tensor_parallel_size == 1`` (the parallelism rules pin
+        tp=1 for <3e9-param models, i.e. every POET scale), so every tensor —
+        the frozen base ``weight``/``bias``, the trainable ``oft_R_*`` rotations,
+        and the permutation / skew-index buffers — is *replicated*: no TP axis
+        map, all emitted as fully-replicated ShardedTensors (DP replicas tracked
+        by the helper).
+
+        ``__init__`` aliases ``self.weight``/``self.bias`` to
+        ``poet_linear.weight``/``.bias`` (the same objects, for DDP / Megatron
+        introspection), so they appear twice in ``state_dict()``. We drop the
+        bare aliases here so the frozen base weight — the bulk of the checkpoint
+        — is serialized exactly once, under ``poet_linear.*``.
+        """
+        from megatron.core.transformer.utils import (
+            make_sharded_tensors_for_checkpoint,
+        )
+
+        state_dict = self.state_dict(prefix="", keep_vars=True)
+        # Aliases of poet_linear.weight / poet_linear.bias (identical objects).
+        state_dict.pop("weight", None)
+        state_dict.pop("bias", None)
+        return make_sharded_tensors_for_checkpoint(
+            state_dict,
+            prefix,
+            tensor_parallel_layers_axis_map=None,  # replicated (tp=1)
+            sharded_offsets=sharded_offsets,
+        )
+
 
 def _megatron_linear_types() -> tuple[type, ...]:
     """Discover Megatron linear types; empty tuple if Megatron isn't importable.

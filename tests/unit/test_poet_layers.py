@@ -322,6 +322,70 @@ def test_head_aligned_routing_and_gqa():
     assert not isinstance(inner(m.linear_fc1_gate), HeadAlignedPOETLinear)
 
 
+def test_sharded_state_dict_is_deduped_replicated_and_complete():
+    """Regression: POET-wrapped linears MUST expose ``sharded_state_dict`` or
+    Megatron's ``torch_dist`` save aborts at the first checkpoint with
+    ``AttributeError: 'POETMegatronLinear' object has no attribute
+    'sharded_state_dict'`` (the save walks every submodule). Verify the wrapper
+    emits fully-replicated ShardedTensors (tp=1) covering every param + buffer,
+    with the aliased base weight/bias serialized exactly once.
+    """
+    import pytest
+
+    pytest.importorskip("megatron.core")
+    import os
+
+    import torch.distributed as dist
+    from megatron.core import parallel_state as ps
+    from megatron.core.dist_checkpointing.mapping import ShardedTensor
+
+    os.environ.setdefault("MASTER_ADDR", "localhost")
+    os.environ.setdefault("MASTER_PORT", "29577")
+    created_pg = not dist.is_initialized()
+    if created_pg:
+        dist.init_process_group(backend="gloo", rank=0, world_size=1)
+    try:
+        ps.initialize_model_parallel(tensor_model_parallel_size=1)
+        try:
+
+            class Toy(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.fc1 = nn.Linear(16, 16, bias=True)
+
+            m = Toy()
+            assert (
+                replace_linears_with_poet(
+                    m, block_size=8, init_type="none", extra_linear_types=(nn.Linear,)
+                )
+                == 1
+            )
+            ssd = m.fc1.sharded_state_dict(prefix="fc1.")
+
+            # Aliased base weight/bias deduped -> serialized once under poet_linear.*.
+            assert "fc1.weight" not in ssd and "fc1.bias" not in ssd
+            assert sum(1 for k in ssd if k.endswith("weight")) == 1
+            # Trainable rotations + persistent permutation/skew buffers all present.
+            for k in (
+                "fc1.poet_linear.weight",
+                "fc1.poet_linear.bias",
+                "fc1.poet_linear.oft_R_in",
+                "fc1.poet_linear.oft_R_out",
+                "fc1.poet_linear.perm_in",
+                "fc1.poet_linear.rows_in",
+            ):
+                assert k in ssd, k
+            # Replicated at tp=1: every entry is a ShardedTensor with local==global.
+            for v in ssd.values():
+                assert isinstance(v, ShardedTensor)
+                assert tuple(v.local_shape) == tuple(v.global_shape)
+        finally:
+            ps.destroy_model_parallel()
+    finally:
+        if created_pg:
+            dist.destroy_process_group()
+
+
 def test_head_aligned_requires_unfused_qkv():
     import torch.nn as nn
 
