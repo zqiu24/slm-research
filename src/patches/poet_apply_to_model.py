@@ -66,6 +66,11 @@ def apply() -> None:
         cache_mode = getattr(args, "poet_cache_mode", "none")
         parameterization = getattr(args, "poet_parameterization", "cayley")
         freeze_output_rotation = getattr(args, "poet_freeze_output_rotation", False)
+        head_aligned_attn = getattr(args, "poet_head_aligned_attn", False)
+        resid_permute = not getattr(args, "poet_no_head_resid_perm", False)
+        head_dim = getattr(args, "kv_channels", None)
+        if head_dim is None:
+            head_dim = args.hidden_size // args.num_attention_heads
         return replace_linears_with_poet(
             m,
             block_size=block,
@@ -75,6 +80,9 @@ def apply() -> None:
             cache_mode=cache_mode,
             parameterization=parameterization,
             freeze_output_rotation=freeze_output_rotation,
+            head_aligned_attn=head_aligned_attn,
+            head_dim=head_dim,
+            resid_permute=resid_permute,
         )
 
     def _wrapped(*a, **kw):
