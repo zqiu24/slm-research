@@ -142,3 +142,66 @@ def test_merge_resid_permute_false_never_resamples():
     pin, pout = layer.perm_in.clone(), layer.perm_out.clone()
     layer.merge_then_reinitialize(reinit_perm=True)
     assert torch.equal(layer.perm_in, pin) and torch.equal(layer.perm_out, pout)
+
+
+def test_merge_preserves_singular_values():
+    """Folding orthogonal (exp) rotations + permutation preserves W's spectrum."""
+    from poet_torch import HeadAlignedPOETLinear
+
+    torch.manual_seed(3)
+    layer = HeadAlignedPOETLinear(
+        in_features=512,
+        out_features=512,
+        head_side="out",
+        head_dim=64,
+        resid_block_count=1,
+        parameterization="exp",
+        dtype=torch.float64,
+    )
+    with torch.no_grad():
+        layer.weight.copy_(torch.randn_like(layer.weight))
+        sv_before = torch.linalg.svdvals(layer.weight.double())
+        layer.oft_R_in.normal_(std=1e-2)
+        layer.oft_R_out.normal_(std=1e-2)
+    layer.merge_then_reinitialize(reinit_perm=False)
+    sv_after = torch.linalg.svdvals(layer.weight.double())
+    assert torch.allclose(
+        sv_before, sv_after, atol=1e-6
+    )  # exact-orthogonal exp; loose for the 512-block
+
+
+def test_no_cross_head_mixing():
+    """Perturbing head j's out-side block changes only head j's rows of the
+    folded weight (residual side held at identity)."""
+    from poet_torch import HeadAlignedPOETLinear
+
+    torch.manual_seed(4)
+    w0 = torch.randn(512, 512, dtype=torch.float64)
+
+    def merged_weight(perturb_block=None):
+        layer = HeadAlignedPOETLinear(
+            in_features=512,
+            out_features=512,
+            head_side="out",
+            head_dim=64,
+            resid_block_count=1,
+            resid_permute=False,
+            parameterization="exp",
+            dtype=torch.float64,
+        )
+        with torch.no_grad():
+            layer.weight.copy_(w0)
+            if perturb_block is not None:
+                layer.oft_R_out[perturb_block].normal_(std=1e-1)
+            # oft_R_in stays 0 (residual identity).
+        layer.merge_then_reinitialize(reinit_perm=False)
+        return layer.weight.detach().clone()
+
+    base = merged_weight(None)
+    pert = merged_weight(perturb_block=2)
+    diff = (pert - base).abs()
+    rows = slice(2 * 64, 3 * 64)  # head 2's rows (out side, identity perm)
+    assert diff[rows].max() > 1e-6  # head 2 changed
+    mask = torch.ones(512, dtype=torch.bool)
+    mask[rows] = False
+    assert diff[mask].max() < 1e-12  # all other heads untouched
