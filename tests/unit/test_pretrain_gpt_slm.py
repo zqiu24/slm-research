@@ -196,3 +196,35 @@ def test_add_slm_args_lie_rms_defaults():
     args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
     assert args.poet_lie_rms is False
     assert args.poet_lie_rms_c == 0.2
+
+
+def test_add_slm_args_accepts_head_aligned_flags():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        [
+            "--slm-config-path",
+            "x.yaml",
+            "--poet",
+            "--poet-head-aligned-attn",
+            "--poet-no-head-resid-perm",
+        ]
+    )
+    assert args.poet_head_aligned_attn is True
+    assert args.poet_no_head_resid_perm is True
+
+
+def test_add_slm_args_head_aligned_defaults():
+    import argparse
+
+    from launchers.pretrain_gpt_slm import add_slm_args
+
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
+    assert args.poet_head_aligned_attn is False
+    assert args.poet_no_head_resid_perm is False

@@ -249,6 +249,13 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
 
     if kind == "poet":
         poet = optim.poet
+        if poet.get("head_aligned_attn", False) and not bool(
+            cfg.get("base", {}).get("model", {}).get("unfuse_qkv", False)
+        ):
+            raise ValueError(
+                "optim.poet.head_aligned_attn requires base.model.unfuse_qkv=true "
+                "(head-aligned blocks need unfused q/k/v)."
+            )
         reinit_period = int(poet.get("reinit_period", 0))
         merge_period = int(poet.merge_period)
         if reinit_period > 0 and merge_period > 0 and reinit_period % merge_period != 0:
@@ -324,6 +331,11 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: enable Stage 2 RMS scaling (W-free) for q_optimizer=lie_algebra.
         if poet.get("lie_rms", False):
             poet_args.append("--poet-lie-rms")
+        # store_true: head-aligned attention rotation (requires unfused q/k/v).
+        if poet.get("head_aligned_attn", False):
+            poet_args.append("--poet-head-aligned-attn")
+        if not poet.get("head_resid_perm", True):
+            poet_args.append("--poet-no-head-resid-perm")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":

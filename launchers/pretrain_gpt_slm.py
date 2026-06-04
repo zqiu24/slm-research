@@ -89,6 +89,12 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # angle is dimension-consistent. alpha = rms_c*sqrt(n_blocks*block_size)/‖A‖.
     group.add_argument("--poet-lie-rms", action="store_true")
     group.add_argument("--poet-lie-rms-c", type=float, default=0.2)
+    # Head-aligned attention rotation (opt-in): q/k/v/o rotate their head-
+    # structured side per head (block_size=head_dim, identity Psi, no perm);
+    # the residual side stays a normal POET rotation. Requires --unfuse-qkv.
+    group.add_argument("--poet-head-aligned-attn", action="store_true")
+    # Disable the residual side's permutation (off-switch ablation).
+    group.add_argument("--poet-no-head-resid-perm", action="store_true")
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")

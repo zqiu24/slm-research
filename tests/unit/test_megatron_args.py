@@ -692,3 +692,49 @@ def test_poet_lie_rms_experiment_yaml():
     assert cfg.optim.poet.lie_rms is True
     assert cfg.optim.poet.lie_rms_c == 0.2
     assert cfg.optim.poet.lie_v_mode == "elementwise"
+
+
+def test_poet_head_aligned_args_emitted_and_guard():
+    import pytest
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    def make_cfg(head_aligned, head_resid_perm, unfuse_qkv):
+        return OmegaConf.create(
+            {
+                "optim": {
+                    "type": "poet",
+                    "lr": 1e-3,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8,
+                    "poet": {
+                        "block_count": 1,
+                        "merge_period": 1,
+                        "reinit_period": -1,
+                        "scale": 0.5,
+                        "init_type": "normalized",
+                        "mup_alpha": 1.0,
+                        "cache_mode": "none",
+                        "parameterization": "cayley",
+                        "q_optimizer": "lie_algebra",
+                        "head_aligned_attn": head_aligned,
+                        "head_resid_perm": head_resid_perm,
+                    },
+                },
+                "base": {"model": {"unfuse_qkv": unfuse_qkv}},
+            }
+        )
+
+    emitted = list(_optimizer_args(make_cfg(True, False, True)))
+    assert "--poet-head-aligned-attn" in emitted
+    assert "--poet-no-head-resid-perm" in emitted
+
+    # Off by default -> neither flag emitted.
+    off = list(_optimizer_args(make_cfg(False, True, True)))
+    assert "--poet-head-aligned-attn" not in off
+    assert "--poet-no-head-resid-perm" not in off
+
+    # Guard: head-aligned without unfused qkv -> ValueError.
+    with pytest.raises(ValueError, match="unfuse_qkv"):
+        _optimizer_args(make_cfg(True, True, False))
