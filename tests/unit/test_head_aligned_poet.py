@@ -205,3 +205,55 @@ def test_no_cross_head_mixing():
     mask = torch.ones(512, dtype=torch.bool)
     mask[rows] = False
     assert diff[mask].max() < 1e-12  # all other heads untouched
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
+def test_forward_matches_reference_and_both_sides_get_grad():
+    """The kernel forward (cayley) matches the pure-PyTorch decoupled reference,
+    and a backward populates BOTH oft_R grads."""
+    from poet_torch import HeadAlignedPOETLinear
+
+    from tests.unit.test_poet_decoupled import poet_reference_forward
+
+    torch.manual_seed(0)
+    layer = HeadAlignedPOETLinear(
+        in_features=512,
+        out_features=512,
+        head_side="out",
+        head_dim=64,
+        resid_block_count=1,
+        device="cuda",
+        dtype=torch.float32,
+    )
+    with torch.no_grad():
+        # Row-normalize the base weight (the deployed init_type="normalized"
+        # regime) so the 512-wide dense contraction stays O(1); a randn base
+        # makes outputs ~O(50) where the fused-kernel-vs-pytorch Cayley
+        # truncation difference shows up as ~1e-3 absolute float32 noise that
+        # scales linearly with output magnitude (not a logic error).
+        w = torch.randn_like(layer.weight)
+        layer.weight.copy_(w / w.norm(dim=1, keepdim=True))
+        layer.oft_R_in.normal_(std=1e-2)
+        layer.oft_R_out.normal_(std=1e-2)
+
+    x = torch.randn(4, 512, device="cuda", dtype=torch.float32)
+    y = layer(x)
+    y_ref = poet_reference_forward(
+        x.cpu(),
+        layer.weight.detach().cpu(),
+        layer.oft_R_in.detach().cpu(),
+        layer.oft_R_out.detach().cpu(),
+        layer.perm_in.cpu(),
+        layer.perm_in_inv.cpu(),
+        layer.perm_out.cpu(),
+        layer.perm_out_inv.cpu(),
+        layer.block_size_in,
+        layer.block_size_out,
+    )
+    # atol=1e-3 / rtol=1e-3 matches the grad-parity precedent in
+    # test_poet_decoupled.py (float32 fused-kernel accumulation).
+    assert torch.allclose(y.detach().cpu(), y_ref, atol=1e-3, rtol=1e-3)
+
+    y.sum().backward()
+    assert layer.oft_R_in.grad is not None and layer.oft_R_in.grad.abs().sum() > 0
+    assert layer.oft_R_out.grad is not None and layer.oft_R_out.grad.abs().sum() > 0
