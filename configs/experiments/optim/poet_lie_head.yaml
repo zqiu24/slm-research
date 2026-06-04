@@ -1,0 +1,56 @@
+# @package _global_
+# poet_lie_head: poet_lie + head-aligned attention rotation.
+#
+# q/k/v/o rotate their head-structured side per head (block_size=head_dim,
+# identity Psi, no permutation, no cross-head mixing); the residual side keeps a
+# normal POET rotation (block_count=1 dense in dev). Requires unfused q/k/v.
+experiment:
+  name: poet_lie_head
+  family: optim
+  description: |
+    POET x Pion: Lie-algebra momentum (q_optimizer=lie_algebra, elementwise v)
+    with head-aligned attention rotation (head_aligned_attn=true). Attention
+    projections rotate their head side per head_dim block with a fixed identity
+    permutation; the residual side is a normal POET rotation. Ablate vs poet_lie.
+  references:
+    - "POET"
+    - "Pion"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 1.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1
+    reinit_period: -1
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_algebra
+    lie_b1: 0.9
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: elementwise
+    head_aligned_attn: true
+    head_resid_perm: true
+    train_output_rotation: true
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true
