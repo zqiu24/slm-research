@@ -129,5 +129,36 @@ class HeadAlignedPOETLinear(POETLinear):
 
     @torch.no_grad()
     def merge_then_reinitialize(self, reinit_perm: bool = True) -> None:
-        # Filled in Task 3.
-        raise NotImplementedError
+        R_out, R_in = self._merge_R()
+        W = self.weight.detach().clone()
+        tmp = block_diag_lr_matmul_decoupled(R_in, W.t(), R_out)
+        tmp = tmp.index_select(0, self.perm_in)
+        tmp = tmp.index_select(1, self.perm_out)
+        expected = tmp.t()
+
+        # Resample ONLY the residual side, and only when reinit_perm & resid_permute.
+        # The head side keeps its identity Psi forever. When a side does not
+        # resample, re-permute back into the CURRENT layout (stock fold-only path).
+        out_resamples = reinit_perm and self.resid_permute and (self.head_side == "in")
+        in_resamples = reinit_perm and self.resid_permute and (self.head_side == "out")
+        device = self.weight.device
+
+        if out_resamples:
+            new_perm_out = torch.randperm(self.out_features, device=device).to(torch.int32)
+            new_perm_out_inv = torch.argsort(new_perm_out).to(torch.int32)
+        else:
+            new_perm_out, new_perm_out_inv = self.perm_out, self.perm_out_inv
+        if in_resamples:
+            new_perm_in = torch.randperm(self.in_features, device=device).to(torch.int32)
+            new_perm_in_inv = torch.argsort(new_perm_in).to(torch.int32)
+        else:
+            new_perm_in, new_perm_in_inv = self.perm_in, self.perm_in_inv
+
+        expected = expected.index_select(0, new_perm_out_inv).index_select(1, new_perm_in_inv)
+        self.weight.detach().copy_(expected)
+        self.perm_out.copy_(new_perm_out)
+        self.perm_out_inv.copy_(new_perm_out_inv)
+        self.perm_in.copy_(new_perm_in)
+        self.perm_in_inv.copy_(new_perm_in_inv)
+        self.oft_R_in.zero_()
+        self.oft_R_out.zero_()
