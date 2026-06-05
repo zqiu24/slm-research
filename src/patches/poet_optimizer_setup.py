@@ -51,6 +51,12 @@ def apply() -> None:
         config.poet_lie_alternate_every = getattr(args, "poet_lie_alternate_every", 1)
         config.poet_lie_rms = getattr(args, "poet_lie_rms", False)
         config.poet_lie_rms_c = getattr(args, "poet_lie_rms_c", 0.2)
+        config.poet_lie_ortho_c = getattr(args, "poet_lie_ortho_c", 0.01)
+        config.poet_lie_ortho_method = getattr(args, "poet_lie_ortho_method", "muon")
+        config.poet_lie_ortho_ns_steps = getattr(args, "poet_lie_ortho_ns_steps", 5)
+        config.poet_lie_ortho_use_second_moment = getattr(
+            args, "poet_lie_ortho_use_second_moment", False
+        )
         return config, overrides
 
     def _wrapped_get_optimizer(config, model, **kwargs):

@@ -121,3 +121,51 @@ def test_get_config_threads_cache_mode(monkeypatch):
     )
     cfg, _ = fake_training.get_megatron_optimizer_config(args)
     assert cfg.poet_cache_mode == "cached_fwd_bwd"
+
+
+def test_get_config_copies_lie_ortho_knobs(monkeypatch):
+    _reset_for_tests()
+    sys.modules.pop("src.patches.poet_optimizer_setup", None)
+    patch_mod = importlib.import_module("src.patches.poet_optimizer_setup")
+
+    fake_training = types.SimpleNamespace()
+
+    def original_get_config(args):
+        cfg = types.SimpleNamespace(optimizer="adam", lr=1e-3)
+        return cfg, {}
+
+    def original_get_optimizer(config, model, **kwargs):
+        return "adam-optimizer"
+
+    fake_training.get_megatron_optimizer_config = original_get_config
+    fake_training.get_megatron_optimizer = original_get_optimizer
+
+    fake_megatron = types.ModuleType("megatron")
+    fake_megatron_training_pkg = types.ModuleType("megatron.training")
+    fake_megatron_training_pkg.training = fake_training
+    fake_megatron.training = fake_megatron_training_pkg
+    monkeypatch.setitem(sys.modules, "megatron", fake_megatron)
+    monkeypatch.setitem(sys.modules, "megatron.training", fake_megatron_training_pkg)
+    monkeypatch.setitem(sys.modules, "megatron.training.training", fake_training)
+
+    patch_mod.apply()
+
+    args = types.SimpleNamespace(
+        slm_optimizer="poet",
+        poet_merge_period=1,
+        poet_scale=0.5,
+        poet_block_size=256,
+        poet_init_type="normalized",
+        poet_mup_alpha=1.0,
+        poet_q_optimizer="lie_ortho",
+        poet_lie_ortho_c=0.02,
+        poet_lie_ortho_method="spectral",
+        poet_lie_ortho_ns_steps=20,
+        poet_lie_ortho_use_second_moment=True,
+    )
+    cfg, _ = fake_training.get_megatron_optimizer_config(args)
+    assert cfg.poet_q_optimizer == "lie_ortho"
+    assert cfg.poet_lie_ortho_c == 0.02
+    assert cfg.poet_lie_ortho_method == "spectral"
+    assert cfg.poet_lie_ortho_ns_steps == 20
+    assert cfg.poet_lie_ortho_use_second_moment is True
