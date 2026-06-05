@@ -2,17 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a Muon-like *orthogonalizing* sibling to the existing POET Lie-RMS optimizer — one that orthogonalizes the skew update direction so the rotation planes turn by roughly the **same** angle (instead of RMS-scaling, which preserves the gradient's *relative* per-plane angles), to run the head-to-head experiment in `docs/muon_orthogonalizing_optimizer_poet.md` §7.
+**Goal:** Add a **standalone** Muon-like *orthogonalizing* optimizer — a sibling of the POET Lie-RMS optimizer that orthogonalizes the skew update direction so the rotation planes turn by roughly the **same** angle (instead of RMS-scaling, which preserves the gradient's *relative* per-plane angles), to run the head-to-head experiment in `docs/muon_orthogonalizing_optimizer_poet.md` §7.
 
-**Architecture:** The variant shares the *entire* Lie-momentum pipeline (param split, side-tagged groups, alternating single-sided update, momentum buffers that persist across the merge, AdamW branch for non-skew params). The **only** difference is the transform applied to the direction before it is written into `oft_R`: the RMS path scales by `c·√b/‖A‖_F`; this path orthogonalizes the per-block `b×b` skew direction then scales by `c`. Implemented as a **new mode (`ortho=True`) inside `LieAlgebraMomentum`**, mutually exclusive with `rms=True` — exactly mirroring how `rms` was added — not a duplicate optimizer class.
+**Architecture:** A **new optimizer class `LieOrthMomentum` in its own file `src/optim/poet_lie_orth.py`**, selected by a new `q_optimizer=lie_ortho` value (parallel to `lie_algebra`/`muon`). It runs the same Lie-momentum pipeline as `LieAlgebraMomentum` (first-moment momentum on `oft_R` that persists across the merge, side-tagged groups, alternating single-sided update, AdamW branch for non-skew params) but replaces the direction→generator transform: instead of RMS-scaling, it **orthogonalizes** the per-block `b×b` skew direction then scales by `c`. It is a *standalone class* (not a mode flag on `LieAlgebraMomentum`); the two share only (a) the pure param-split/group helpers `_split_poet_lie_params` / `_build_lie_param_groups`, (b) the Megatron-wrapping builder, which branches on `q_optimizer` to instantiate the right class, and (c) the orthogonalization kernel.
 
 **Two orthogonalization methods, default = Muon's (cheap, approximate):**
-- **`muon` (default):** Muon's quintic Newton–Schulz on the direction (reuses the existing `orthogonalize_skew_blocks`), then re-skew. Democratizes the singular-value spectrum into a **band around 1** (condition number ≈ 1.5, σ ∈ ~[0.68, 1.13]) in just **~5 steps**. Cheap. This is "first try what Muon did" — a band of *roughly* equal angles, not exactly equal.
-- **`spectral` (opt-in):** the exact form `A·(−A²)^{-1/2}` — stays skew exactly and drives **all** singular values to 1, so every plane turns by *exactly* the same angle. But it is a coupled Newton–Schulz inverse-sqrt that converges slowly: it needs **~15–20 steps** (≈4× Muon's cost) and still cannot fully equalize a *very* ill-conditioned direction. Reserved as an ablation, not the default.
+- **`muon` (default):** Muon's quintic Newton–Schulz on the direction (reuses the existing `orthogonalize_skew_blocks`), then a `½(X−Xᵀ)` float-dust cleanup. Newton–Schulz **preserves skew** on a skew input (every step is skew × commuting-symmetric, verified to ~1e-15). It democratizes the spectrum into a **band around 1** (cond ≈ 1.5, σ ∈ ~[0.68, 1.13]) in ~5 steps. Cheap; `c` is a *nominal* angle (realized median ≈ 0.75–1.0·c).
+- **`spectral` (opt-in):** the exact Löwdin form `A·(−A²)^{-1/2}` — stays skew and drives **all** singular values to exactly 1, so every plane turns by *exactly* the same angle. Needs **~15–20 steps** (≈4× Muon's cost) and still cannot fully equalize a *very* ill-conditioned direction. The exact-angle ablation, not the default.
 
-First-moment-only by default (docs §4: a second moment is partially undone by orthogonalization). A new pure-tensor helper `orthogonalize_skew_direction` lives next to the existing `orthogonalize_skew_blocks`.
-
-**Why Muon's 5 steps but spectral's 20:** Muon's tuned quintic only aims to land σ in a *band* around 1 and stop — a ±15–30% spread in plane angles, which is fine if "roughly equal" is enough. Forcing σ to *exactly* 1 (so `c` is literally the angle) is a strictly harder target that the gentle inverse-sqrt iteration reaches only with many more steps. The head-to-head should therefore also tell us whether the cheap band is as good as exact equalization.
+First-moment-only by default (docs §4: a second moment is partially undone by orthogonalization). The orthogonalization helper `orthogonalize_skew_direction` lives next to the existing `orthogonalize_skew_blocks`.
 
 **Tech Stack:** PyTorch (`torch 2.11`, CPU-testable), Megatron-LM (vendored, not needed for unit tests), OmegaConf/Hydra experiment configs, pytest.
 
@@ -22,7 +20,7 @@ First-moment-only by default (docs §4: a second moment is partially undone by o
 ```
 Run all commands from the repo root `/lustre/fast/fast/zqiu/slm-research`.
 
-> **Numbers in this plan are measured, not guessed.** The step counts (5 for muon, 20 for spectral), tolerances, and the band bounds were all verified in the CPU env before writing. Muon's band plateaus by step 5 (identical at 5/8/20); spectral reaches `max|σ−1| ≤ 0.006` on benign inputs at 20 steps.
+> **Numbers in this plan are measured, not guessed.** Step counts (5 muon / 20 spectral), tolerances, and band bounds were all verified in the CPU env before writing. NS preserves skew to ~1e-15 every step; Muon's band plateaus by step 5; spectral reaches `max|σ−1| ≤ 0.006` at 20 steps on benign inputs; a single muon step gives median plane-angle ≈ 0.75–1.04·lr·c with cond < 1.6; a single spectral step gives σ = lr·c to 1e-6.
 
 **Source doc:** `docs/muon_orthogonalizing_optimizer_poet.md`
 
@@ -30,32 +28,34 @@ Run all commands from the repo root `/lustre/fast/fast/zqiu/slm-research`.
 
 ## Background: the plumbing chain (read once before starting)
 
-A POET hyperparameter flows through five layers. Every new knob must be added at each:
+A POET hyperparameter flows through five layers. The new optimizer is **selected** by `q_optimizer=lie_ortho`; its knobs flow through each layer:
 
-1. **Experiment YAML** `configs/experiments/optim/poet_lie_orth.yaml` — sets `optim.poet.lie_ortho*`.
-2. **argv builder** `src/utils/megatron_args.py` (`_optimizer_args`, `kind == "poet"`) — translates `optim.poet.lie_ortho*` → `--poet-lie-ortho*` argv.
-3. **argparse** `launchers/pretrain_gpt_slm.py` (`add_slm_args`) — defines `--poet-lie-ortho*`.
-4. **config copy** `src/patches/poet_optimizer_setup.py` (`_wrapped_get_config`) — copies `args.poet_lie_ortho*` → `config.poet_lie_ortho*`.
-5. **builder** `src/optim/poet.py` (`get_megatron_poet_lie_momentum_optimizer`) — reads `config.poet_lie_ortho*`, passes to `LieAlgebraMomentum`.
+1. **Experiment YAML** `configs/experiments/optim/poet_lie_orth.yaml` — sets `optim.poet.q_optimizer=lie_ortho` and `optim.poet.lie_ortho_*`.
+2. **argv builder** `src/utils/megatron_args.py` (`_optimizer_args`, `kind == "poet"`) — translates `optim.poet.lie_ortho_*` → `--poet-lie-ortho-*` argv.
+3. **argparse** `launchers/pretrain_gpt_slm.py` (`add_slm_args`) — defines `--poet-lie-ortho-*` and adds `lie_ortho` to the `--poet-q-optimizer` choices.
+4. **config copy** `src/patches/poet_optimizer_setup.py` (`_wrapped_get_config`) — copies `args.poet_lie_ortho_*` → `config.poet_lie_ortho_*`.
+5. **builder** `src/optim/poet.py` (`get_megatron_poet_lie_momentum_optimizer`, reached for both `lie_algebra` and `lie_ortho`) — branches on `config.poet_q_optimizer` to build `LieAlgebraMomentum` or `LieOrthMomentum`.
 
-The optimizer math itself is `src/optim/poet_lie_momentum.py` (the `LieAlgebraMomentum.step` skew branch).
+The optimizer math is the standalone class `src/optim/poet_lie_orth.py` (`LieOrthMomentum.step`).
 
 **Key data layout:** `oft_R` params have shape `(n_blocks, n_elems)` where `n_elems = b·(b−1)/2` (the strictly-upper-triangular entries of a `b×b` skew block). Conversions live in `src/diag/skew_conditioning.py`: `vec_to_skew(vec, b) → (n_blocks, b, b)`, `skew_to_vec(skew, b) → (n_blocks, n_elems)`, `block_size_from_nelems(n_elems) → b`.
 
 **Naming used consistently across all tasks** (do not vary):
 | Layer | Name |
 |---|---|
-| optimizer kwargs | `ortho`, `ortho_c`, `ortho_method`, `ortho_ns_steps`, `ortho_use_second_moment` |
-| `config.*` / `args.*` | `poet_lie_ortho`, `poet_lie_ortho_c`, `poet_lie_ortho_method`, `poet_lie_ortho_ns_steps`, `poet_lie_ortho_use_second_moment` |
-| argparse / argv flags | `--poet-lie-ortho`, `--poet-lie-ortho-c`, `--poet-lie-ortho-method`, `--poet-lie-ortho-ns-steps`, `--poet-lie-ortho-use-second-moment` |
-| YAML keys (`optim.poet.`) | `lie_ortho`, `lie_ortho_c`, `lie_ortho_method`, `lie_ortho_ns_steps`, `lie_ortho_use_second_moment` |
+| optimizer class | `LieOrthMomentum` (in `src/optim/poet_lie_orth.py`) |
+| optimizer kwargs | `ortho_c`, `ortho_method`, `ortho_ns_steps`, `ortho_use_second_moment` (+ shared `b1`,`b2`,`eps`,`v_mode`,`alternating`,`alternate_every`,`adamw_*`) |
+| selection | `q_optimizer = lie_ortho` |
+| `config.*` / `args.*` | `poet_lie_ortho_c`, `poet_lie_ortho_method`, `poet_lie_ortho_ns_steps`, `poet_lie_ortho_use_second_moment` |
+| argparse / argv flags | `--poet-lie-ortho-c`, `--poet-lie-ortho-method`, `--poet-lie-ortho-ns-steps`, `--poet-lie-ortho-use-second-moment` |
+| YAML keys (`optim.poet.`) | `q_optimizer: lie_ortho`, `lie_ortho_c`, `lie_ortho_method`, `lie_ortho_ns_steps`, `lie_ortho_use_second_moment` |
 | method values | `muon` (default) \| `spectral` |
 | helper fn | `orthogonalize_skew_direction` (in `src/optim/poet_skew_muon.py`) |
 | experiment | name `poet_lie_orth`, file `configs/experiments/optim/poet_lie_orth.yaml`, script `scripts/train_poet_lie_orth.sh` |
 
-**The angle convention (state this in code comments — it is the one subtlety):** the realized per-plane rotation angle is `group_lr × ortho_c`, *not* `ortho_c` alone — identical to how the shipped RMS optimizer behaves (`angle = group_lr × rms_c`). The optimizer writes `oft_R ← lr · (ortho_c · A_orth)` and the scheduler decays `group_lr`. So `lr=0.003, lie_ortho_c=4` ⇒ ~0.012 rad/plane, mirroring the RMS best run. **Under `method=muon`, `ortho_c` is *nominal*:** because the spectrum is a band (not exactly 1), the realized median plane-angle is ~0.75–1.0·(lr·c), input-dependent. Under `method=spectral` the angle is exactly `lr·c`. (Measured: a benign single-block step gave median σ ≈ 0.75–1.04·lr·c under muon, and = lr·c under spectral.)
+**The angle convention (state this in code comments):** the realized per-plane rotation angle is `group_lr × ortho_c`, *not* `ortho_c` alone — identical to how the RMS optimizer behaves (`angle = group_lr × rms_c`). The optimizer writes `oft_R ← lr · (ortho_c · A_orth)` and the scheduler decays `group_lr`. So `lr=0.003, lie_ortho_c=4` ⇒ ~0.012 rad/plane, mirroring the RMS best run. **Under `method=muon`, `ortho_c` is *nominal*** (the band gives ≈ 0.75–1.0·lr·c, input-dependent); under `method=spectral` it is exact.
 
-**Known limitation to document + monitor:** "every plane rotates by the same angle" is approximate on real gradients. A *very* ill-conditioned momentum direction (cond ≳ several hundred) cannot be fully equalized at any reasonable step count — the weak directions stay under-rotated (inherent to orthogonalization; cf. the [poet_skew_muon docstring](src/optim/poet_skew_muon.py): NS "cannot resurrect near-zero singular values"). **Recommend logging the post-orthogonalization condition number** as a health metric — `block_spectral_stats` / `muon_update_spectral_stats` already exist for this.
+**Known limitation to document + monitor:** "every plane the same angle" is approximate on real gradients — a *very* ill-conditioned momentum (cond ≳ several hundred) cannot be fully equalized at any step count (inherent to orthogonalization). **Recommend logging the post-orthogonalization condition number** as a health metric — `block_spectral_stats` / `muon_update_spectral_stats` already exist.
 
 ---
 
@@ -64,16 +64,16 @@ The optimizer math itself is `src/optim/poet_lie_momentum.py` (the `LieAlgebraMo
 | File | Create / Modify | Responsibility |
 |---|---|---|
 | `src/optim/poet_skew_muon.py` | Modify | Add `orthogonalize_skew_direction(method=muon\|spectral)`. `muon` reuses `orthogonalize_skew_blocks`; `spectral` is the exact inverse-sqrt. |
-| `src/optim/poet_lie_momentum.py` | Modify | Add `ortho` mode to `LieAlgebraMomentum` (new kwargs + step-branch). |
-| `src/optim/poet.py` | Modify | `get_megatron_poet_lie_momentum_optimizer`: read new `config.poet_lie_ortho*`, pass through, extend log. |
-| `launchers/pretrain_gpt_slm.py` | Modify | Add `--poet-lie-ortho*` argparse flags. |
-| `src/utils/megatron_args.py` | Modify | Emit `--poet-lie-ortho*` from `optim.poet.lie_ortho*`. |
-| `src/patches/poet_optimizer_setup.py` | Modify | Copy `args.poet_lie_ortho*` → `config.poet_lie_ortho*`. |
-| `configs/experiments/optim/poet_lie_orth.yaml` | Create | The experiment config (sibling of `poet_lie_rms.yaml`). |
+| `src/optim/poet_lie_orth.py` | **Create** | The standalone `LieOrthMomentum` optimizer class. |
+| `src/optim/poet.py` | Modify | Route `q_optimizer=lie_ortho` to the shared lie builder; branch there to construct `LieOrthMomentum`. |
+| `launchers/pretrain_gpt_slm.py` | Modify | Add `lie_ortho` to `--poet-q-optimizer` choices; add `--poet-lie-ortho-*` knob flags. |
+| `src/utils/megatron_args.py` | Modify | Emit `--poet-lie-ortho-*` from `optim.poet.lie_ortho_*`. |
+| `src/patches/poet_optimizer_setup.py` | Modify | Copy `args.poet_lie_ortho_*` → `config.poet_lie_ortho_*`. |
+| `configs/experiments/optim/poet_lie_orth.yaml` | Create | The experiment config (`q_optimizer: lie_ortho`). |
 | `docs/experiments/poet_lie_orth.md` | Create | Experiment doc — **required** by the `experiment-doc-exists` pre-commit hook (`tools/check_experiment_docs.py` maps `experiment.name` → `docs/experiments/<name>.md`). Missing it blocks the commit. |
 | `scripts/train_poet_lie_orth.sh` | Create | Launch wrapper (copy of `train_poet_lie_rms.sh`, new experiment). |
-| `tests/unit/test_poet_lie_orth.py` | Create | Unit tests for the helper + the optimizer mode. |
-| `tests/unit/test_pretrain_gpt_slm.py` | Modify | Test the new argparse flags. |
+| `tests/unit/test_poet_lie_orth.py` | Create | Unit tests for the helper + the `LieOrthMomentum` optimizer. |
+| `tests/unit/test_pretrain_gpt_slm.py` | Modify | Test the new argparse flags + q_optimizer choice. |
 | `tests/unit/test_megatron_args.py` | Modify | Test argv emission + the new YAML. |
 | `tests/unit/test_patch_poet_optimizer_setup.py` | Modify | Test the config copy. |
 | `tests/unit/test_train_scripts.py` | Modify | Smoke-test the new script. |
@@ -83,7 +83,7 @@ The optimizer math itself is `src/optim/poet_lie_momentum.py` (the `LieAlgebraMo
 
 ## Task 1: Orthogonalization helper `orthogonalize_skew_direction`
 
-Orthogonalizes a batch of `b×b` skew blocks so the rotation planes turn by ~the same angle (docs §5). Two methods: `muon` (default — Muon's quintic + re-skew, a band around 1) and `spectral` (opt-in — exact `A·(−A²)^{-1/2}`, σ→1).
+Orthogonalizes a batch of `b×b` skew blocks so the rotation planes turn by ~the same angle (docs §5). Two methods: `muon` (default — Muon's quintic + cleanup, a band around 1) and `spectral` (opt-in — exact `A·(−A²)^{-1/2}`, σ→1).
 
 **Files:**
 - Modify: `src/optim/poet_skew_muon.py` (add the function after `orthogonalize_skew_blocks`, ~line 39)
@@ -91,11 +91,11 @@ Orthogonalizes a batch of `b×b` skew blocks so the rotation planes turn by ~the
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/unit/test_poet_lie_orth.py`:
+Create `tests/unit/test_poet_lie_orth.py` (helper tests only — the optimizer import is added in Task 2):
 
 ```python
 """Tests for the POET Lie-Orth (Muon-like orthogonalizing) optimizer:
-the orthogonalization helper and the ``ortho`` mode of LieAlgebraMomentum.
+the orthogonalization helper and the LieOrthMomentum optimizer.
 See docs/muon_orthogonalizing_optimizer_poet.md."""
 
 import pytest
@@ -103,7 +103,6 @@ import torch
 import torch.nn as nn
 
 from src.diag.skew_conditioning import block_spectral_stats, skew_to_vec, vec_to_skew
-from src.optim.poet_lie_momentum import LieAlgebraMomentum
 from src.optim.poet_skew_muon import orthogonalize_skew_direction
 
 
@@ -130,18 +129,17 @@ def test_orthogonalize_skew_direction_batches_per_block(method):
 
 def test_muon_method_democratizes_the_spectrum():
     # DEFAULT: Muon's quintic flattens a heavy-tailed spectrum into a BAND around 1
-    # (condition number ~ 1.5) in ~5 steps. It does NOT drive sigma to exactly 1 --
-    # that is the cheap-but-approximate "first try Muon" behavior.
+    # (condition number ~ 1.5) in ~5 steps. It does NOT drive sigma to exactly 1.
     M = _benign_skew(2, 8, seed=0)
     cond_in = block_spectral_stats(M)["condition_number"].mean().item()
     X = orthogonalize_skew_direction(M, method="muon", ns_steps=5)
     cond_out = block_spectral_stats(X)["condition_number"].mean().item()
-    assert cond_in > 5.0  # non-trivial (heavy-tailed) input
+    assert cond_in > 5.0  # non-trivial input
     assert cond_out < 2.0 and cond_out < cond_in / 3.0  # democratized into a band
 
 
 def test_spectral_method_drives_singular_values_to_one():
-    # OPT-IN exact variant: every singular value -> 1 (needs more steps, ~15-20).
+    # OPT-IN exact variant: every singular value -> 1 (needs ~15-20 steps).
     M = _benign_skew(2, 8, seed=0)
     sv = torch.linalg.svdvals(orthogonalize_skew_direction(M, method="spectral", ns_steps=20))
     assert torch.allclose(sv, torch.ones_like(sv), atol=0.02), sv
@@ -162,7 +160,7 @@ def test_spectral_method_is_odd_and_exact_on_a_2d_plane():
 
 - [ ] **Step 2: Run the helper tests to verify they fail**
 
-Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -k "muon or spectral or skew_direction" -v`
+Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -v`
 Expected: FAIL with `ImportError: cannot import name 'orthogonalize_skew_direction'`.
 
 - [ ] **Step 3: Implement `orthogonalize_skew_direction`**
@@ -182,9 +180,10 @@ def orthogonalize_skew_direction(
     Result stays in so(b).
 
     method="muon" (default): Muon's quintic Newton-Schulz on the direction
-    (orthogonalize_skew_blocks), then re-skew. Democratizes the spectrum into a
-    BAND around 1 (sigma ~ [0.7, 1.1]) in ~5 steps -- cheap; a band of roughly-equal
-    angles may be all this needs. NOT sigma == 1.
+    (orthogonalize_skew_blocks), then a 1/2(X - X^T) cleanup. NS preserves skew on a
+    skew input, so the cleanup only removes ~1e-15 float dust. Democratizes the
+    spectrum into a BAND around 1 (sigma ~ [0.7, 1.1]) in ~5 steps -- cheap; a band of
+    roughly-equal angles may be all this needs. NOT sigma == 1.
     method="spectral": A_orth = A (-A^2)^{-1/2}, an ODD function of A so it stays
     skew exactly and drives ALL nonzero singular values to 1 (every plane the SAME
     angle). Exact but slow: needs ns_steps >= ~15 (coupled Newton-Schulz inverse-sqrt
@@ -216,47 +215,47 @@ def orthogonalize_skew_direction(
 
 - [ ] **Step 4: Run the helper tests to verify they pass**
 
-Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -k "muon or spectral or skew_direction" -v`
-Expected: all pass (stays-skew ×2 methods, batches ×2 methods, muon-democratizes, spectral-σ→1, spectral-odd/2D).
+Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -v`
+Expected: all pass (stays-skew ×2, batches ×2, muon-democratizes, spectral-σ→1, spectral-odd/2D).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/optim/poet_skew_muon.py tests/unit/test_poet_lie_orth.py
-git commit -m "feat(poet): add orthogonalize_skew_direction (muon band + spectral exact) for lie-orth optimizer"
+git commit -m "feat(poet): add orthogonalize_skew_direction (muon band + spectral exact)"
 ```
 
 ---
 
-## Task 2: `ortho` mode in `LieAlgebraMomentum`
+## Task 2: The standalone `LieOrthMomentum` optimizer
 
-Add a new mode to the optimizer's skew branch: orthogonalize the direction, scale by `ortho_c`, write to `oft_R`. Default method `muon`, first-moment-only. Mutually exclusive with `rms`.
+A new optimizer class in its own file. Same Lie-momentum pipeline as `LieAlgebraMomentum` (first-moment momentum on `oft_R`, alternating side, AdamW branch), but the skew update orthogonalizes the direction and scales by `ortho_c`. First-moment-only by default.
 
 **Files:**
-- Modify: `src/optim/poet_lie_momentum.py` (imports ~line 24; `__init__` ~lines 79-117; `step` skew branch ~lines 161-173)
+- Create: `src/optim/poet_lie_orth.py`
 - Test: `tests/unit/test_poet_lie_orth.py` (append)
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/unit/test_poet_lie_orth.py`:
+Append to `tests/unit/test_poet_lie_orth.py` (add the optimizer import at the top of the file first — change the import block to also include `from src.optim.poet_lie_orth import LieOrthMomentum`):
 
 ```python
-def _make_ortho_opt(p, lr, ortho_c, method="muon", ns_steps=5, **kw):
-    return LieAlgebraMomentum(
+def _make_opt(p, lr, ortho_c, method="muon", ns_steps=5, **kw):
+    return LieOrthMomentum(
         [dict(params=[p], use_skew=True, side="out", lr=lr)],
         b1=0.9, b2=0.95, eps=1e-8,
-        ortho=True, ortho_c=ortho_c, ortho_method=method, ortho_ns_steps=ns_steps, **kw,
+        ortho_c=ortho_c, ortho_method=method, ortho_ns_steps=ns_steps, **kw,
     )
 
 
-def test_ortho_muon_equalizes_plane_angles_into_a_band():
+def test_muon_equalizes_plane_angles_into_a_band():
     # DEFAULT (muon): one step from identity -> the written oft_R's per-plane angles
     # form a tight band (cond < 2) at ~ lr*ortho_c. Equalized, but not exactly equal.
     torch.manual_seed(0)
     b, ne, lr, c = 8, 8 * 7 // 2, 0.1, 0.05
     p = nn.Parameter(torch.zeros(1, ne))
     p.grad = torch.randn(1, ne)
-    _make_ortho_opt(p, lr, c).step()
+    _make_opt(p, lr, c).step()
     R = vec_to_skew(p.data, b)
     sv = torch.linalg.svdvals(R)
     cond = block_spectral_stats(R)["condition_number"].mean().item()
@@ -264,247 +263,355 @@ def test_ortho_muon_equalizes_plane_angles_into_a_band():
     assert 0.5 * lr * c < sv.median().item() < 1.2 * lr * c  # magnitude ~ lr*c (a band)
 
 
-def test_ortho_spectral_makes_every_plane_angle_equal():
+def test_spectral_makes_every_plane_angle_equal():
     # OPT-IN exact variant: every plane angle == lr*ortho_c (needs ns_steps ~20).
     torch.manual_seed(0)
     b, ne, lr, c = 8, 8 * 7 // 2, 0.1, 0.05
     p = nn.Parameter(torch.zeros(1, ne))
     p.grad = torch.randn(1, ne)
-    _make_ortho_opt(p, lr, c, method="spectral", ns_steps=20).step()
+    _make_opt(p, lr, c, method="spectral", ns_steps=20).step()
     sv = torch.linalg.svdvals(vec_to_skew(p.data, b))
     assert torch.allclose(sv, torch.full_like(sv, lr * c), atol=lr * c * 0.05), sv
 
 
-def test_ortho_and_rms_are_mutually_exclusive():
+def test_invalid_ortho_method_raises():
     p = nn.Parameter(torch.zeros(1, 6))
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        LieAlgebraMomentum(
-            [dict(params=[p], use_skew=True, lr=1e-3)],
-            ortho=True, rms=True,
-        )
+    with pytest.raises(ValueError, match="ortho_method"):
+        LieOrthMomentum([dict(params=[p], use_skew=True, lr=1e-3)], ortho_method="bogus")
 
 
-def test_ortho_first_moment_only_differs_from_second_moment():
-    # With a wildly uneven per-entry grad, the second-moment (Adam) direction and
-    # the first-moment-only direction point differently before orthogonalization,
-    # so the written rotations differ.
+def test_first_moment_only_differs_from_second_moment():
+    # With a wildly uneven per-entry grad, the second-moment (Adam) direction and the
+    # first-moment-only direction point differently before orthogonalization.
     torch.manual_seed(0)
-    b, ne, lr, c = 8, 8 * 7 // 2, 0.1, 0.05
+    ne, lr, c = 8 * 7 // 2, 0.1, 0.05
     g = torch.randn(1, ne)
     g[:, 0] *= 50.0
     p1 = nn.Parameter(torch.zeros(1, ne)); p1.grad = g.clone()
     p2 = nn.Parameter(torch.zeros(1, ne)); p2.grad = g.clone()
-    _make_ortho_opt(p1, lr, c, ortho_use_second_moment=False).step()
-    _make_ortho_opt(p2, lr, c, ortho_use_second_moment=True).step()
+    _make_opt(p1, lr, c, ortho_use_second_moment=False).step()
+    _make_opt(p2, lr, c, ortho_use_second_moment=True).step()
     assert not torch.allclose(p1.data, p2.data, atol=1e-4)
 
 
-def test_ortho_grad_sign_flips_the_update():
-    # Both methods are odd in sign, so negating the grad negates the written oft_R.
+def test_grad_sign_flips_the_update():
+    # Orthogonalization is odd in sign, so negating the grad negates the written oft_R.
     torch.manual_seed(0)
     ne, lr, c = 8 * 7 // 2, 0.1, 0.05
     g = torch.randn(1, ne)
     p_pos = nn.Parameter(torch.zeros(1, ne)); p_pos.grad = g.clone()
     p_neg = nn.Parameter(torch.zeros(1, ne)); p_neg.grad = -g.clone()
-    _make_ortho_opt(p_pos, lr, c).step()
-    _make_ortho_opt(p_neg, lr, c).step()
+    _make_opt(p_pos, lr, c).step()
+    _make_opt(p_neg, lr, c).step()
     assert torch.allclose(p_pos.data, -p_neg.data, atol=1e-5)
 
 
-def test_ortho_keeps_valid_skew_vector_shape_and_finite():
+def test_adamw_branch_steps_non_skew_params():
+    # non-oft_R params get the AdamW branch (moved off their initial value).
+    w = nn.Parameter(torch.randn(4, 4)); w.grad = torch.randn(4, 4); w0 = w.data.clone()
+    LieOrthMomentum([dict(params=[w], use_skew=False, lr=1e-2)], adamw_wd=0.0).step()
+    assert not torch.allclose(w.data, w0)
+
+
+def test_momentum_persists_across_value_reset():
+    # lie_m persists across the per-step fold (p zeroed between steps); the second
+    # step's direction reflects the accumulated EMA, not a fresh start.
     torch.manual_seed(0)
-    ne = 8 * 7 // 2
-    p = nn.Parameter(torch.zeros(3, ne))
-    p.grad = torch.randn(3, ne)
-    _make_ortho_opt(p, 0.1, 0.05).step()
-    assert p.data.shape == (3, ne)
+    ne, lr, c = 8 * 7 // 2, 0.1, 0.05
+    p = nn.Parameter(torch.zeros(1, ne)); p.grad = torch.randn(1, ne)
+    opt = _make_opt(p, lr, c)
+    opt.step()
+    assert "lie_m" in opt.state[p] and opt.state[p]["lie_m"].abs().sum() > 0
+    p.data.zero_()  # simulate the merge fold
+    p.grad = torch.randn(1, ne)
+    opt.step()
     assert torch.isfinite(p.data).all()
 ```
 
 - [ ] **Step 2: Run the optimizer tests to verify they fail**
 
-Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -k ortho_ -v`
-Expected: FAIL with `TypeError: __init__() got an unexpected keyword argument 'ortho'`.
+Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'src.optim.poet_lie_orth'`.
 
-- [ ] **Step 3a: Add the imports**
+- [ ] **Step 3: Create `src/optim/poet_lie_orth.py`**
 
-In `src/optim/poet_lie_momentum.py`, replace the import line 24:
-
-```python
-from src.diag.skew_conditioning import block_size_from_nelems
-```
-
-with:
+Create the file with the full content:
 
 ```python
+"""LieOrthMomentum: Muon-like orthogonalizing optimizer for POET's skew generators
+(q_optimizer=lie_ortho). Standalone sibling of
+src.optim.poet_lie_momentum.LieAlgebraMomentum.
+
+Same Lie-algebra first-moment momentum on oft_R (one or more param groups tagged
+use_skew=True) and the same AdamW branch on everything else, but instead of
+RMS-scaling the direction it ORTHOGONALIZES it (orthogonalize_skew_direction) so the
+rotation planes turn by ~the same angle. Default method='muon' (Muon's quintic NS, a
+band around 1, ~5 steps); method='spectral' is the exact A(-A^2)^{-1/2} variant
+(sigma=1, ~20 steps). See docs/muon_orthogonalizing_optimizer_poet.md.
+
+First-moment-only by default: a second moment is partially undone by orthogonalization
+(docs SS4). State buffers are named lie_m / lie_v so the merge patch's _zero_moments
+cannot reset them -- momentum PERSISTS across the per-step fold. Single-process /
+DP-replicated (no sharded distributed optimizer); integration lives in
+src/optim/poet.py, which reuses _split_poet_lie_params / _build_lie_param_groups.
+"""
+
+from __future__ import annotations
+
+import torch
+
 from src.diag.skew_conditioning import block_size_from_nelems, skew_to_vec, vec_to_skew
 from src.optim.poet_skew_muon import orthogonalize_skew_direction
-```
 
-- [ ] **Step 3b: Add the `__init__` kwargs and validation**
 
-In `LieAlgebraMomentum.__init__`, add these parameters to the signature (after `rms_c: float = 0.2,`, before `adamw_betas=(0.9, 0.95),`):
-
-```python
-        ortho: bool = False,
+class LieOrthMomentum(torch.optim.Optimizer):
+    def __init__(
+        self,
+        params,
+        b1: float = 0.9,
+        b2: float = 0.95,
+        eps: float = 1e-8,
+        v_mode: str = "elementwise",
+        alternating: bool = False,
+        alternate_every: int = 1,
         ortho_c: float = 0.01,
         ortho_method: str = "muon",
         ortho_ns_steps: int = 5,
         ortho_use_second_moment: bool = False,
-```
-
-Then, immediately after the existing two lines
-
-```python
-        self.rms = bool(rms)
-        self.rms_c = float(rms_c)
-```
-
-add:
-
-```python
-        # Muon-like orthogonalizing mode (docs/muon_orthogonalizing_optimizer_poet.md):
-        # orthogonalize the direction so the rotation planes turn by ~the same angle.
-        # method='muon' (default): quintic NS -> band around 1, ~5 steps; 'spectral':
-        # exact A(-A^2)^{-1/2} -> sigma=1, needs ns_steps~20. Mutually exclusive with
-        # rms (both replace the direction->generator transform).
-        self.ortho = bool(ortho)
-        if self.ortho and self.rms:
-            raise ValueError(
-                "lie_ortho and lie_rms are mutually exclusive: both replace the "
-                "direction->generator transform."
-            )
+        adamw_betas=(0.9, 0.95),
+        adamw_eps: float = 1e-8,
+        adamw_wd: float = 0.0,
+    ):
+        if v_mode not in ("scalar", "elementwise"):
+            raise ValueError(f"v_mode must be 'scalar' or 'elementwise', got {v_mode!r}")
         if ortho_method not in ("muon", "spectral"):
             raise ValueError(
                 f"ortho_method must be 'muon' or 'spectral', got {ortho_method!r}"
             )
+        # Alternating single-sided update: write only one side's oft_R per step (out on
+        # even, in on odd), accumulating momentum on BOTH sides.
+        self.alternating = bool(alternating)
+        self.alternate_every = max(1, int(alternate_every))
+        self._alt_step = 0
+        # Orthogonalizing transform (docs/muon_orthogonalizing_optimizer_poet.md):
+        # realized per-plane angle = lr * ortho_c (a band under 'muon', exact under
+        # 'spectral'). First-moment-only unless ortho_use_second_moment.
         self.ortho_c = float(ortho_c)
         self.ortho_method = ortho_method
         self.ortho_ns_steps = int(ortho_ns_steps)
         self.ortho_use_second_moment = bool(ortho_use_second_moment)
+        defaults = dict(
+            lr=0.0,
+            use_skew=False,
+            side=None,
+            b1=b1,
+            b2=b2,
+            eps=eps,
+            v_mode=v_mode,
+            adamw_betas=adamw_betas,
+            adamw_eps=adamw_eps,
+            adamw_wd=adamw_wd,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        active = None
+        if self.alternating:
+            active = "out" if (self._alt_step // self.alternate_every) % 2 == 0 else "in"
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            if group["use_skew"]:
+                side = group["side"]
+                b1, b2, eps, v_mode = group["b1"], group["b2"], group["eps"], group["v_mode"]
+                for p in group["params"]:
+                    g = p.grad
+                    if g is None:
+                        continue
+                    g = g.float()
+                    st = self.state[p]
+                    if "lie_m" not in st:
+                        st["lie_m"] = torch.zeros_like(g)
+                        if v_mode == "scalar":
+                            st["lie_v"] = torch.zeros(g.shape[0], 1, dtype=g.dtype, device=g.device)
+                        else:
+                            st["lie_v"] = torch.zeros_like(g)
+                    m, v = st["lie_m"], st["lie_v"]
+                    # Momentum accumulates on BOTH sides every step ...
+                    m.mul_(b1).add_(g, alpha=1 - b1)
+                    if v_mode == "scalar":
+                        v.mul_(b2).add_(2.0 * (g * g).sum(dim=-1, keepdim=True), alpha=1 - b2)
+                    else:
+                        v.mul_(b2).add_(g * g, alpha=1 - b2)
+                    # ... but only the ACTIVE side's oft_R is written.
+                    if self.alternating and side != active:
+                        continue
+                    # Orthogonalize the DIRECTION (per b x b block) so the planes turn
+                    # by ~the same angle. Scale by ortho_c DIRECTLY (the spectrum is
+                    # ~democratized, so no sqrt(d)/||A||, docs SS3). First-moment-only
+                    # by default. Realized per-plane angle = lr * ortho_c.
+                    A_dir = -m / (v.sqrt() + eps) if self.ortho_use_second_moment else -m
+                    bsz = block_size_from_nelems(A_dir.shape[1])
+                    X = orthogonalize_skew_direction(
+                        vec_to_skew(A_dir, bsz),
+                        method=self.ortho_method,
+                        ns_steps=self.ortho_ns_steps,
+                    )
+                    gen = skew_to_vec(self.ortho_c * X, bsz)  # (n_blocks, n_elems)
+                    p.add_(gen.to(p.dtype), alpha=lr)
+            else:
+                beta1, beta2 = group["adamw_betas"]
+                aeps, wd = group["adamw_eps"], group["adamw_wd"]
+                for p in group["params"]:
+                    g = p.grad
+                    if g is None:
+                        continue
+                    st = self.state[p]
+                    if "step" not in st:
+                        st["step"] = 0
+                        st["moment1"] = torch.zeros_like(g)
+                        st["moment2"] = torch.zeros_like(g)
+                    st["step"] += 1
+                    m1, m2 = st["moment1"], st["moment2"]
+                    m1.lerp_(g, 1 - beta1)
+                    m2.lerp_(g.square(), 1 - beta2)
+                    update = m1 / (aeps + m2.sqrt())
+                    bc1 = 1 - beta1 ** st["step"]
+                    bc2 = 1 - beta2 ** st["step"]
+                    scale = bc1 / bc2**0.5
+                    if wd != 0:
+                        p.mul_(1 - lr * wd)
+                    p.add_(update, alpha=-lr / scale)
+        if self.alternating:
+            self._alt_step += 1
+        return loss
 ```
 
-- [ ] **Step 3c: Add the `ortho` branch in `step`**
+- [ ] **Step 4: Run the optimizer tests to verify they pass**
 
-In `LieAlgebraMomentum.step`, replace this block (currently lines ~161-173):
+Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -v`
+Expected: all pass (Task 1 + Task 2 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/optim/poet_lie_orth.py tests/unit/test_poet_lie_orth.py
+git commit -m "feat(poet): add standalone LieOrthMomentum orthogonalizing optimizer"
+```
+
+---
+
+## Task 3: Select `LieOrthMomentum` via `q_optimizer=lie_ortho` in the builder
+
+Route `q_optimizer=lie_ortho` to the existing shared lie builder, and branch there to construct `LieOrthMomentum` instead of `LieAlgebraMomentum`. The builder's param split, group build, `init_state_fn`, and Megatron wrapping are unchanged (both classes use `lie_m`/`lie_v` buffers). Not CPU-unit-testable (needs Megatron handles); verification is `py_compile` plus the downstream arg tests (Tasks 5-6) and the GPU smoke (Task 8).
+
+**Files:**
+- Modify: `src/optim/poet.py` (dispatch ~line 644; the `optimizer = LieAlgebraMomentum(...)` construction ~lines 585-598)
+
+- [ ] **Step 1: Route `lie_ortho` to the shared builder**
+
+In `src/optim/poet.py`, change the dispatch (currently ~line 644):
 
 ```python
-                    A = -m / (v.sqrt() + eps)
-                    if self.rms:
-                        # Stage 2 (W-free), PER BLOCK: normalize each block's
-                        # generator so its per-plane angle is dimension-consistent.
-                        # dim_const = sqrt(block_size); block_norm reduces over the
-                        # n_elems axis only -> alpha is (n_blocks, 1). Identical to
-                        # the old global formula when n_blocks == 1.
-                        bsz = block_size_from_nelems(A.shape[1])
-                        dim_const = bsz**0.5
-                        block_norm = torch.linalg.norm(A, dim=1, keepdim=True)
-                        alpha = self.rms_c * dim_const / (block_norm + eps)
-                        A = A * alpha
-                    p.add_(A.to(p.dtype), alpha=lr)  # p born at 0 -> p = lr*(alpha)A
+    if getattr(config, "poet_q_optimizer", "adam") == "lie_algebra":
+        return get_megatron_poet_lie_momentum_optimizer(
+```
+
+to:
+
+```python
+    if getattr(config, "poet_q_optimizer", "adam") in ("lie_algebra", "lie_ortho"):
+        return get_megatron_poet_lie_momentum_optimizer(
+```
+
+- [ ] **Step 2: Branch the optimizer construction**
+
+In `get_megatron_poet_lie_momentum_optimizer`, replace the existing construction (currently ~lines 585-598):
+
+```python
+    optimizer = LieAlgebraMomentum(
+        param_groups,
+        b1=getattr(config, "poet_lie_b1", 0.9),
+        b2=getattr(config, "poet_lie_b2", 0.95),
+        eps=getattr(config, "poet_lie_eps", 1e-8),
+        v_mode=getattr(config, "poet_lie_v_mode", "elementwise"),
+        alternating=getattr(config, "poet_lie_alternating", False),
+        alternate_every=getattr(config, "poet_lie_alternate_every", 1),
+        rms=getattr(config, "poet_lie_rms", False),
+        rms_c=getattr(config, "poet_lie_rms_c", 0.2),
+        adamw_betas=(config.adam_beta1, config.adam_beta2),
+        adamw_eps=config.adam_eps,
+        adamw_wd=config.weight_decay,
+    )
 ```
 
 with:
 
 ```python
-                    if self.ortho:
-                        # Muon-like: orthogonalize the DIRECTION (per b x b block) so
-                        # the rotation planes turn by ~the same angle. The spectrum is
-                        # ~democratized, so we scale by ortho_c DIRECTLY (no sqrt(d) /
-                        # ||A||, docs SS3): ortho_c is the (nominal) per-plane angle --
-                        # exact under method='spectral', a band ~[0.7,1.1]*c under
-                        # 'muon'. First-moment-only by default (a 2nd moment is
-                        # partially undone by ortho, docs SS4). Realized angle ~ lr*c.
-                        A_dir = -m / (v.sqrt() + eps) if self.ortho_use_second_moment else -m
-                        bsz = block_size_from_nelems(A_dir.shape[1])
-                        X = orthogonalize_skew_direction(
-                            vec_to_skew(A_dir, bsz),
-                            method=self.ortho_method,
-                            ns_steps=self.ortho_ns_steps,
-                        )
-                        gen = skew_to_vec(self.ortho_c * X, bsz)  # (n_blocks, n_elems)
-                        p.add_(gen.to(p.dtype), alpha=lr)
-                    else:
-                        A = -m / (v.sqrt() + eps)
-                        if self.rms:
-                            # Stage 2 (W-free), PER BLOCK: normalize each block's
-                            # generator so its per-plane angle is dimension-consistent.
-                            # dim_const = sqrt(block_size); block_norm reduces over the
-                            # n_elems axis only -> alpha is (n_blocks, 1). Identical to
-                            # the old global formula when n_blocks == 1.
-                            bsz = block_size_from_nelems(A.shape[1])
-                            dim_const = bsz**0.5
-                            block_norm = torch.linalg.norm(A, dim=1, keepdim=True)
-                            alpha = self.rms_c * dim_const / (block_norm + eps)
-                            A = A * alpha
-                        p.add_(A.to(p.dtype), alpha=lr)  # p born at 0 -> p = lr*(alpha)A
+    shared_kwargs = dict(
+        b1=getattr(config, "poet_lie_b1", 0.9),
+        b2=getattr(config, "poet_lie_b2", 0.95),
+        eps=getattr(config, "poet_lie_eps", 1e-8),
+        v_mode=getattr(config, "poet_lie_v_mode", "elementwise"),
+        alternating=getattr(config, "poet_lie_alternating", False),
+        alternate_every=getattr(config, "poet_lie_alternate_every", 1),
+        adamw_betas=(config.adam_beta1, config.adam_beta2),
+        adamw_eps=config.adam_eps,
+        adamw_wd=config.weight_decay,
+    )
+    if getattr(config, "poet_q_optimizer", "lie_algebra") == "lie_ortho":
+        from src.optim.poet_lie_orth import LieOrthMomentum
+
+        logger.info(
+            "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s",
+            getattr(config, "poet_lie_ortho_method", "muon"),
+            getattr(config, "poet_lie_ortho_c", 0.01),
+            getattr(config, "poet_lie_ortho_ns_steps", 5),
+            getattr(config, "poet_lie_ortho_use_second_moment", False),
+        )
+        optimizer = LieOrthMomentum(
+            param_groups,
+            ortho_c=getattr(config, "poet_lie_ortho_c", 0.01),
+            ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
+            ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
+            ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
+            **shared_kwargs,
+        )
+    else:
+        optimizer = LieAlgebraMomentum(
+            param_groups,
+            rms=getattr(config, "poet_lie_rms", False),
+            rms_c=getattr(config, "poet_lie_rms_c", 0.2),
+            **shared_kwargs,
+        )
 ```
 
-- [ ] **Step 4: Run the optimizer tests + the whole new file to verify pass**
-
-Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_orth.py -v`
-Expected: all pass (Task 1 + Task 2 tests).
-
-Also confirm the RMS path is untouched:
-Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_poet_lie_momentum.py -v`
-Expected: all pass (unchanged behavior).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/optim/poet_lie_momentum.py tests/unit/test_poet_lie_orth.py
-git commit -m "feat(poet): add ortho mode to LieAlgebraMomentum (muon-band / spectral direction)"
-```
-
----
-
-## Task 3: Wire the new knobs into the optimizer builder
-
-`get_megatron_poet_lie_momentum_optimizer` must read `config.poet_lie_ortho*` and pass to `LieAlgebraMomentum`. This builder needs Megatron handles, so it is not CPU-unit-testable; verification is `py_compile` plus the downstream arg-plumbing tests (Tasks 5-6) and the GPU smoke (Task 8).
-
-**Files:**
-- Modify: `src/optim/poet.py` (`get_megatron_poet_lie_momentum_optimizer`, the log call ~lines 563-578 and the `LieAlgebraMomentum(...)` call ~lines 585-598)
-
-- [ ] **Step 1: Extend the log line**
-
-In `src/optim/poet.py`, in the `logger.info(...)` call inside `get_megatron_poet_lie_momentum_optimizer`, change the format string ending `"rms=%s, rms_c=%s)"` to `"rms=%s, rms_c=%s, ortho=%s, ortho_c=%s, ortho_method=%s)"` and append three args after the existing `getattr(config, "poet_lie_rms_c", 0.2),` line:
-
-```python
-        getattr(config, "poet_lie_ortho", False),
-        getattr(config, "poet_lie_ortho_c", 0.01),
-        getattr(config, "poet_lie_ortho_method", "muon"),
-```
-
-- [ ] **Step 2: Pass the new kwargs to the optimizer**
-
-In the same function, in the `optimizer = LieAlgebraMomentum(...)` constructor call, add after `rms_c=getattr(config, "poet_lie_rms_c", 0.2),`:
-
-```python
-        ortho=getattr(config, "poet_lie_ortho", False),
-        ortho_c=getattr(config, "poet_lie_ortho_c", 0.01),
-        ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
-        ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
-        ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
-```
+(The `from src.optim.poet_lie_momentum import (LieAlgebraMomentum, _build_lie_param_groups, _split_poet_lie_params)` import already at the top of this function stays; `LieOrthMomentum` is imported lazily in the branch.)
 
 - [ ] **Step 3: Verify the module still compiles**
 
-Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m py_compile src/optim/poet.py && echo OK`
-Expected: `OK` (no syntax errors).
+Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m py_compile src/optim/poet.py src/optim/poet_lie_orth.py && echo OK`
+Expected: `OK`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add src/optim/poet.py
-git commit -m "feat(poet): thread lie_ortho config knobs into the Lie-momentum builder"
+git commit -m "feat(poet): select LieOrthMomentum via q_optimizer=lie_ortho in the builder"
 ```
 
 ---
 
-## Task 4: argparse flags
+## Task 4: argparse (q_optimizer choice + knob flags)
 
 **Files:**
-- Modify: `launchers/pretrain_gpt_slm.py` (`add_slm_args`, after the `--poet-lie-rms-c` line ~91)
+- Modify: `launchers/pretrain_gpt_slm.py` (`add_slm_args`: the `--poet-q-optimizer` choices ~line 71, and after `--poet-lie-rms-c` ~line 91)
 - Test: `tests/unit/test_pretrain_gpt_slm.py` (append)
 
 - [ ] **Step 1: Write the failing test**
@@ -512,31 +619,30 @@ git commit -m "feat(poet): thread lie_ortho config knobs into the Lie-momentum b
 Append to `tests/unit/test_pretrain_gpt_slm.py`:
 
 ```python
-def test_add_slm_args_accepts_lie_ortho_flags():
+def test_add_slm_args_accepts_lie_ortho():
     parser = argparse.ArgumentParser()
     add_slm_args(parser)
     args = parser.parse_args(
         [
             "--slm-config-path", "x.yaml",
-            "--poet-lie-ortho",
+            "--poet-q-optimizer", "lie_ortho",
             "--poet-lie-ortho-c", "0.02",
             "--poet-lie-ortho-method", "spectral",
             "--poet-lie-ortho-ns-steps", "20",
             "--poet-lie-ortho-use-second-moment",
         ]
     )
-    assert args.poet_lie_ortho is True
+    assert args.poet_q_optimizer == "lie_ortho"
     assert args.poet_lie_ortho_c == 0.02
     assert args.poet_lie_ortho_method == "spectral"
     assert args.poet_lie_ortho_ns_steps == 20
     assert args.poet_lie_ortho_use_second_moment is True
 
 
-def test_lie_ortho_flags_default_off():
+def test_lie_ortho_knobs_default():
     parser = argparse.ArgumentParser()
     add_slm_args(parser)
     args = parser.parse_args(["--slm-config-path", "x.yaml"])
-    assert args.poet_lie_ortho is False
     assert args.poet_lie_ortho_c == 0.01
     assert args.poet_lie_ortho_method == "muon"
     assert args.poet_lie_ortho_ns_steps == 5
@@ -546,18 +652,37 @@ def test_lie_ortho_flags_default_off():
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_pretrain_gpt_slm.py -k lie_ortho -v`
-Expected: FAIL with `unrecognized arguments: --poet-lie-ortho`.
+Expected: FAIL — `argument --poet-q-optimizer: invalid choice: 'lie_ortho'`.
 
-- [ ] **Step 3: Add the argparse flags**
+- [ ] **Step 3a: Add `lie_ortho` to the q_optimizer choices**
 
-In `launchers/pretrain_gpt_slm.py`, immediately after the line `group.add_argument("--poet-lie-rms-c", type=float, default=0.2)` (~line 91), insert:
+In `launchers/pretrain_gpt_slm.py`, change (~line 70-72):
 
 ```python
-    # Muon-like orthogonalizing variant (docs/muon_orthogonalizing_optimizer_poet.md):
-    # orthogonalize the skew direction so the planes turn by ~the same angle (= lr*c).
-    # Sibling of --poet-lie-rms; the two are exclusive. method='muon' (quintic NS,
+    group.add_argument(
+        "--poet-q-optimizer", choices=["adam", "muon", "lie_algebra"], default="adam"
+    )
+```
+
+to:
+
+```python
+    group.add_argument(
+        "--poet-q-optimizer",
+        choices=["adam", "muon", "lie_algebra", "lie_ortho"],
+        default="adam",
+    )
+```
+
+- [ ] **Step 3b: Add the knob flags**
+
+Immediately after the line `group.add_argument("--poet-lie-rms-c", type=float, default=0.2)` (~line 91), insert:
+
+```python
+    # Muon-like orthogonalizing optimizer (q_optimizer=lie_ortho; see
+    # docs/muon_orthogonalizing_optimizer_poet.md). Orthogonalize the skew direction
+    # so the planes turn by ~the same angle (= lr*ortho_c). method='muon' (quintic NS,
     # band, ~5 steps) | 'spectral' (exact A(-A^2)^-1/2, sigma=1, needs ~20 steps).
-    group.add_argument("--poet-lie-ortho", action="store_true")
     group.add_argument("--poet-lie-ortho-c", type=float, default=0.01)
     group.add_argument(
         "--poet-lie-ortho-method", choices=["muon", "spectral"], default="muon"
@@ -575,31 +700,32 @@ Expected: 2 passed.
 
 ```bash
 git add launchers/pretrain_gpt_slm.py tests/unit/test_pretrain_gpt_slm.py
-git commit -m "feat(poet): add --poet-lie-ortho* argparse flags"
+git commit -m "feat(poet): add lie_ortho q_optimizer choice + --poet-lie-ortho-* flags"
 ```
 
 ---
 
 ## Task 5: Emit the flags from the experiment YAML (`megatron_args.py`)
 
+The `q_optimizer` value already flows through `--poet-q-optimizer` (existing line `poet.get("q_optimizer", "adam")`). Add the three value-carrying knobs (they are emitted unconditionally, like `--poet-lie-rms-c`; harmless when `q_optimizer != lie_ortho`) and the one store_true.
+
 **Files:**
-- Modify: `src/utils/megatron_args.py` (`_optimizer_args`, `kind == "poet"`: add to the `poet_args` list ~line 312, and the store_true block ~line 332)
+- Modify: `src/utils/megatron_args.py` (`_optimizer_args`, `kind == "poet"`: the `poet_args` list ~line 312, and the store_true block ~line 332)
 - Test: `tests/unit/test_megatron_args.py` (append)
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/unit/test_megatron_args.py` (the `_poet_cfg` helper and `_optimizer_args` are already imported/defined in this file):
+Append to `tests/unit/test_megatron_args.py`:
 
 ```python
-def test_poet_argv_emits_lie_ortho():
+def test_poet_argv_emits_lie_ortho_knobs():
     from src.utils.megatron_args import _optimizer_args
 
     args = _optimizer_args(
         _poet_cfg(
             {
                 "block_count": 1,
-                "q_optimizer": "lie_algebra",
-                "lie_ortho": True,
+                "q_optimizer": "lie_ortho",
                 "lie_ortho_c": 0.02,
                 "lie_ortho_method": "spectral",
                 "lie_ortho_ns_steps": 20,
@@ -607,18 +733,17 @@ def test_poet_argv_emits_lie_ortho():
             }
         )
     )
-    assert "--poet-lie-ortho" in args
+    assert args[args.index("--poet-q-optimizer") + 1] == "lie_ortho"
     assert args[args.index("--poet-lie-ortho-c") + 1] == "0.02"
     assert args[args.index("--poet-lie-ortho-method") + 1] == "spectral"
     assert args[args.index("--poet-lie-ortho-ns-steps") + 1] == "20"
     assert "--poet-lie-ortho-use-second-moment" in args
 
 
-def test_poet_argv_omits_lie_ortho_by_default():
+def test_poet_argv_lie_ortho_defaults():
     from src.utils.megatron_args import _optimizer_args
 
     args = _optimizer_args(_poet_cfg({"block_size": 256}))
-    assert "--poet-lie-ortho" not in args
     assert "--poet-lie-ortho-use-second-moment" not in args
     assert args[args.index("--poet-lie-ortho-c") + 1] == "0.01"
     assert args[args.index("--poet-lie-ortho-method") + 1] == "muon"
@@ -631,7 +756,7 @@ Expected: FAIL — `--poet-lie-ortho-c` not in args (`ValueError: ... is not in 
 
 - [ ] **Step 3a: Add the value-carrying flags to `poet_args`**
 
-In `src/utils/megatron_args.py`, in the `kind == "poet"` block, inside the `poet_args = [ ... ]` list, immediately after the two lines:
+In `src/utils/megatron_args.py`, inside the `poet_args = [ ... ]` list, immediately after:
 
 ```python
             "--poet-lie-rms-c",
@@ -649,9 +774,9 @@ insert:
             poet.get("lie_ortho_ns_steps", 5),
 ```
 
-- [ ] **Step 3b: Add the store_true flags**
+- [ ] **Step 3b: Add the store_true flag**
 
-In the same block, immediately after:
+Immediately after:
 
 ```python
         # store_true: enable Stage 2 RMS scaling (W-free) for q_optimizer=lie_algebra.
@@ -662,9 +787,7 @@ In the same block, immediately after:
 insert:
 
 ```python
-        # store_true: Muon-like orthogonalizing variant for q_optimizer=lie_algebra.
-        if poet.get("lie_ortho", False):
-            poet_args.append("--poet-lie-ortho")
+        # store_true: first-vs-second moment for the lie_ortho optimizer.
         if poet.get("lie_ortho_use_second_moment", False):
             poet_args.append("--poet-lie-ortho-use-second-moment")
 ```
@@ -678,7 +801,7 @@ Expected: new tests pass; existing poet tests still pass.
 
 ```bash
 git add src/utils/megatron_args.py tests/unit/test_megatron_args.py
-git commit -m "feat(poet): emit --poet-lie-ortho* argv from optim.poet.lie_ortho*"
+git commit -m "feat(poet): emit --poet-lie-ortho-* argv from optim.poet.lie_ortho_*"
 ```
 
 ---
@@ -694,7 +817,7 @@ git commit -m "feat(poet): emit --poet-lie-ortho* argv from optim.poet.lie_ortho
 Append to `tests/unit/test_patch_poet_optimizer_setup.py` (it already imports `importlib`, `sys`, `types` and defines `_reset_for_tests`):
 
 ```python
-def test_get_config_copies_lie_ortho_flags(monkeypatch):
+def test_get_config_copies_lie_ortho_knobs(monkeypatch):
     _reset_for_tests()
     sys.modules.pop("src.patches.poet_optimizer_setup", None)
     patch_mod = importlib.import_module("src.patches.poet_optimizer_setup")
@@ -728,14 +851,14 @@ def test_get_config_copies_lie_ortho_flags(monkeypatch):
         poet_block_size=256,
         poet_init_type="normalized",
         poet_mup_alpha=1.0,
-        poet_lie_ortho=True,
+        poet_q_optimizer="lie_ortho",
         poet_lie_ortho_c=0.02,
         poet_lie_ortho_method="spectral",
         poet_lie_ortho_ns_steps=20,
         poet_lie_ortho_use_second_moment=True,
     )
     cfg, _ = fake_training.get_megatron_optimizer_config(args)
-    assert cfg.poet_lie_ortho is True
+    assert cfg.poet_q_optimizer == "lie_ortho"
     assert cfg.poet_lie_ortho_c == 0.02
     assert cfg.poet_lie_ortho_method == "spectral"
     assert cfg.poet_lie_ortho_ns_steps == 20
@@ -745,14 +868,13 @@ def test_get_config_copies_lie_ortho_flags(monkeypatch):
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_patch_poet_optimizer_setup.py -k lie_ortho -v`
-Expected: FAIL with `AttributeError: 'types.SimpleNamespace' object has no attribute 'poet_lie_ortho'`.
+Expected: FAIL with `AttributeError: 'types.SimpleNamespace' object has no attribute 'poet_lie_ortho_c'`.
 
 - [ ] **Step 3: Add the config copies**
 
 In `src/patches/poet_optimizer_setup.py`, in `_wrapped_get_config`, immediately after the line `config.poet_lie_rms_c = getattr(args, "poet_lie_rms_c", 0.2)`, insert:
 
 ```python
-        config.poet_lie_ortho = getattr(args, "poet_lie_ortho", False)
         config.poet_lie_ortho_c = getattr(args, "poet_lie_ortho_c", 0.01)
         config.poet_lie_ortho_method = getattr(args, "poet_lie_ortho_method", "muon")
         config.poet_lie_ortho_ns_steps = getattr(args, "poet_lie_ortho_ns_steps", 5)
@@ -760,6 +882,8 @@ In `src/patches/poet_optimizer_setup.py`, in `_wrapped_get_config`, immediately 
             args, "poet_lie_ortho_use_second_moment", False
         )
 ```
+
+(The `config.poet_q_optimizer = getattr(args, "poet_q_optimizer", "adam")` copy already exists, so `lie_ortho` selection is already threaded.)
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -770,7 +894,7 @@ Expected: all pass.
 
 ```bash
 git add src/patches/poet_optimizer_setup.py tests/unit/test_patch_poet_optimizer_setup.py
-git commit -m "feat(poet): copy poet_lie_ortho* args into the optimizer config"
+git commit -m "feat(poet): copy poet_lie_ortho_* args into the optimizer config"
 ```
 
 ---
@@ -796,9 +920,7 @@ def test_poet_lie_orth_experiment_yaml():
     root = Path(__file__).resolve().parents[2]
     cfg = OmegaConf.load(root / "configs/experiments/optim/poet_lie_orth.yaml")
     assert cfg.experiment.name == "poet_lie_orth"
-    assert cfg.optim.poet.q_optimizer == "lie_algebra"
-    assert cfg.optim.poet.lie_ortho is True
-    assert cfg.optim.poet.lie_rms is False
+    assert cfg.optim.poet.q_optimizer == "lie_ortho"
     assert cfg.optim.poet.lie_ortho_method == "muon"
     assert cfg.optim.poet.lie_ortho_c == 4
 ```
@@ -808,8 +930,7 @@ Append to `tests/unit/test_train_scripts.py`:
 ```python
 def test_poet_lie_orth_script_supports_llama3():
     proc = _run("train_poet_lie_orth.sh", "llama3")
-    assert "--poet-q-optimizer" in proc.stdout and "lie_algebra" in proc.stdout
-    assert "--poet-lie-ortho" in proc.stdout
+    assert "--poet-q-optimizer" in proc.stdout and "lie_ortho" in proc.stdout
     assert "--poet-lie-ortho-c" in proc.stdout
     assert "--poet-lie-ortho-method" in proc.stdout
 ```
@@ -825,35 +946,34 @@ Create `configs/experiments/optim/poet_lie_orth.yaml`:
 
 ```yaml
 # @package _global_
-# poet_lie_orth: poet_lie + Muon-like orthogonalizing direction transform (the
-# sibling of poet_lie_rms). See docs/muon_orthogonalizing_optimizer_poet.md.
+# poet_lie_orth: the standalone Muon-like orthogonalizing optimizer
+# (q_optimizer=lie_ortho), sibling of poet_lie_rms. See
+# docs/muon_orthogonalizing_optimizer_poet.md.
 #
-# Identical Lie-momentum pipeline as poet_lie_rms (single-step, block_count=1,
-# reinit_period=-1, cayley, head-aligned) EXCEPT the direction->generator step:
-# instead of RMS scaling, orthogonalize the per-block skew direction so the
-# rotation planes turn by ~the same angle. lie_rms is OFF; lie_ortho is ON (the
-# two are mutually exclusive). First-moment-only by default (a second moment is
-# partially undone by orthogonalization).
+# Same single-step Lie-momentum stack as poet_lie_rms (block_count=1, merge_period=1,
+# reinit_period=-1, cayley, head-aligned) but the direction->generator step
+# orthogonalizes the per-block skew direction instead of RMS-scaling it, so the
+# rotation planes turn by ~the same angle. First-moment-only by default.
 #
 # Default method 'muon' = Muon's quintic Newton-Schulz (a BAND around 1, ~5 steps,
 # cheap). 'spectral' = exact A(-A^2)^-1/2 (sigma=1) but needs lie_ortho_ns_steps~20.
 #
 # Angle convention: realized per-plane angle = group_lr * lie_ortho_c (like the rms
 # path's lr * rms_c). lr=0.003, lie_ortho_c=4 -> ~0.012 rad/plane, matching the rms
-# "best" run for a fair head-to-head. Under method=muon, c is NOMINAL (the band
-# gives ~0.75-1.0x that angle, input-dependent); under spectral it is exact.
+# "best" run for a fair head-to-head. Under method=muon, c is NOMINAL (band gives
+# ~0.75-1.0x that angle, input-dependent); under spectral it is exact.
 experiment:
   name: poet_lie_orth
   family: optim
   description: |
-    POET x Muon: orthogonalize the Lie-algebra momentum direction so the rotation
-    planes turn by ~the same angle (discards the gradient's relative per-plane
-    magnitudes, keeps only the subspace). Default method=muon (Muon's quintic, a
-    band around 1, ~5 steps); method=spectral is the exact sigma=1 variant.
-    Sibling of poet_lie_rms; same single-step POET stack (merge_period=1,
-    block_count=1, reinit_period=-1, cayley). Run head-to-head vs poet_lie_rms to
-    test whether relative per-plane angles are signal or noise for rotational
-    updates (docs SS7).
+    POET x Muon: a standalone optimizer (q_optimizer=lie_ortho) that orthogonalizes
+    the Lie-algebra momentum direction so the rotation planes turn by ~the same angle
+    (discards the gradient's relative per-plane magnitudes, keeps only the subspace).
+    Default method=muon (Muon's quintic, a band around 1, ~5 steps); method=spectral
+    is the exact sigma=1 variant. Same single-step POET stack as poet_lie_rms
+    (merge_period=1, block_count=1, reinit_period=-1, cayley). Run head-to-head vs
+    poet_lie_rms to test whether relative per-plane angles are signal or noise for
+    rotational updates (docs SS7).
   references:
     - "POET"
     - "Muon"
@@ -884,18 +1004,16 @@ optim:
     scale: 0.5
     use_poet_adam: false
     parameterization: cayley
-    q_optimizer: lie_algebra
+    q_optimizer: lie_ortho       # selects the standalone LieOrthMomentum optimizer
     lie_b1: 0.9
     lie_b2: 0.95
     lie_eps: 1.0e-8
     lie_v_mode: elementwise
-    lie_rms: false             # OFF: ortho replaces the RMS-norm transform
-    lie_ortho: true            # Muon-like: equalize per-plane angles
-    lie_ortho_c: 4             # nominal per-plane angle; realized angle = lr * c
-    lie_ortho_method: muon     # 'muon' (quintic NS band, ~5 steps) | 'spectral' (exact, ns~20)
-    lie_ortho_ns_steps: 5      # spectral needs ~20; muon plateaus by ~5
+    lie_ortho_c: 4               # nominal per-plane angle; realized angle = lr * c
+    lie_ortho_method: muon       # 'muon' (quintic NS band, ~5 steps) | 'spectral' (exact, ns~20)
+    lie_ortho_ns_steps: 5        # spectral needs ~20; muon plateaus by ~5
     lie_ortho_use_second_moment: false  # first-moment-only by default (docs SS4)
-    head_aligned_attn: true    # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
+    head_aligned_attn: true      # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
     train_output_rotation: true
 
 base:
@@ -913,10 +1031,10 @@ Create `scripts/train_poet_lie_orth.sh` (copy of `scripts/train_poet_lie_rms.sh`
 set -euo pipefail
 
 # poet_lie_orth variant: same harness as train_poet_lie_rms.sh, but uses
-# experiment=optim/poet_lie_orth — POET x Muon orthogonalizing optimizer.
-# Instead of the RMS-norm transform, it orthogonalizes the Lie-algebra momentum
-# direction so the rotation planes turn by ~the same angle (= lr*lie_ortho_c).
-# Single-step (merge_period=1), reinit_period=-1, block_count=1. "$@" override wins.
+# experiment=optim/poet_lie_orth — the standalone POET x Muon orthogonalizing
+# optimizer (q_optimizer=lie_ortho). Instead of the RMS-norm transform, it
+# orthogonalizes the Lie-algebra momentum direction so the planes turn by ~the same
+# angle (= lr*lie_ortho_c). Single-step, reinit_period=-1, block_count=1. "$@" wins.
 
 # torchtitan is AdamW-only in milestone 1; reject --backend torchtitan here so the
 # same flag fails fast on this non-AdamW wrapper (see scripts/train_adam.sh).
@@ -1014,16 +1132,16 @@ Expected: `OK`.
 The `experiment-doc-exists` hook (`tools/check_experiment_docs.py`) fails the commit unless `docs/experiments/poet_lie_orth.md` exists. Create it:
 
 ```markdown
-# poet_lie_orth — Lie momentum + Muon-like orthogonalizing transform
+# poet_lie_orth — standalone Muon-like orthogonalizing optimizer
 
-Sibling of [`poet_lie_rms`](./poet_lie_rms.md). Same single-step POET Lie-momentum
-stack (`q_optimizer=lie_algebra`, `merge_period=1`, `block_count=1`,
-`reinit_period=-1`, `cayley`, head-aligned), but the direction→generator transform
-is **orthogonalization** instead of RMS scaling, per
+Sibling of [`poet_lie_rms`](./poet_lie_rms.md): the standalone `LieOrthMomentum`
+optimizer (`q_optimizer=lie_ortho`). Same single-step POET Lie-momentum stack
+(`merge_period=1`, `block_count=1`, `reinit_period=-1`, `cayley`, head-aligned), but
+the direction→generator transform is **orthogonalization** instead of RMS scaling, per
 [docs/muon_orthogonalizing_optimizer_poet.md](../muon_orthogonalizing_optimizer_poet.md).
 
-After the (first-moment) Lie direction `A`, the optimizer orthogonalizes each
-`b×b` skew block and scales by `c`, so the rotation planes turn by ~the same angle:
+After the (first-moment) Lie direction `A`, the optimizer orthogonalizes each `b×b`
+skew block and scales by `c`, so the rotation planes turn by ~the same angle:
 
 ```
 X     = orthogonalize(A)          # planes' singular values driven toward 1
@@ -1031,21 +1149,19 @@ oft_R = lr · c · X                # realized per-plane angle ~ lr · lie_ortho
 ```
 
 This discards the gradient's *relative* per-plane magnitudes (keeps only the
-subspace) — Muon's bet, applied to rotational updates. `lie_rms` is OFF (the two
-transforms are mutually exclusive). First-moment-only by default (a second moment
-is partially undone by orthogonalization, docs §4).
+subspace) — Muon's bet, applied to rotational updates. First-moment-only by default
+(a second moment is partially undone by orthogonalization, docs §4).
 
 `lie_ortho_method`:
-- **`muon`** (default) — Muon's quintic Newton–Schulz then re-skew. Democratizes
-  the spectrum into a **band** around 1 (cond ≈ 1.5) in ~5 steps. Cheap; `c` is a
-  *nominal* angle (band ≈ 0.7–1.1× the target).
-- **`spectral`** — exact `A(−A²)^{-1/2}`; drives every singular value to 1 so `c`
-  is exactly the angle. Needs `lie_ortho_ns_steps ≈ 20` (≈4× the cost) and still
-  can't fully equalize a near-rank-deficient direction.
+- **`muon`** (default) — Muon's quintic Newton–Schulz then a `½(X−Xᵀ)` cleanup. NS
+  preserves skew on a skew input; it democratizes the spectrum into a **band** around
+  1 (cond ≈ 1.5) in ~5 steps. Cheap; `c` is a *nominal* angle (band ≈ 0.7–1.1× target).
+- **`spectral`** — exact `A(−A²)^{-1/2}`; drives every singular value to 1 so `c` is
+  exactly the angle. Needs `lie_ortho_ns_steps ≈ 20` (≈4× the cost).
 
-Run head-to-head vs `poet_lie_rms` to test whether the gradient's relative
-per-plane angles are signal or noise for rotational updates (docs §7) — and `muon`
-vs `spectral` to test whether a cheap band is as good as exact equalization.
+Run head-to-head vs `poet_lie_rms` to test whether the gradient's relative per-plane
+angles are signal or noise for rotational updates (docs §7) — and `muon` vs `spectral`
+to test whether a cheap band is as good as exact equalization.
 ```
 
 - [ ] **Step 4: Run to verify both pass**
@@ -1087,14 +1203,14 @@ Expected: all pass. If any fail, fix before continuing — do not proceed past a
 Add an entry at the top of the current section of `CHANGELOG.md` (match the file's existing format):
 
 ```markdown
-- feat(poet): add the Muon-like orthogonalizing optimizer (`q_optimizer=lie_algebra` + `lie_ortho=true`) as a sibling of the Lie-RMS optimizer. Orthogonalizes the skew update direction (`orthogonalize_skew_direction`) so the rotation planes turn by ~the same angle (`= lr * lie_ortho_c`); first-moment-only by default. Default `method=muon` (Muon's quintic Newton–Schulz, a band around 1, ~5 steps); `method=spectral` is the exact `A(-A^2)^{-1/2}` σ=1 variant (~20 steps). New experiment `optim/poet_lie_orth` + `scripts/train_poet_lie_orth.sh` for the head-to-head vs `poet_lie_rms` (docs/muon_orthogonalizing_optimizer_poet.md).
+- feat(poet): add the standalone Muon-like orthogonalizing optimizer `LieOrthMomentum` (`q_optimizer=lie_ortho`), sibling of the Lie-RMS optimizer. Orthogonalizes the skew update direction (`orthogonalize_skew_direction`) so the rotation planes turn by ~the same angle (`= lr * lie_ortho_c`); first-moment-only by default. Default `method=muon` (Muon's quintic Newton–Schulz, a band around 1, ~5 steps; NS preserves skew); `method=spectral` is the exact `A(-A^2)^{-1/2}` σ=1 variant (~20 steps). New experiment `optim/poet_lie_orth` + `scripts/train_poet_lie_orth.sh` for the head-to-head vs `poet_lie_rms` (docs/muon_orthogonalizing_optimizer_poet.md).
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add CHANGELOG.md
-git commit -m "docs(poet): changelog for the lie-orth orthogonalizing optimizer"
+git commit -m "docs(poet): changelog for the standalone lie-orth optimizer"
 ```
 
 - [ ] **Step 4: GPU smoke test — HAND OFF TO THE USER (do NOT run)**
@@ -1107,15 +1223,7 @@ codexlog poet_lie_orth_smoke bash scripts/train_poet_lie_orth.sh llama3 \
   optim.poet.lie_ortho_c=4
 ```
 
-Expected sanity signals (from earlier POET runs): the `[POET] Lie-momentum: ... ortho=True, ortho_c=4.0, ortho_method=muon)` log line appears at startup; step-1/2 run without OOM or NaN; loss decreases. The head-to-head experiment then compares this against the existing `poet_lie_rms_best` run:
-
-```
-codexlog poet_lie_orth_best bash scripts/train_poet_lie_orth.sh llama3 \
-  optim.lr=0.003 \
-  optim.poet.lie_ortho_c=4
-```
-
-Optional second arm — exact equalization (more expensive, σ=1):
+Expected sanity signals (from earlier POET runs): the `[POET] Lie-orth: method=muon, ortho_c=4.0, ...` log line appears at startup; step-1/2 run without OOM or NaN; loss decreases. The head-to-head then compares this against the existing `poet_lie_rms_best` run. Optional second arm — exact equalization (σ=1, more expensive):
 
 ```
 codexlog poet_lie_orth_spectral bash scripts/train_poet_lie_orth.sh llama3 \
@@ -1132,16 +1240,16 @@ codexlog poet_lie_orth_spectral bash scripts/train_poet_lie_orth.sh llama3 \
 | Doc section | Covered by |
 |---|---|
 | §1 one-line idea (equalize plane angles) | Task 1 (democratize spectrum / σ→1) + Task 2 (`ortho_c` = per-plane angle) |
-| §2 composes with pipeline (momentum before ortho, small-angle CNP after) | Task 2 step-branch: orthogonalize `−m` (the momentum *result*), scale by small `ortho_c`, then the existing merge applies CNP/exp. Momentum buffers (`lie_m`) untouched. |
-| §3 RMS folds in for free (spectrum ~uniform ⇒ scale by `c` directly) | Task 1 (orthogonalization flattens the spectrum) + Task 2 (scale by `ortho_c`, no `√b`/`‖A‖_F`). **Note:** exact only under `spectral`; `muon` gives a band, so `c` is nominal (documented). |
+| §2 composes with pipeline (momentum before ortho, small-angle CNP after) | Task 2 `step`: orthogonalize `−m` (the momentum *result*), scale by small `ortho_c`, then the existing merge applies CNP/exp. `lie_m` buffers persist. |
+| §3 scale by `c` directly (no √d/‖A‖) | Task 2 scales by `ortho_c` directly. **Note:** exact only under `spectral`; `muon` gives a band, so `c` is nominal (documented). |
 | §4 per-step update; first-moment-only default | Task 2: `ortho_use_second_moment=False` default ⇒ `A_dir = −m`; flag enables `−m/(√v+eps)`. |
-| §5 orthogonalizing a skew matrix (both methods) | Task 1: `muon` (Muon's quintic + re-skew, the doc's "NS" option, **default**) + `spectral` (`A(−A²)^{-1/2}`, the doc's recommended exact form, opt-in). |
+| §5 orthogonalizing a skew matrix (both methods, NS preserves skew) | Task 1: `muon` (Muon's quintic + cleanup, **default**) + `spectral` (`A(−A²)^{-1/2}`, exact, opt-in). |
 | §6 block-diagonal / per-head | Task 1: `vec_to_skew` yields `(n_blocks, b, b)`, all ops batch over `n_blocks`; Task 2 derives `b` per param. `head_aligned_attn=true` in the YAML. |
 | §7 RMS vs ortho experiment | Task 7: `poet_lie_orth` config + script, `lr=0.003, c=4` mirrors the rms best run; Task 8 head-to-head commands (incl. muon-vs-spectral arm). |
-| §8 summary | Whole plan; `ortho`/`rms` mutual exclusion enforced in Task 2. **Deviation from doc:** doc recommends `spectral` as default; we default to `muon` (cheaper band) per the decision that exact σ=1 is likely too slow and a band may suffice — `spectral` remains available as the stricter ablation. |
+| §8 summary ("a **separate** optimizer") | **Standalone `LieOrthMomentum` class** in its own file, selected by `q_optimizer=lie_ortho` — literally a separate optimizer, per the doc. |
 
 **Placeholder scan:** none — every code step is complete and every command has expected output.
 
-**Numerics provenance:** step counts, tolerances, and band bounds were all measured in the CPU env before writing (muon plateaus by step 5; spectral `max|σ−1| ≤ 0.006` at 20 steps on benign inputs; muon single-step median angle ≈ 0.75–1.04·lr·c, cond < 1.6; spectral single-step σ = lr·c to 1e-6).
+**Numerics provenance:** step counts, tolerances, and band bounds were all measured in the CPU env (NS preserves skew to ~1e-15; muon plateaus by step 5; spectral `max|σ−1| ≤ 0.006` at 20 steps on benign inputs; muon single-step median angle ≈ 0.75–1.04·lr·c, cond < 1.6; spectral single-step σ = lr·c to 1e-6).
 
-**Type/name consistency:** the naming table is used verbatim in every task. Helper `orthogonalize_skew_direction(skew, method, ns_steps, eps, reg)`; optimizer kwargs `ortho/ortho_c/ortho_method/ortho_ns_steps/ortho_use_second_moment`; config/arg `poet_lie_ortho*`; argv `--poet-lie-ortho*`; YAML `lie_ortho*`. Defaults match across argparse (`0.01/muon/5/False`), `getattr` fallbacks in Tasks 3/5/6, and the optimizer signature.
+**Type/name consistency:** the naming table is used verbatim in every task. Class `LieOrthMomentum(params, b1, b2, eps, v_mode, alternating, alternate_every, ortho_c, ortho_method, ortho_ns_steps, ortho_use_second_moment, adamw_*)`; helper `orthogonalize_skew_direction(skew, method, ns_steps, eps, reg)`; selection `q_optimizer=lie_ortho`; config/arg `poet_lie_ortho_*`; argv `--poet-lie-ortho-*`; YAML `lie_ortho_*`. Defaults match across argparse (`0.01/muon/5/False`), `getattr` fallbacks in Tasks 3/5/6, and the optimizer signature.
