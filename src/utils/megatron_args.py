@@ -311,6 +311,12 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.get("lie_alternate_every", 1),
             "--poet-lie-rms-c",
             poet.get("lie_rms_c", 0.2),
+            "--poet-lie-ortho-c",
+            poet.get("lie_ortho_c", 0.01),
+            "--poet-lie-ortho-method",
+            poet.get("lie_ortho_method", "muon"),
+            "--poet-lie-ortho-ns-steps",
+            poet.get("lie_ortho_ns_steps", 5),
             "--adam-beta1",
             optim.betas[0],
             "--adam-beta2",
@@ -331,6 +337,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: enable Stage 2 RMS scaling (W-free) for q_optimizer=lie_algebra.
         if poet.get("lie_rms", False):
             poet_args.append("--poet-lie-rms")
+        # store_true: first-vs-second moment for the lie_ortho optimizer.
+        if poet.get("lie_ortho_use_second_moment", False):
+            poet_args.append("--poet-lie-ortho-use-second-moment")
         # store_true: head-aligned attention rotation (requires unfused q/k/v).
         if poet.get("head_aligned_attn", False):
             poet_args.append("--poet-head-aligned-attn")

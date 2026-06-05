@@ -247,6 +247,37 @@ def test_cosine_scheduler_emits_warmup_fraction_and_min_lr():
     assert "--lr-decay-step-ratio" not in m
 
 
+def test_poet_argv_emits_lie_ortho_knobs():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_count": 1,
+                "q_optimizer": "lie_ortho",
+                "lie_ortho_c": 0.02,
+                "lie_ortho_method": "spectral",
+                "lie_ortho_ns_steps": 20,
+                "lie_ortho_use_second_moment": True,
+            }
+        )
+    )
+    assert args[args.index("--poet-q-optimizer") + 1] == "lie_ortho"
+    assert args[args.index("--poet-lie-ortho-c") + 1] == "0.02"
+    assert args[args.index("--poet-lie-ortho-method") + 1] == "spectral"
+    assert args[args.index("--poet-lie-ortho-ns-steps") + 1] == "20"
+    assert "--poet-lie-ortho-use-second-moment" in args
+
+
+def test_poet_argv_lie_ortho_defaults():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-lie-ortho-use-second-moment" not in args
+    assert args[args.index("--poet-lie-ortho-c") + 1] == "0.01"
+    assert args[args.index("--poet-lie-ortho-method") + 1] == "muon"
+
+
 def test_wsd_scheduler_emits_wsd_flags():
     cfg = _parse_overrides(
         [
