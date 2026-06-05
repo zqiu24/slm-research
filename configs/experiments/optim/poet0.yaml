@@ -52,6 +52,7 @@ optim:
     muon_theta: 0.1
     muon_ns_steps: 5
     muon_momentum: 0.95
+    head_aligned_attn: true   # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
     train_output_rotation: true
 
 base:

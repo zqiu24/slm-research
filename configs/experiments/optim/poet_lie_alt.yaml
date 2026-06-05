@@ -54,6 +54,7 @@ optim:
     lie_v_mode: elementwise   # elementwise (paper Algorithm 1; default, works without RMS-α) | scalar (pipeline doc §3, needs RMS-α to scale)
     lie_alternating: true     # §6: update one side per step (out even / in odd)
     lie_alternate_every: 1    # steps to hold each side before flipping
+    head_aligned_attn: true   # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
     train_output_rotation: true
 
 base:

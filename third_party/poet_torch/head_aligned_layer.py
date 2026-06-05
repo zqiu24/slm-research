@@ -1,19 +1,43 @@
 """HeadAlignedPOETLinear: a POETLinear whose head-structured side is rotated
 per attention head.
 
-One side (the "head side") uses block_size = head_dim with a FIXED identity
-permutation (block j is head j; Psi is NEVER resampled), so the rotation is
-block-diagonal per head with no cross-head mixing and no permutation. The other
-("residual") side is an ordinary POET rotation: block size from
-resid_block_size / resid_block_count, permutation resampled at merge unless
-resid_permute=False. BOTH sides train.
+One side (the "head side") uses block_size = head_dim, so the rotation is
+block-diagonal per head with no cross-head mixing. The other ("residual") side
+is an ordinary block rotation: block size from resid_block_size /
+resid_block_count. BOTH sides train.
 
 head_side="out": query/key/value projections (rows = heads).
 head_side="in" : attention output projection (cols = heads).
 
-Subclasses POETLinear to reuse _build_R / _merge_R / forward / the fused kernels;
-only the constructor (asymmetric per-side block spec + identity head Psi) and
-merge_then_reinitialize (resample the residual side only) differ.
+Permutation-free
+----------------
+The stock POETLinear conjugates each block rotation by a permutation Ψ
+(``permute(x) -> block-rotate -> ... -> permute(y)``) so that, across merge
+cycles, a block-diagonal rotation can mix *different* neuron pairs and build up a
+richer-than-block-diagonal orthogonal transform. That machinery is dead weight
+here:
+
+* The head side is identity by design — block j is *always* head j, never a
+  resampled set of features. That is the whole point of "head-aligned": no
+  cross-head mixing, ever.
+* The residual side, in every deployed config, is a single dense block
+  (``block_count=1``). A permutation conjugating one dense block, ``Ψ R Ψᵀ``, is
+  just another dense orthogonal matrix — Ψ adds no expressivity and nothing to
+  resample.
+
+So neither side needs Ψ. Rather than inherit POETLinear's permute → rotate →
+permute chain (two gathers + their scatter-add backwards per layer per
+microbatch — the single largest cost in the POET fwd/bwd), this subclass
+overrides ``forward`` and ``merge_then_reinitialize`` with permutation-free twins
+(``chain_noperm`` / fold without ``index_select``). The math is exactly the stock
+POET path specialized to identity permutations, so the two stay consistent and
+the fold is still spectrum-preserving.
+
+The ``perm_*`` buffers are still registered as fixed identity (and never
+consulted by the compute path) so the distributed-checkpoint state dict and the
+merge-step broadcast in ``src/patches/poet_merge_step.py`` keep working unchanged.
+``resid_permute`` is accepted for call-site/API parity but is now a no-op: the
+layer is always permutation-free.
 """
 from __future__ import annotations
 
@@ -22,7 +46,87 @@ import os
 import torch
 import torch.nn as nn
 
-from .poet_layer import POETLinear, block_diag_lr_matmul_decoupled
+from .poet_layer import (
+    POETLinear,
+    block_diag_lr_matmul_decoupled,
+    get_weight_poet_decoupled,
+    get_weight_poet_decoupled_exp,
+)
+
+
+def chain_noperm(x, Rin, weight, bias, Rout, bsz_in, bsz_out):
+    """Permutation-free twin of ``chain_layer_x_fast_decoupled``.
+
+    Identical block-rotate → dense matmul → block-rotate chain, but with the two
+    ``PermutationFunction.apply`` gathers (input and output) dropped. Plain ops,
+    so autograd saves the cheap block-rotation activations and ``torch.compile``
+    can fuse it.
+    """
+    leading_shape = x.shape[:-1]
+    Din = x.shape[-1]
+    N = x.numel() // Din
+    rin = Rin.size(0)
+    rout = Rout.size(0)
+
+    xb_r = x.reshape(N, rin, bsz_in).transpose(0, 1)        # [rin, N, b_in]
+    xR = torch.bmm(xb_r, Rin).transpose(0, 1).reshape(N, rin * bsz_in)
+    yb_flat = xR @ weight.t()
+    if bias is not None:
+        yb_flat = yb_flat + bias
+    yb_r = yb_flat.view(N, rout, bsz_out).transpose(0, 1)   # [rout, N, b_out]
+    y = torch.bmm(yb_r, Rout).transpose(0, 1).reshape(*leading_shape, rout * bsz_out)
+    return y
+
+
+def _forward_noperm_eager(
+    x,
+    oft_R_in,
+    oft_R_out,
+    block_size_in,
+    block_size_out,
+    rows_in,
+    cols_in,
+    rows_out,
+    cols_out,
+    weight,
+    bias,
+    mem_efficient_mode,
+    use_exp,
+):
+    """Build the two block rotations then run the permutation-free chain.
+
+    Mirrors POETLinear's ``_forward_core_decoupled_eager`` (same R build, same
+    fast/mem-efficient split) minus the permutation arguments.
+    """
+    if use_exp:
+        R_out, R_in = get_weight_poet_decoupled_exp(
+            oft_R_in, oft_R_out, block_size_in, block_size_out,
+            rows_in, cols_in, rows_out, cols_out,
+        )
+    else:
+        R_out, R_in = get_weight_poet_decoupled(
+            oft_R_in, oft_R_out, block_size_in, block_size_out,
+            rows_in, cols_in, rows_out, cols_out,
+        )
+    if mem_efficient_mode:
+        # Recompute the chain in the backward (saves activation memory). The exp
+        # path and any POET_MEM_EFFICIENT run route here, eagerly.
+        from torch.utils.checkpoint import checkpoint
+
+        y = checkpoint(
+            chain_noperm, x, R_in, weight, bias, R_out, block_size_in, block_size_out,
+            use_reentrant=False,
+        )
+    else:
+        y = chain_noperm(x, R_in, weight, bias, R_out, block_size_in, block_size_out)
+    return y
+
+
+# Compiled (fused) entry used during TRAINING (grad enabled) on the Cayley fast
+# path, matching POETLinear.forward_core_decoupled. mem_efficient_mode/use_exp are
+# only ever passed False here (those branches run eager), so neither the
+# checkpoint nor the matrix_exp branch is traced.
+forward_core_noperm = torch.compile(_forward_noperm_eager, fullgraph=True)
 
 
 class HeadAlignedPOETLinear(POETLinear):
@@ -54,6 +158,8 @@ class HeadAlignedPOETLinear(POETLinear):
         self.out_features = out_features
         self.head_side = head_side
         self.head_dim = head_dim
+        # Accepted for call-site/API parity; the layer is always permutation-free
+        # (see module docstring), so this no longer gates any permutation.
         self.resid_permute = bool(resid_permute)
 
         head_features = out_features if head_side == "out" else in_features
@@ -110,55 +216,48 @@ class HeadAlignedPOETLinear(POETLinear):
         self.register_buffer("rows_out", rows_out.to(torch.int32))
         self.register_buffer("cols_out", cols_out.to(torch.int32))
 
-        # Head side: identity Psi (never resampled). Residual side: random Psi
-        # unless resid_permute=False (then identity, never resampled).
-        out_identity = (head_side == "out") or not self.resid_permute
-        in_identity = (head_side == "in") or not self.resid_permute
-        perm_out = self._make_perm(out_features, out_identity, device)
-        perm_in = self._make_perm(in_features, in_identity, device)
+        # Permutation-free: Ψ is fixed identity on BOTH sides and never consulted
+        # by forward/merge. The buffers are retained (as identity) only so the
+        # checkpoint state dict and the merge-step broadcast stay byte-compatible
+        # with the stock POETLinear layout. inverse(identity) == identity.
+        perm_in = torch.arange(in_features, device=device, dtype=torch.int32)
+        perm_out = torch.arange(out_features, device=device, dtype=torch.int32)
         self.register_buffer("perm_in", perm_in)
         self.register_buffer("perm_out", perm_out)
-        self.register_buffer("perm_in_inv", torch.argsort(perm_in).to(torch.int32))
-        self.register_buffer("perm_out_inv", torch.argsort(perm_out).to(torch.int32))
+        self.register_buffer("perm_in_inv", perm_in.clone())
+        self.register_buffer("perm_out_inv", perm_out.clone())
 
-    @staticmethod
-    def _make_perm(n, identity, device):
-        if identity:
-            return torch.arange(n, device=device, dtype=torch.int32)
-        return torch.randperm(n, device=device).to(torch.int32)
+    def forward(self, x):
+        use_exp = self.parameterization == "exp"
+        # exp builds R via matrix_exp (backward not compile-safe) and the
+        # mem-efficient path wraps the chain in checkpoint() — both run eager.
+        # The Cayley fast path is compiled during training and falls back to the
+        # eager twin for eval (the compiled inference graph trips the same
+        # torch-2.11 Inductor 'op6' bug as the base; see POETLinear.forward).
+        if use_exp or self.mem_efficient_mode:
+            return _forward_noperm_eager(
+                x, self.oft_R_in, self.oft_R_out,
+                self.block_size_in, self.block_size_out,
+                self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+                self.weight, self.bias, self.mem_efficient_mode, use_exp,
+            )
+        core = forward_core_noperm if torch.is_grad_enabled() else _forward_noperm_eager
+        return core(
+            x, self.oft_R_in, self.oft_R_out,
+            self.block_size_in, self.block_size_out,
+            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+            self.weight, self.bias, False, False,
+        )
 
     @torch.no_grad()
     def merge_then_reinitialize(self, reinit_perm: bool = True) -> None:
+        # Permutation-free fold: weight <- (R_in @ Wᵀ @ R_out)ᵀ, then reset the
+        # generators to identity. This is the stock POET fold specialized to
+        # identity Ψ (no index_select, no resample). There is no permutation to
+        # resample, so reinit_perm is accepted for API parity but is a no-op.
         R_out, R_in = self._merge_R()
         W = self.weight.detach().clone()
         tmp = block_diag_lr_matmul_decoupled(R_in, W.t(), R_out)
-        tmp = tmp.index_select(0, self.perm_in)
-        tmp = tmp.index_select(1, self.perm_out)
-        expected = tmp.t()
-
-        # Resample ONLY the residual side, and only when reinit_perm & resid_permute.
-        # The head side keeps its identity Psi forever. When a side does not
-        # resample, re-permute back into the CURRENT layout (stock fold-only path).
-        out_resamples = reinit_perm and self.resid_permute and (self.head_side == "in")
-        in_resamples = reinit_perm and self.resid_permute and (self.head_side == "out")
-        device = self.weight.device
-
-        if out_resamples:
-            new_perm_out = torch.randperm(self.out_features, device=device).to(torch.int32)
-            new_perm_out_inv = torch.argsort(new_perm_out).to(torch.int32)
-        else:
-            new_perm_out, new_perm_out_inv = self.perm_out, self.perm_out_inv
-        if in_resamples:
-            new_perm_in = torch.randperm(self.in_features, device=device).to(torch.int32)
-            new_perm_in_inv = torch.argsort(new_perm_in).to(torch.int32)
-        else:
-            new_perm_in, new_perm_in_inv = self.perm_in, self.perm_in_inv
-
-        expected = expected.index_select(0, new_perm_out_inv).index_select(1, new_perm_in_inv)
-        self.weight.detach().copy_(expected)
-        self.perm_out.copy_(new_perm_out)
-        self.perm_out_inv.copy_(new_perm_out_inv)
-        self.perm_in.copy_(new_perm_in)
-        self.perm_in_inv.copy_(new_perm_in_inv)
+        self.weight.detach().copy_(tmp.t())
         self.oft_R_in.zero_()
         self.oft_R_out.zero_()

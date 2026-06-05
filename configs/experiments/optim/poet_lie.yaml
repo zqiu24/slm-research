@@ -53,6 +53,7 @@ optim:
     lie_b2: 0.95
     lie_eps: 1.0e-8
     lie_v_mode: elementwise   # elementwise (paper Algorithm 1; default, works without RMS-α) | scalar (pipeline doc §3, needs RMS-α to scale)
+    head_aligned_attn: true   # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
     train_output_rotation: true
 
 base:

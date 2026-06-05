@@ -51,6 +51,7 @@ optim:
     lie_v_mode: elementwise
     lie_rms: true             # Stage 2: W-free RMS scaling
     lie_rms_c: 0.2            # RMS target constant (the one new hyperparameter)
+    head_aligned_attn: true   # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
     train_output_rotation: true
 
 base:

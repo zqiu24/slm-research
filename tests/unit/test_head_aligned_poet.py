@@ -24,8 +24,10 @@ def test_constructor_out_head_side_shapes():
     assert layer.oft_R_in.shape == (1, 512 * 511 // 2)
     assert layer.oft_R_in.requires_grad and layer.oft_R_out.requires_grad
     assert layer.weight.requires_grad is False
-    # Head side (out) has identity Psi; residual (in) is a random permutation (resid_permute defaults True).
+    # Permutation-free: both Ψ are fixed identity (head side by design, residual
+    # side because the layer no longer permutes).
     assert torch.equal(layer.perm_out, torch.arange(512, dtype=torch.int32))
+    assert torch.equal(layer.perm_in, torch.arange(512, dtype=torch.int32))
 
 
 def test_constructor_in_head_side_for_output_proj():
@@ -97,8 +99,9 @@ def test_merge_matches_stock_poetlinear_when_state_identical():
     assert torch.count_nonzero(a.oft_R_in) == 0 and torch.count_nonzero(a.oft_R_out) == 0
 
 
-def test_merge_resamples_only_residual_side():
-    """reinit_perm=True resamples the residual perm; the head perm stays identity."""
+def test_merge_is_permutation_free():
+    """The head-aligned merge is permutation-free: BOTH Ψ stay fixed identity even
+    with reinit_perm=True and a multi-block residual (no resampling on either side)."""
     from poet_torch import HeadAlignedPOETLinear
 
     torch.manual_seed(1)
@@ -115,11 +118,11 @@ def test_merge_resamples_only_residual_side():
         layer.weight.copy_(torch.randn_like(layer.weight))
         layer.oft_R_in.normal_(std=1e-2)
         layer.oft_R_out.normal_(std=1e-2)
-    perm_in_before = layer.perm_in.clone()
     layer.merge_then_reinitialize(reinit_perm=True)
-    # Head side (out) Psi stays identity; residual side (in) Psi changes.
-    assert torch.equal(layer.perm_out, torch.arange(512, dtype=torch.int32))
-    assert not torch.equal(layer.perm_in, perm_in_before)
+    ident = torch.arange(512, dtype=torch.int32)
+    assert torch.equal(layer.perm_in, ident) and torch.equal(layer.perm_out, ident)
+    assert torch.equal(layer.perm_in_inv, ident) and torch.equal(layer.perm_out_inv, ident)
+    assert torch.count_nonzero(layer.oft_R_in) == 0 and torch.count_nonzero(layer.oft_R_out) == 0
 
 
 def test_merge_resid_permute_false_never_resamples():

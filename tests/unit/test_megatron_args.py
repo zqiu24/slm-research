@@ -369,8 +369,15 @@ def test_unfuse_flags_default_on_for_all_train_script_experiments():
 
 
 def test_unfuse_can_be_disabled_per_run():
+    # optim/poet now defaults head_aligned_attn=true, which requires unfused q/k/v;
+    # disable it alongside unfuse so this isolates the unfuse-flag plumbing.
     cfg = _parse_overrides(
-        ["experiment=optim/poet", "base.model.unfuse_qkv=false", "base.model.unfuse_fc1=false"]
+        [
+            "experiment=optim/poet",
+            "optim.poet.head_aligned_attn=false",
+            "base.model.unfuse_qkv=false",
+            "base.model.unfuse_fc1=false",
+        ]
     )
     args = build_megatron_args(cfg)
     assert "--unfuse-qkv" not in args
