@@ -228,3 +228,38 @@ def test_add_slm_args_head_aligned_defaults():
     args = parser.parse_args(["--slm-config-path", "x.yaml", "--poet"])
     assert args.poet_head_aligned_attn is False
     assert args.poet_no_head_resid_perm is False
+
+
+def test_add_slm_args_accepts_lie_ortho():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        [
+            "--slm-config-path",
+            "x.yaml",
+            "--poet-q-optimizer",
+            "lie_ortho",
+            "--poet-lie-ortho-c",
+            "0.02",
+            "--poet-lie-ortho-method",
+            "spectral",
+            "--poet-lie-ortho-ns-steps",
+            "20",
+            "--poet-lie-ortho-use-second-moment",
+        ]
+    )
+    assert args.poet_q_optimizer == "lie_ortho"
+    assert args.poet_lie_ortho_c == 0.02
+    assert args.poet_lie_ortho_method == "spectral"
+    assert args.poet_lie_ortho_ns_steps == 20
+    assert args.poet_lie_ortho_use_second_moment is True
+
+
+def test_lie_ortho_knobs_default():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(["--slm-config-path", "x.yaml"])
+    assert args.poet_lie_ortho_c == 0.01
+    assert args.poet_lie_ortho_method == "muon"
+    assert args.poet_lie_ortho_ns_steps == 5
+    assert args.poet_lie_ortho_use_second_moment is False

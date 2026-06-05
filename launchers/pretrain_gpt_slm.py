@@ -68,7 +68,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         default="cayley",
     )
     group.add_argument(
-        "--poet-q-optimizer", choices=["adam", "muon", "lie_algebra"], default="adam"
+        "--poet-q-optimizer",
+        choices=["adam", "muon", "lie_algebra", "lie_ortho"],
+        default="adam",
     )
     group.add_argument("--poet-muon-theta", type=float, default=0.1)
     group.add_argument("--poet-muon-ns-steps", type=int, default=5)
@@ -89,6 +91,14 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # angle is dimension-consistent. alpha = rms_c*sqrt(n_blocks*block_size)/‖A‖.
     group.add_argument("--poet-lie-rms", action="store_true")
     group.add_argument("--poet-lie-rms-c", type=float, default=0.2)
+    # Muon-like orthogonalizing optimizer (q_optimizer=lie_ortho; see
+    # docs/muon_orthogonalizing_optimizer_poet.md). Orthogonalize the skew direction
+    # so the planes turn by ~the same angle (= lr*ortho_c). method='muon' (quintic NS,
+    # band, ~5 steps) | 'spectral' (exact A(-A^2)^-1/2, sigma=1, needs ~20 steps).
+    group.add_argument("--poet-lie-ortho-c", type=float, default=0.01)
+    group.add_argument("--poet-lie-ortho-method", choices=["muon", "spectral"], default="muon")
+    group.add_argument("--poet-lie-ortho-ns-steps", type=int, default=5)
+    group.add_argument("--poet-lie-ortho-use-second-moment", action="store_true")
     # Head-aligned attention rotation (opt-in): q/k/v/o rotate their head-
     # structured side per head (block_size=head_dim, identity Psi, no perm);
     # the residual side stays a normal POET rotation. Requires --unfuse-qkv.
