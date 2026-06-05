@@ -582,20 +582,42 @@ def get_megatron_poet_lie_momentum_optimizer(
     param_groups = _build_lie_param_groups(
         skew_in, skew_out, adamw_params, config.lr, min_lr, scale
     )
-    optimizer = LieAlgebraMomentum(
-        param_groups,
+    shared_kwargs = dict(
         b1=getattr(config, "poet_lie_b1", 0.9),
         b2=getattr(config, "poet_lie_b2", 0.95),
         eps=getattr(config, "poet_lie_eps", 1e-8),
         v_mode=getattr(config, "poet_lie_v_mode", "elementwise"),
         alternating=getattr(config, "poet_lie_alternating", False),
         alternate_every=getattr(config, "poet_lie_alternate_every", 1),
-        rms=getattr(config, "poet_lie_rms", False),
-        rms_c=getattr(config, "poet_lie_rms_c", 0.2),
         adamw_betas=(config.adam_beta1, config.adam_beta2),
         adamw_eps=config.adam_eps,
         adamw_wd=config.weight_decay,
     )
+    if getattr(config, "poet_q_optimizer", "lie_algebra") == "lie_ortho":
+        from src.optim.poet_lie_orth import LieOrthMomentum
+
+        logger.info(
+            "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s",
+            getattr(config, "poet_lie_ortho_method", "muon"),
+            getattr(config, "poet_lie_ortho_c", 0.01),
+            getattr(config, "poet_lie_ortho_ns_steps", 5),
+            getattr(config, "poet_lie_ortho_use_second_moment", False),
+        )
+        optimizer = LieOrthMomentum(
+            param_groups,
+            ortho_c=getattr(config, "poet_lie_ortho_c", 0.01),
+            ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
+            ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
+            ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
+            **shared_kwargs,
+        )
+    else:
+        optimizer = LieAlgebraMomentum(
+            param_groups,
+            rms=getattr(config, "poet_lie_rms", False),
+            rms_c=getattr(config, "poet_lie_rms_c", 0.2),
+            **shared_kwargs,
+        )
 
     def init_state_fn(opt, _config=None):
         for group in opt.param_groups:
@@ -641,7 +663,7 @@ def get_megatron_poet_optimizer(
     poet_scale = getattr(config, "poet_scale", 1.0)
     poet_cache_mode = getattr(config, "poet_cache_mode", "none")
 
-    if getattr(config, "poet_q_optimizer", "adam") == "lie_algebra":
+    if getattr(config, "poet_q_optimizer", "adam") in ("lie_algebra", "lie_ortho"):
         return get_megatron_poet_lie_momentum_optimizer(
             config,
             model_chunks,
