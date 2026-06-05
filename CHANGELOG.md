@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — standalone Muon-like orthogonalizing optimizer (q_optimizer=lie_ortho)
+
+- **Standalone `LieOrthMomentum` optimizer** (`q_optimizer=lie_ortho`), sibling of
+  the Lie-RMS optimizer. Orthogonalizes the skew update direction
+  (`orthogonalize_skew_direction`) so the rotation planes turn by ~the same angle
+  (`= lr * lie_ortho_c`); first-moment-only by default. Default `method=muon`
+  (Muon's quintic Newton–Schulz, a band around 1, ~5 steps; NS preserves skew);
+  `method=spectral` is the exact `A(-A²)^{-1/2}` σ=1 variant (~20 steps). New
+  experiment `optim/poet_lie_orth` + `scripts/train_poet_lie_orth.sh` for the
+  head-to-head vs `poet_lie_rms` (see
+  `docs/muon_orthogonalizing_optimizer_poet.md`).
+
 ### Added — post-orthogonalization (Muon update) spectrum on both probes
 
 - **Both conditioning probes now log the post-Newton–Schulz spectrum**, not just
