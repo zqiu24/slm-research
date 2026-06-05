@@ -207,6 +207,71 @@ def test_no_cross_head_mixing():
     assert diff[mask].max() < 1e-12  # all other heads untouched
 
 
+def test_head_block_aligns_with_deinterleaved_head_rows():
+    """End-to-end head<->block alignment through the REAL Megatron qkv deinterleave.
+
+    After unfuse, linear_q's rows are head-contiguous (qkv_deinterleave_row_indices
+    lays each head's head_dim rows consecutively). So with block_size_out=head_dim
+    and the head-side identity Psi, HeadAlignedPOETLinear block j must rotate
+    EXACTLY head j's features and nothing else -- for a GQA config (heads != groups)
+    in the true head order. Locks the head==block alignment against any future
+    layout/permutation change (the earlier no-cross-head-mixing test used arbitrary
+    nn.Linear rows, so it only proved block-locality, not block==head).
+    """
+    from poet_torch import HeadAlignedPOETLinear
+
+    from src.model.unfuse_linears import (
+        qkv_deinterleave_row_indices,
+        qkv_segment_out_dims,
+    )
+
+    n_heads, n_groups, hd, d_in = 4, 2, 8, 16
+    q_out, _ = qkv_segment_out_dims(n_heads, n_groups, hd)  # 4*8 = 32
+    q_rows, _, _ = qkv_deinterleave_row_indices(n_heads, n_groups, hd)
+    assert q_rows.numel() == q_out
+
+    # Each head's head_dim indices are a contiguous run in the fused weight (one
+    # head per chunk) => the deinterleaved linear_q is head-contiguous.
+    qr = q_rows.view(n_heads, hd)
+    assert torch.equal(qr[:, 1:] - qr[:, :-1], torch.ones(n_heads, hd - 1, dtype=q_rows.dtype))
+
+    # Fused qkv weight; linear_q = its q rows (head-contiguous after deinterleave).
+    fused_out = (n_heads // n_groups + 2) * hd * n_groups  # (2+2)*8*2 = 64
+    torch.manual_seed(0)
+    w_qkv = torch.randn(fused_out, d_in, dtype=torch.float64)
+    w_q = w_qkv.index_select(0, q_rows).contiguous()  # (32, 16), head-contiguous
+
+    def merged_weight(perturb_head=None):
+        layer = HeadAlignedPOETLinear(
+            in_features=d_in,
+            out_features=q_out,
+            head_side="out",
+            head_dim=hd,
+            resid_block_count=1,
+            resid_permute=False,
+            parameterization="exp",
+            dtype=torch.float64,
+        )
+        assert layer.head_count == n_heads
+        with torch.no_grad():
+            layer.weight.copy_(w_q)
+            if perturb_head is not None:
+                layer.oft_R_out[perturb_head].normal_(std=1e-1)
+            # oft_R_in stays 0 -> residual side is identity, isolating the head side.
+        layer.merge_then_reinitialize(reinit_perm=False)
+        return layer.weight.detach().clone()
+
+    base = merged_weight(None)
+    for j in range(n_heads):
+        pert = merged_weight(perturb_head=j)
+        diff = (pert - base).abs()
+        rows = slice(j * hd, (j + 1) * hd)  # head j's rows in the head-contiguous layout
+        assert diff[rows].max() > 1e-6, f"head {j} block did not rotate head {j}'s rows"
+        mask = torch.ones(q_out, dtype=torch.bool)
+        mask[rows] = False
+        assert diff[mask].max() < 1e-12, f"head {j} block leaked into another head"
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA Triton kernel")
 def test_forward_matches_reference_and_both_sides_get_grad():
     """The kernel forward (cayley) matches the pure-PyTorch decoupled reference,
