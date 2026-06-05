@@ -776,3 +776,16 @@ def test_poet_head_aligned_args_emitted_and_guard():
     # Guard: head-aligned without unfused qkv -> ValueError.
     with pytest.raises(ValueError, match="unfuse_qkv"):
         _optimizer_args(make_cfg(True, True, False))
+
+
+def test_poet_lie_orth_experiment_yaml():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = OmegaConf.load(root / "configs/experiments/optim/poet_lie_orth.yaml")
+    assert cfg.experiment.name == "poet_lie_orth"
+    assert cfg.optim.poet.q_optimizer == "lie_ortho"
+    assert cfg.optim.poet.lie_ortho_method == "muon"
+    assert cfg.optim.poet.lie_ortho_c == 4

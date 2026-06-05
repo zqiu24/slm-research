@@ -1,0 +1,75 @@
+# @package _global_
+# poet_lie_orth: the standalone Muon-like orthogonalizing optimizer
+# (q_optimizer=lie_ortho), sibling of poet_lie_rms. See
+# docs/muon_orthogonalizing_optimizer_poet.md.
+#
+# Same single-step Lie-momentum stack as poet_lie_rms (block_count=1, merge_period=1,
+# reinit_period=-1, cayley, head-aligned) but the direction->generator step
+# orthogonalizes the per-block skew direction instead of RMS-scaling it, so the
+# rotation planes turn by ~the same angle. First-moment-only by default.
+#
+# Default method 'muon' = Muon's quintic Newton-Schulz (a BAND around 1, ~5 steps,
+# cheap). 'spectral' = exact A(-A^2)^-1/2 (sigma=1) but needs lie_ortho_ns_steps~20.
+#
+# Angle convention: realized per-plane angle = group_lr * lie_ortho_c (like the rms
+# path's lr * rms_c). lr=0.003, lie_ortho_c=4 -> ~0.012 rad/plane, matching the rms
+# "best" run for a fair head-to-head. Under method=muon, c is NOMINAL (band gives
+# ~0.75-1.0x that angle, input-dependent); under spectral it is exact.
+experiment:
+  name: poet_lie_orth
+  family: optim
+  description: |
+    POET x Muon: a standalone optimizer (q_optimizer=lie_ortho) that orthogonalizes
+    the Lie-algebra momentum direction so the rotation planes turn by ~the same angle
+    (discards the gradient's relative per-plane magnitudes, keeps only the subspace).
+    Default method=muon (Muon's quintic, a band around 1, ~5 steps); method=spectral
+    is the exact sigma=1 variant. Same single-step POET stack as poet_lie_rms
+    (merge_period=1, block_count=1, reinit_period=-1, cayley). Run head-to-head vs
+    poet_lie_rms to test whether relative per-plane angles are signal or noise for
+    rotational updates (docs SS7).
+  references:
+    - "POET"
+    - "Muon"
+    - "Pion"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 1.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1
+    reinit_period: -1
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_ortho       # selects the standalone LieOrthMomentum optimizer
+    lie_b1: 0.9
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: elementwise
+    lie_ortho_c: 4               # nominal per-plane angle; realized angle = lr * c
+    lie_ortho_method: muon       # 'muon' (quintic NS band, ~5 steps) | 'spectral' (exact, ns~20)
+    lie_ortho_ns_steps: 5        # spectral needs ~20; muon plateaus by ~5
+    lie_ortho_use_second_moment: false  # first-moment-only by default (docs SS4)
+    head_aligned_attn: true      # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
+    train_output_rotation: true
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true
