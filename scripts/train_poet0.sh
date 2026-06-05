@@ -98,6 +98,6 @@ python -m launchers.train_megatron \
   "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
   "base.model.tie_embeddings=false" \
-  "optim.weight_decay=0.0" \
+  "optim.weight_decay=0.1" \
   "wandb.project=slm-zeju-dev" \
   "$@"
