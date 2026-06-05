@@ -38,6 +38,52 @@ def orthogonalize_skew_blocks(Q: torch.Tensor, ns_steps: int) -> torch.Tensor:
     return X
 
 
+def orthogonalize_skew_direction(
+    skew: torch.Tensor,
+    method: str = "muon",
+    ns_steps: int = 5,
+    eps: float = 1e-7,
+    reg: float = 1e-6,
+) -> torch.Tensor:
+    """Orthogonalize a batch of skew blocks (num_blocks, b, b) so the rotation
+    planes turn by ~the same angle (docs/muon_orthogonalizing_optimizer_poet.md SS5).
+    Result stays in so(b).
+
+    method="muon" (default): Muon's quintic Newton-Schulz on the direction
+    (orthogonalize_skew_blocks), then a 1/2(X - X^T) cleanup. NS preserves skew on a
+    skew input, so the cleanup only removes ~1e-15 float dust. Democratizes the
+    spectrum into a BAND around 1 (sigma ~ [0.7, 1.1]) in ~5 steps -- cheap; a band of
+    roughly-equal angles may be all this needs. NOT sigma == 1.
+    method="spectral": A_orth = A (-A^2)^{-1/2}, an ODD function of A so it stays
+    skew exactly and drives ALL nonzero singular values to 1 (every plane the SAME
+    angle). Exact but slow: needs ns_steps >= ~15 (coupled Newton-Schulz inverse-sqrt
+    of C = -A^2 = A^T A), and still cannot fully equalize a near-rank-deficient block.
+    """
+    A = skew.float()
+    if method == "muon":
+        X = orthogonalize_skew_blocks(A, ns_steps)
+        return 0.5 * (X - X.transpose(-2, -1))
+    if method != "spectral":
+        raise ValueError(
+            f"orthogonalize_skew_direction method must be 'muon' or " f"'spectral', got {method!r}"
+        )
+    b = A.shape[-1]
+    eye = torch.eye(b, dtype=A.dtype, device=A.device).expand_as(A)
+    C = -(A @ A)  # = A^T A, symmetric PSD; eigenvalues are A's squared sing. values
+    # Normalize so C's spectrum sits in (0, 1] (convergence needs it in (0, 2)),
+    # plus a tiny ridge so an odd-dim null direction stays finite (A kills it anyway).
+    s = torch.linalg.matrix_norm(C, ord="fro", dim=(-2, -1), keepdim=True) + eps
+    Cn = C / s + reg * eye
+    Y, Z = Cn, eye.clone()
+    for _ in range(ns_steps):
+        T = 0.5 * (3.0 * eye - Z @ Y)
+        Y = Y @ T  # -> Cn^{1/2}
+        Z = T @ Z  # -> Cn^{-1/2}
+    inv_sqrt_C = Z / s.sqrt()  # Cn^{-1/2} = sqrt(s) * C^{-1/2}  =>  C^{-1/2} = Z/sqrt(s)
+    A_orth = A @ inv_sqrt_C
+    return 0.5 * (A_orth - A_orth.transpose(-2, -1))  # clean up float residue
+
+
 def muon_update_spectral_stats(skew_grad: torch.Tensor, ns_steps: int = 5) -> dict:
     """Spectral stats of the SkewMuon UPDATE direction for a per-block skew
     gradient ``skew_grad`` ((num_blocks, b, b)): NS-orthogonalize then re-skew to
