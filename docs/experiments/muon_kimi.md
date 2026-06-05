@@ -14,4 +14,4 @@ Megatron-Core / emerging_optimizers `TensorParallelMuon` used by `muon_hybrid`.
 - **Wiring:** `--optimizer adam --slm-optimizer muon_kimi`, rerouted by the
   `muon_kimi_optimizer_setup` patch.
 
-Run on the 60m dev model with `scripts/train_muon_kimi_dev.sh`.
+Run on the 60m dev model with `scripts/train_muon_dev.sh`.

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Dev variant of train_muon.sh: same harness, but defaults to the tiny 60m
-# scale (configs/base/scale/60m.yaml, hidden=512, ~61M non-embedding params)
-# for fast local iteration instead of 300m. Untied embeddings are forced on
-# (overridable). Everything else is identical to train_muon.sh, and any "$@"
-# override still wins.
+# Dev launcher for the vendored Kimi/Moonlight Muon (experiment=optim/muon_kimi),
+# single-GPU only. Defaults to the tiny 60m scale (configs/base/scale/60m.yaml,
+# hidden=512, ~61M non-embedding params) for fast local iteration. Untied
+# embeddings are forced on (overridable); any "$@" override still wins.
 
 # torchtitan is AdamW-only in milestone 1; reject --backend torchtitan here so the
 # same flag fails fast on this non-AdamW wrapper (see scripts/train_adam.sh).
@@ -73,7 +72,7 @@ python -m launchers.train_megatron \
   "${SCALE_ARGS[@]}" \
   "${REGIME_ARGS[@]}" \
   "cluster=h100_de" \
-  "experiment=optim/muon_hybrid" \
+  "experiment=optim/muon_kimi" \
   "training.global_batch_size=1024" \
   "training.micro_batch_size=128" \
   "base.model.transformer_impl=local" \

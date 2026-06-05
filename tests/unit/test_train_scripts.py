@@ -51,7 +51,7 @@ def test_poet_script_supports_llama3():
 
 
 def test_muon_kimi_dev_script_routes_to_kimi_optimizer():
-    proc = _run("train_muon_kimi_dev.sh", "llama3")
+    proc = _run("train_muon_dev.sh", "llama3")
     assert '"command"' in proc.stdout
     assert "--slm-optimizer" in proc.stdout
     assert "muon_kimi" in proc.stdout
