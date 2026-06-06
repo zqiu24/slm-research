@@ -4,6 +4,12 @@
 
 ### Added — standalone Muon-like orthogonalizing optimizer (q_optimizer=lie_ortho)
 
+- DP-sharded orthogonalization for `LieOrthMomentum`
+  (`optim.poet.lie_ortho_distributed=true`). Each data-parallel rank
+  orthogonalizes only its round-robin slice of `oft_R`; one zero-padded
+  `all_reduce(SUM)` of update deltas re-syncs every rank, avoiding same-shape
+  constraints. Numerically identical to the replicated path when local gloo is
+  available for the 2-rank test; off by default and a no-op at `dp_world=1`.
 - **Standalone `LieOrthMomentum` optimizer** (`q_optimizer=lie_ortho`), sibling of
   the Lie-RMS optimizer. Orthogonalizes the skew update direction
   (`orthogonalize_skew_direction`) so the rotation planes turn by ~the same angle

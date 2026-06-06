@@ -66,6 +66,7 @@ optim:
     lie_ortho_method: muon       # 'muon' (quintic NS band, ~5 steps) | 'spectral' (exact, ns~20)
     lie_ortho_ns_steps: 5        # spectral needs ~20; muon plateaus by ~5
     lie_ortho_use_second_moment: false  # first-moment-only by default (docs SS4)
+    lie_ortho_distributed: false # shard NS orthogonalization across DP ranks; identical result, off by default
     head_aligned_attn: true      # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
     train_output_rotation: true
 

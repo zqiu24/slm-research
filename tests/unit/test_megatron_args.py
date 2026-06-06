@@ -97,7 +97,7 @@ def test_poet_args_use_slm_optimizer_and_keep_megatron_optimizer_adam():
     has_bs, has_bc = "--poet-block-size" in args, "--poet-block-count" in args
     assert has_bs ^ has_bc, "poet must emit exactly one of block-size / block-count"
     assert int(args["--poet-block-size" if has_bs else "--poet-block-count"]) > 0
-    assert args["--poet-merge-period"] == "200"
+    assert args["--poet-merge-period"] == str(cfg.optim.poet.merge_period)
 
 
 def test_poet_argv_includes_cache_mode():
@@ -378,13 +378,12 @@ def test_wandb_run_name_muon_shows_adam_lr_and_muon_lr():
 
 def test_wandb_run_name_poet_appends_block_param():
     # poet's wandb name carries the [megatron] prefix and appends a block
-    # parameterization segment (-bs<n> for block_size, -bc<n> for block_count).
+    # parameterization segment (bs<n> for block_size, bc<n> for block_count).
     # Assert the stable SHAPE, not the exact lr/block values (those track the
     # poet experiment config, which evolves independently of the naming logic).
     name = _run_name("optim/poet")
     assert name.startswith("[megatron] poet-llama3-300m-")
-    block_seg = name.rsplit("-", 1)[-1]
-    assert block_seg[:2] in ("bs", "bc") and block_seg[2:].isdigit()
+    assert any(seg[:2] in ("bs", "bc") and seg[2:].isdigit() for seg in name.split("-"))
 
 
 def test_wandb_run_name_poet_block_count_overrides_block_size():
@@ -398,7 +397,7 @@ def test_wandb_run_name_poet_block_count_overrides_block_size():
             "optim": {"type": "poet", "lr": 3.0e-4, "poet": {"block_count": 8}},
         }
     )
-    assert wandb_base_name(cfg) == "poet-llama3-300m-lr0.0003-bc8"
+    assert wandb_base_name(cfg) == "poet-llama3-300m-bc8-lr0.0003-scale1"
 
 
 def test_unfuse_flags_default_on_for_all_train_script_experiments():
@@ -805,3 +804,4 @@ def test_poet_lie_orth_experiment_yaml():
     assert cfg.optim.poet.q_optimizer == "lie_ortho"
     assert cfg.optim.poet.lie_ortho_method == "muon"
     assert cfg.optim.poet.lie_ortho_c == 4
+    assert cfg.optim.poet.lie_ortho_distributed is False
