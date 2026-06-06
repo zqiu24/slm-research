@@ -1,6 +1,6 @@
 # POET: Parameter-Efficient Orthogonal Training
 
-> **Last updated: 2026-06-05.** Part 1 below is the conceptual reference (math,
+> **Last updated: 2026-06-06.** Part 1 below is the conceptual reference (math,
 > kernel, cache). For the living status of every implemented modification, which
 > designs actually help, and the best-run leaderboard, jump to
 > **[Part 2 — Modifications & results tracker](#part-2--modifications--results-tracker)**.
@@ -182,7 +182,8 @@ projections (1536²) at K=64 in bf16 this is ~1.20×. For big FFN layers
 | Frozen-W block-orthogonal core | always on | `y = R_out·W·R_in·x`; train only the small skew `oft_R`, fold into `W` at merges | ✅ | baseline (POET) |
 | Single-step merge + decoupled reinit | `merge_period=1`, `reinit_period` (`poet0`) | fold `R→W` every step; `reinit_period` separately controls Ψ-resample / Adam-momentum reset | ✅ | helps vs `merge_period=400` (≈3.65 vs ≈3.70+) |
 | Lie-algebra momentum on Q | `optim.poet.q_optimizer=lie_algebra` / `--poet-q-optimizer` (`poet_lie`) | Adam-like 1st/2nd moment kept in the skew algebra so(n), persists across merges ([poet_lie_momentum.py:161](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_momentum.py#L161)) | ✅ | **helps** (3.647 vs vanilla 3.70) — the strongest POET base |
-| Stage-2 W-free RMS scaling | `optim.poet.lie_rms=true`, `lie_rms_c` / `--poet-lie-rms[-c]` (`poet_lie_rms`) | per-block `α = c·√blk / (‖A‖_F+eps)` → dimension-consistent rotation angle, no `W` access ([poet_lie_momentum.py:161-171](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_momentum.py#L161-L171)) | ✅ | **helps with tuned lr** — best POET overall (3.626 @ lr 3e-3, c=4) |
+| Stage-2 W-free RMS scaling | `optim.poet.lie_rms=true`, `lie_rms_c` / `--poet-lie-rms[-c]` (`poet_lie_rms`) | per-block `α = c·√blk / (‖A‖_F+eps)` → dimension-consistent rotation angle, no `W` access ([poet_lie_momentum.py:161-171](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_momentum.py#L161-L171)) | ✅ | **helps with tuned lr** (3.626 @ lr 3e-3, c=4) — best of the *RMS* family; superseded by `lie_ortho` ↓ |
+| **Muon-like orthogonalizing Q-opt** | `optim.poet.q_optimizer=lie_ortho`, `lie_ortho_c`/`_method`/`_ns_steps` (`poet_lie_orth`) | standalone `LieOrthMomentum`: same Lie 1st-moment momentum, but **orthogonalize** the skew direction (all planes → ~same angle) instead of RMS-scaling; `muon` band (~5 NS steps) or `spectral` exact `A(−A²)^{-1/2}` (~20) ([poet_lie_orth.py:27](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth.py#L27)) | ✅ | **best POET so far** (3.567 @ lr 3e-3, c=8) — closes the gap to adam (3.557); sweeps in progress |
 | Head-aligned attention rotation | `optim.poet.head_aligned_attn=true` / `--poet-head-aligned-attn` (`poet_lie_head`, `poet_h_*`) | swap q/k/v/o to `HeadAlignedPOETLinear`: per-head block-diagonal rotation (block=head_dim, fixed identity Ψ), needs unfused qkv ([head_aligned_layer.py:28](/lustre/fast/fast/zqiu/slm-research/third_party/poet_torch/head_aligned_layer.py#L28), [poet_layers.py:245-257](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L245-L257)) | ✅ | **neutral→hurts** at 60m (3.654 vs non-head 3.634 at matched lr/c) |
 | Residual-side perm off | `optim.poet.head_resid_perm=false` / `--poet-no-head-resid-perm` (`poet_h_noperm_*`) | freeze the residual (non-head) side's Ψ in head-aligned mode | ✅ | neutral (3.6536 vs 3.6541) |
 | Alternating single-sided update | `optim.poet.lie_alternating=true`, `lie_alternate_every` (`poet_lie_alt`) | write only one rotation side per step ([poet_lie_momentum.py:126-130](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_momentum.py#L126-L130)) | ✅ | **hurts** (3.709 vs poet_lie 3.647) |
@@ -192,7 +193,13 @@ projections (1536²) at K=64 in bf16 this is ~1.20×. For big FFN layers
 | Normalized / μP base init | `optim.poet.init_type`, `mup_alpha` | row-normalize frozen `W` (+ optional μP spectral scale) ([poet_layers.py:44-62](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L44-L62)) | ✅ | `normalized` is default; not separately ablated (sweeps fixed `mup_alpha=1.0`) |
 | Single-sided rotation (freeze output) | `optim.poet.train_output_rotation=false` / `--poet-freeze-output-rotation` | train only `R_in`, freeze `R_out=I` | ✅ | not ablated at scale |
 
-Q-optimizer dispatch lives at [poet.py:644-652](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py#L644-L652) (`lie_algebra` / `muon` / default `adam`); CLI→flag routing at [megatron_args.py:249-339](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L249-L339).
+Q-optimizer dispatch (`lie_algebra` / `lie_ortho` / `muon` / default `adam`) lives in [poet.py](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py); `lie_algebra` and `lie_ortho` share the same builder, which branches to construct `LieOrthMomentum` at [poet.py:596](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py#L596). CLI→flag routing in [megatron_args.py](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py).
+
+**The `lie_ortho` optimizer (new — current best POET).** A standalone `LieOrthMomentum` ([poet_lie_orth.py:27](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth.py#L27)), selected by `optim.poet.q_optimizer=lie_ortho`. It keeps the same Lie-algebra **first-moment** momentum on `oft_R` as `lie_algebra` (persists across folds), but replaces the direction→generator transform: instead of RMS-scaling, it **orthogonalizes** the per-block skew direction so **every rotation plane turns by ~the same angle** — Muon's "trust the subspace, not the per-direction magnitude" bet, applied to *rotational* updates. Two methods (`optim.poet.lie_ortho_method`):
+- **`muon`** (default, ~5 NS steps): Muon's quintic Newton–Schulz on the direction, then a `½(X−Xᵀ)` cleanup. NS *preserves skew* on a skew input (verified to ~1e-15) and lands the singular values in a **band** around 1 — cheap, approximately-equal angles.
+- **`spectral`** (~15–20 NS steps): the exact Löwdin form `A·(−A²)^{-1/2}` — drives every σ to *exactly* 1, ≈4× the cost.
+
+Realized per-plane angle = `lr · scale · ortho_c` (under `muon` the band makes `ortho_c` *nominal*, ≈0.75–1.0× that). First-moment-only by default (a second moment is partly undone by orthogonalization). Design doc: [docs/muon_orthogonalizing_optimizer_poet.md](/lustre/fast/fast/zqiu/slm-research/docs/muon_orthogonalizing_optimizer_poet.md); plan: [docs/superpowers/plans/2026-06-05-poet-lie-orth-optimizer.md](/lustre/fast/fast/zqiu/slm-research/docs/superpowers/plans/2026-06-05-poet-lie-orth-optimizer.md). **Status:** the two completed runs in §2.3 are the new best POET; the lr / poet-scale / variant (band-vs-exact, ortho-vs-rms, head-on/off, 1st-vs-2nd-moment) sweeps are **in progress** ([sweep_lie_orth_lr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_lr.sh), [_scale](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_scale.sh), [_variants](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_variants.sh)).
 
 ## 2.2 Experiment configs (the variants)
 
@@ -206,6 +213,7 @@ All under [configs/experiments/optim/](/lustre/fast/fast/zqiu/slm-research/confi
 | [poet_lie_alt](/lustre/fast/fast/zqiu/slm-research/configs/experiments/optim/poet_lie_alt.yaml) | lie_algebra | 1 / −1 | — | no | yes (every 1) | Stage 1 + §6 alternating single-sided update |
 | [poet_lie_head](/lustre/fast/fast/zqiu/slm-research/configs/experiments/optim/poet_lie_head.yaml) | lie_algebra | 1 / −1 | — | **yes** | no | Stage 1 + per-head attention rotation |
 | [poet_lie_rms](/lustre/fast/fast/zqiu/slm-research/configs/experiments/optim/poet_lie_rms.yaml) | lie_algebra | 1 / −1 | true (0.2) | no | no | Pion **Stage 2**: W-free RMS angle scaling |
+| [poet_lie_orth](/lustre/fast/fast/zqiu/slm-research/configs/experiments/optim/poet_lie_orth.yaml) | **lie_ortho** | 1 / −1 | — (ortho c=4, muon) | **yes** | no | **Muon-like orthogonalizing** optimizer (equal-angle planes) — **current best POET** |
 
 The `poet_h_*` / `poet_dense_*` runs in §2.4 are CLI sweeps over `poet_lie_rms` (± `head_aligned_attn`, varying `lie_rms_c`), not separate config files.
 
@@ -213,29 +221,31 @@ The `poet_h_*` / `poet_dense_*` runs in §2.4 are CLI sweeps over `poet_lie_rms`
 
 Best completed run per setting, ranked by `val/loss` (60m / 40 tokens-per-param):
 
-| # | Setting | val/loss | (ppl) | train | lr | lie_rms_c | head | Note |
+| # | Setting | val/loss | (ppl) | train | lr | rms/ortho c | head | Note |
 |---|---|---|---|---|---|---|---|---|
 | 1 | **muon_kimi** | **3.5352** | 34.30 | 3.4261 | 1e-3 | — | — | best overall |
 | 2 | adam (baseline) | 3.5570 | 35.06 | 3.4575 | 1e-3 | — | — | best dense baseline |
-| 3 | muon_hybrid | 3.5698 | 35.51 | 3.4705 | — | — | — | |
-| 4 | **poet_lie_rms** | **3.6257** | 37.55 | 3.5220 | **3e-3** | 4 | no | **best POET** (run `tx67fwih`) |
-| 5 | poet_dense_rms (c8) | 3.6344 | 37.88 | 3.5367 | 1e-3 | 8 | no | |
-| 6 | poet_lie_rms (c8) | 3.6404 | 38.11 | 3.5367 | 1e-3 | 8 | no | |
-| 7 | poet_lie | 3.6474 | 38.37 | 3.5437 | 1e-3 | — | no | Stage 1 |
-| 8 | poet_lie_rms (c4) | 3.6496 | 38.46 | 3.5478 | 1e-3 | 4 | no | same as #4 but lr 1e-3 |
-| 9 | poet0 | 3.6518 | 38.55 | 3.5484 | 1e-3 | — | no | |
-| 10 | **poet_h_noperm_rms_c8** | 3.6536 | 38.61 | 3.5578 | 1e-3 | 8 | **yes** | best head-aligned |
-| 11 | poet_h_rms_c8 | 3.6541 | 38.63 | 3.5588 | 1e-3 | 8 | yes | |
-| 12 | poet (vanilla, cayley) | ≈3.70 | ≈40.6 | ≈3.60 | 1e-3 | — | no | weakest POET family |
+| 3 | **poet_lie_orth (c8)** | **3.5669** | 35.41 | 3.4691 | **3e-3** | 8 (ortho) | yes | **best POET** (run `5sbgancm`) — Muon-band, full 9155 steps |
+| 4 | muon_hybrid | 3.5698 | 35.51 | 3.4705 | — | — | — | |
+| 5 | poet_lie_orth (c4) | 3.5715 | 35.57 | 3.4701 | 3e-3 | 4 (ortho) | yes | run `z1gpz9y7` |
+| 6 | poet_lie_rms | 3.6257 | 37.55 | 3.5220 | 3e-3 | 4 (rms) | no | prev. best POET (`tx67fwih`) |
+| 7 | poet_dense_rms (c8) | 3.6344 | 37.88 | 3.5367 | 1e-3 | 8 (rms) | no | |
+| 8 | poet_lie_rms (c8) | 3.6404 | 38.11 | 3.5367 | 1e-3 | 8 (rms) | no | |
+| 9 | poet_lie | 3.6474 | 38.37 | 3.5437 | 1e-3 | — | no | Stage 1 |
+| 10 | poet_lie_rms (c4) | 3.6496 | 38.46 | 3.5478 | 1e-3 | 4 (rms) | no | same as #6 but lr 1e-3 |
+| 11 | poet0 | 3.6518 | 38.55 | 3.5484 | 1e-3 | — | no | |
+| 12 | **poet_h_noperm_rms_c8** | 3.6536 | 38.61 | 3.5578 | 1e-3 | 8 (rms) | **yes** | best head-aligned (RMS family) |
+| 13 | poet_h_rms_c8 | 3.6541 | 38.63 | 3.5588 | 1e-3 | 8 (rms) | yes | |
+| 14 | poet (vanilla, cayley) | ≈3.70 | ≈40.6 | ≈3.60 | 1e-3 | — | no | weakest POET family |
 | — | poet `exp` / Muon-on-Q | 3.70–3.82 | 41–46 | — | 1e-3 | — | no | regressions |
 
 **Conclusions (what's useful):**
-- **POET still trails the strong baselines** at this scale: best POET (3.626) is **+0.07** val/loss vs adam (3.557) and **+0.09** vs muon_kimi (3.535). Closing this gap is the open problem.
-- **The useful POET stack** is *single-step merge + Lie-algebra momentum + Stage-2 RMS scaling*, with **lr pushed to 3e-3** and **`lie_rms_c` ≈ 4–8**. Each layer of that stack helps: vanilla `poet` (≈3.70) → `poet_lie` (3.647) → `poet_lie_rms` (3.626).
-- **`lie_rms_c` has a sweet spot:** 4–8 are best; **c=12 degrades and c=16 is much worse** (train ≈3.78). Larger c over-rotates.
-- **Higher lr helps the RMS variant:** at c=4, lr 3e-3 (3.626) clearly beats lr 1e-3 (3.650).
-- **Head-aligned attention does NOT help at 60m.** Matched at lr 1e-3 / c=8: head-aligned (3.654) is ~0.015–0.02 *worse* than non-head-aligned (3.634–3.640). Turning the residual-side permutation off (`noperm`) is a wash.
-- **Alternating, `exp` parameterization, and Muon-on-Q are current regressions** for the reset-based recipe. Muon-on-Q was designed for the `merge_period=0` no-reset regime and hasn't been retuned for it yet.
+- **`lie_ortho` is the breakthrough — POET now nearly matches the baselines.** Best POET (poet_lie_orth, **3.5669** @ c=8) is only **+0.010** val/loss vs adam (3.557), **beats muon_hybrid** (3.570), and sits **#3 overall** behind only muon_kimi (3.535) and adam. That's a **−0.059** jump over the previous best POET (poet_lie_rms 3.626) — the long-standing POET gap is now ~closed.
+- **Orthogonalizing the rotation direction (`lie_ortho`) beats RMS-scaling it (`lie_rms`)** at the matched recipe: Muon's "equal per-plane angles" bet appears to hold for *rotational* updates. For ortho, **c=8 ≳ c=4** (3.5669 vs 3.5715). ⚠️ Both points are single (head-aligned, muon-band) runs; the lr / poet-scale / variant sweeps (band-vs-exact `spectral`, ortho-vs-rms at matched ∠, head-on/off, 1st-vs-2nd-moment) are **in progress** and will firm this up.
+- **The useful POET stack** is *single-step merge + Lie-algebra momentum + an angle-equalizing transform*: vanilla `poet` (≈3.70) → `poet_lie` (3.647) → `poet_lie_rms` (3.626) → **`poet_lie_orth` (3.567)**, all with **lr 3e-3**.
+- **The `c` knob has a sweet spot:** for RMS, c≈4–8 best (c=12 degrades, c=16 train ≈3.78); for ortho so far c=8 ≳ c=4. Larger c over-rotates.
+- **Head-aligned attention:** in the *RMS* family it did NOT help (head 3.654 vs dense 3.634–3.640 at lr 1e-3/c=8). But the two best `lie_ortho` runs **are** head-aligned — whether head-alignment helps *with* ortho is untested; the `lieorth_c8_nohead` arm of the variants sweep settles it.
+- **Alternating, `exp` parameterization, and (reset-regime) Muon-on-Q are current regressions.** Muon-on-Q (SkewMuon) was built for the `merge_period=0` no-reset regime and hasn't been retuned for it.
 
 ## 2.4 Head-aligned + RMS sweep (the `poet_h_*` / `poet_dense_*` runs)
 
@@ -260,12 +270,13 @@ Takeaway: **non-head-aligned (`dense`) beats head-aligned at every matched c**, 
 
 **🏆 Overall best (60m/40tpp):** [`muon_kimi-…-20260602T134241Z`](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260602T134241Z) — **val/loss 3.5352, ppl 34.30**, train 3.4261, 9155 steps, lr 1e-3.
 
-**🥇 Best POET:** [`poet_lie_rms-…-20260604T140255Z`](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260604T140255Z) (W&B `zeju-qiu/slm-zeju-dev/tx67fwih`) — **val/loss 3.6257, ppl 37.55**, train 3.5220, 9155 steps. Settings: `experiment=optim/poet_lie_rms`, **lr=0.003**, **lie_rms_c=4** (all other knobs = config default). Reproduced by its twin [`…-20260604T124303Z`](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260604T124303Z) (identical val/loss). Command:
+**🥇 Best POET:** [`poet_lie_orth-…-20260605T190018Z`](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_orth-llama3-60m-s42-20260605T190018Z) (W&B `zeju-qiu/slm-zeju-dev/5sbgancm`) — **val/loss 3.5669, ppl 35.41**, train 3.4691, 9155 steps. The Muon-band orthogonalizing optimizer: `experiment=optim/poet_lie_orth`, **lr=0.003**, **lie_ortho_c=8** (method=muon, head-aligned; all other knobs = config default). Beats the previous best POET by **−0.059** and nearly matches the adam baseline (3.557). Command:
 ```bash
-codexlog poet_lie_rms_best bash scripts/train_poet_lie_rms.sh llama3 \
+codexlog poet_lie_orth_best bash scripts/train_poet_lie_orth.sh llama3 \
   optim.lr=0.003 \
-  optim.poet.lie_rms_c=4
+  optim.poet.lie_ortho_c=8
 ```
+*Previous best POET (RMS family):* [`poet_lie_rms-…-20260604T140255Z`](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260604T140255Z) (W&B `tx67fwih`) — val/loss 3.6257 @ lr 3e-3, c=4 (twin [`…-20260604T124303Z`](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260604T124303Z), identical).
 
 **Per-family best:**
 
@@ -274,7 +285,8 @@ codexlog poet_lie_rms_best bash scripts/train_poet_lie_rms.sh llama3 \
 | muon_kimi | [muon_kimi-…20260602T134241Z](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260602T134241Z) | 3.5352 | 34.30 | lr 1e-3 |
 | adam | [adam-…20260601T221123Z](/lustre/fast/fast/zqiu/slm-research/runs/adam-llama3-60m-s42-20260601T221123Z) | 3.5570 | 35.06 | lr 1e-3 |
 | muon_hybrid | [muon-…20260602T001936Z](/lustre/fast/fast/zqiu/slm-research/runs/muon-llama3-60m-s42-20260602T001936Z) | 3.5698 | 35.51 | |
-| poet_lie_rms | [poet_lie_rms-…20260604T140255Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260604T140255Z) | 3.6257 | 37.55 | lr 3e-3, c=4 |
+| **poet_lie_orth** | [poet_lie_orth-…20260605T190018Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_orth-llama3-60m-s42-20260605T190018Z) | **3.5669** | 35.41 | lr 3e-3, c=8, muon, head-aligned |
+| poet_lie_rms (RMS family) | [poet_lie_rms-…20260604T140255Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260604T140255Z) | 3.6257 | 37.55 | lr 3e-3, c=4 |
 | poet_lie | [poet_lie-…20260603T183821Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie-llama3-60m-s42-20260603T183821Z) | 3.6474 | 38.37 | lr 1e-3 |
 | poet0 | [poet0-…20260603T165332Z](/lustre/fast/fast/zqiu/slm-research/runs/poet0-llama3-60m-s42-20260603T165332Z) | 3.6518 | 38.55 | lr 1e-3 |
 | head-aligned | [poet_h_noperm_rms_c8-…20260605T112512Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_h_noperm_rms_c8-llama3-60m-s42-20260605T112512Z) | 3.6536 | 38.61 | lr 1e-3, c=8, noperm |
