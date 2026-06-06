@@ -596,19 +596,33 @@ def get_megatron_poet_lie_momentum_optimizer(
     if getattr(config, "poet_q_optimizer", "lie_algebra") == "lie_ortho":
         from src.optim.poet_lie_orth import LieOrthMomentum
 
+        _lie_ortho_distributed = bool(getattr(config, "poet_lie_ortho_distributed", False))
+        _dp_world = mpu.get_data_parallel_world_size() if _lie_ortho_distributed else 1
+        _dp_rank = mpu.get_data_parallel_rank() if _lie_ortho_distributed else 0
+        _dp_group = mpu.get_data_parallel_group() if _lie_ortho_distributed else None
         logger.info(
-            "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s",
+            "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s, distributed=%s",
             getattr(config, "poet_lie_ortho_method", "muon"),
             getattr(config, "poet_lie_ortho_c", 0.01),
             getattr(config, "poet_lie_ortho_ns_steps", 5),
             getattr(config, "poet_lie_ortho_use_second_moment", False),
+            _lie_ortho_distributed,
         )
+        if _lie_ortho_distributed:
+            logger.info(
+                "[POET] Lie-orth distributed orthogonalization: dp_world=%s",
+                _dp_world,
+            )
         optimizer = LieOrthMomentum(
             param_groups,
             ortho_c=getattr(config, "poet_lie_ortho_c", 0.01),
             ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
             ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
             ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
+            distributed=_lie_ortho_distributed,
+            dp_world_size=_dp_world,
+            dp_rank=_dp_rank,
+            dp_group=_dp_group,
             **shared_kwargs,
         )
     else:
