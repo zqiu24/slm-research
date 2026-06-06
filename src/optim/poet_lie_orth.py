@@ -137,6 +137,7 @@ class LieOrthMomentum(torch.optim.Optimizer):
             return torch.zeros(0), []
         device = items[0][0].grad.device
         buf = torch.zeros(total, dtype=torch.float32, device=device)
+        buckets = {}
         for i, (p, group) in enumerate(items):
             if (i % dp_world) != dp_rank:
                 continue  # not this rank's block -> leave zeros (exact under all_reduce SUM)
@@ -146,14 +147,22 @@ class LieOrthMomentum(torch.optim.Optimizer):
             m = st["lie_m"]
             A_dir = -m / (st["lie_v"].sqrt() + group["eps"]) if self.ortho_use_second_moment else -m
             bsz = block_size_from_nelems(A_dir.shape[1])
+            buckets.setdefault(bsz, []).append((i, A_dir))
+
+        for bsz, bucket in buckets.items():
+            A_cat = torch.cat([a for _, a in bucket], dim=0)
             X = orthogonalize_skew_direction(
-                vec_to_skew(A_dir, bsz),
+                vec_to_skew(A_cat, bsz),
                 method=self.ortho_method,
                 ns_steps=self.ortho_ns_steps,
             )
             gen = skew_to_vec(self.ortho_c * X, bsz)  # (n_blocks, n_elems) float; lr at scatter
-            off, n = slices[i][0], slices[i][1]
-            buf[off : off + n] = gen.reshape(-1)
+            row_off = 0
+            for i, A_dir in bucket:
+                nb = A_dir.shape[0]
+                off, n = slices[i][0], slices[i][1]
+                buf[off : off + n] = gen[row_off : row_off + nb].reshape(-1)
+                row_off += nb
         return buf, slices
 
     def _apply_skew_update_buffer(self, buf, slices):

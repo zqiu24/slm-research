@@ -192,6 +192,95 @@ def test_momentum_persists_across_value_reset():
     assert torch.isfinite(p.data).all()
 
 
+def test_batched_step_matches_solo_steps_same_block_size():
+    # Two skew params of the SAME block size in one group must get the same update
+    # batched together as they would stepped alone.
+    torch.manual_seed(0)
+    b = 8
+    ne = b * (b - 1) // 2
+    g_a = torch.randn(2, ne)
+    g_b = torch.randn(3, ne)
+
+    p_a = nn.Parameter(torch.zeros(2, ne))
+    p_a.grad = g_a.clone()
+    p_b = nn.Parameter(torch.zeros(3, ne))
+    p_b.grad = g_b.clone()
+    LieOrthMomentum(
+        [dict(params=[p_a, p_b], use_skew=True, side="out", lr=0.1)],
+        ortho_c=0.05,
+        ortho_method="muon",
+        ortho_ns_steps=5,
+    ).step()
+
+    p_a2 = nn.Parameter(torch.zeros(2, ne))
+    p_a2.grad = g_a.clone()
+    _make_opt(p_a2, 0.1, 0.05).step()
+    p_b2 = nn.Parameter(torch.zeros(3, ne))
+    p_b2.grad = g_b.clone()
+    _make_opt(p_b2, 0.1, 0.05).step()
+
+    assert torch.allclose(p_a.data, p_a2.data, atol=1e-6)
+    assert torch.allclose(p_b.data, p_b2.data, atol=1e-6)
+
+
+def test_batched_step_handles_mixed_block_sizes():
+    # Different block sizes in one group -> separate buckets; each matches its solo run.
+    torch.manual_seed(1)
+    b1, b2 = 8, 6
+    ne1, ne2 = b1 * (b1 - 1) // 2, b2 * (b2 - 1) // 2
+    g1 = torch.randn(1, ne1)
+    g2 = torch.randn(1, ne2)
+
+    p1 = nn.Parameter(torch.zeros(1, ne1))
+    p1.grad = g1.clone()
+    p2 = nn.Parameter(torch.zeros(1, ne2))
+    p2.grad = g2.clone()
+    LieOrthMomentum(
+        [dict(params=[p1, p2], use_skew=True, side="out", lr=0.1)],
+        ortho_c=0.05,
+        ortho_method="muon",
+        ortho_ns_steps=5,
+    ).step()
+
+    p1b = nn.Parameter(torch.zeros(1, ne1))
+    p1b.grad = g1.clone()
+    _make_opt(p1b, 0.1, 0.05).step()
+    p2b = nn.Parameter(torch.zeros(1, ne2))
+    p2b.grad = g2.clone()
+    _make_opt(p2b, 0.1, 0.05).step()
+
+    assert torch.allclose(p1.data, p1b.data, atol=1e-6)
+    assert torch.allclose(p2.data, p2b.data, atol=1e-6)
+
+
+def test_batched_step_alternating_writes_only_active_side():
+    # Alternating: step 0 writes 'out' only, step 1 writes 'in' only; momentum accrues both.
+    torch.manual_seed(2)
+    b = 8
+    ne = b * (b - 1) // 2
+    p_in = nn.Parameter(torch.zeros(1, ne))
+    p_in.grad = torch.randn(1, ne)
+    p_out = nn.Parameter(torch.zeros(1, ne))
+    p_out.grad = torch.randn(1, ne)
+    opt = LieOrthMomentum(
+        [
+            dict(params=[p_in], use_skew=True, side="in", lr=0.1),
+            dict(params=[p_out], use_skew=True, side="out", lr=0.1),
+        ],
+        ortho_c=0.05,
+        ortho_method="muon",
+        ortho_ns_steps=5,
+        alternating=True,
+    )
+    opt.step()  # _alt_step 0 -> active "out"
+    assert p_out.data.abs().sum() > 0 and torch.allclose(p_in.data, torch.zeros_like(p_in))
+    p_in.grad = torch.randn(1, ne)
+    p_out.grad = torch.randn(1, ne)
+    p_out.data.zero_()  # simulate the per-step fold
+    opt.step()  # _alt_step 1 -> active "in"
+    assert p_in.data.abs().sum() > 0 and torch.allclose(p_out.data, torch.zeros_like(p_out))
+
+
 def test_replicated_buffer_owns_all_params():
     # At (dp_rank=0, dp_world=1) every skew param is owned, so its buffer slice is
     # written (non-zero) — the replicated path covers everything.
