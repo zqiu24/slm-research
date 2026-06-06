@@ -27,9 +27,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 LOGDIR=/lustre/home/zqiu/log
 mkdir -p "$LOGDIR"
 
-# All runs share: 60m scale, 40x token budget, no checkpointing (sweep = read the
-# val-loss curve in wandb; drop save to keep disk light — remove to keep ckpts).
-COMMON="base/scale=60m training_regime=ablation_40x training.save_enabled=false"
+# All runs share: 60m scale, 40x token budget. Save stays ENABLED (the train-script
+# default) — Megatron's wandb writer derives its dir from --save, so dropping save
+# (training.save_enabled=false) leaves args.save=None and crashes _set_wandb_writer.
+# save_interval defaults to 1e9, so no checkpoints are actually written during these
+# short runs; disk stays light regardless.
+COMMON="base/scale=60m training_regime=ablation_40x"
 # Held at the best anchor's non-swept dimensions.
 HELD="optim.lr=0.003 optim.poet.lie_ortho_c=8 optim.poet.lie_ortho_method=muon"
 
