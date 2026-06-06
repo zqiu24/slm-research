@@ -199,7 +199,7 @@ Q-optimizer dispatch (`lie_algebra` / `lie_ortho` / `muon` / default `adam`) liv
 - **`muon`** (default, ~5 NS steps): Muon's quintic Newton–Schulz on the direction, then a `½(X−Xᵀ)` cleanup. NS *preserves skew* on a skew input (verified to ~1e-15) and lands the singular values in a **band** around 1 — cheap, approximately-equal angles.
 - **`spectral`** (~15–20 NS steps): the exact Löwdin form `A·(−A²)^{-1/2}` — drives every σ to *exactly* 1, ≈4× the cost.
 
-Realized per-plane angle = `lr · scale · ortho_c` (under `muon` the band makes `ortho_c` *nominal*, ≈0.75–1.0× that). First-moment-only by default (a second moment is partly undone by orthogonalization). Design doc: [docs/muon_orthogonalizing_optimizer_poet.md](/lustre/fast/fast/zqiu/slm-research/docs/muon_orthogonalizing_optimizer_poet.md); plan: [docs/superpowers/plans/2026-06-05-poet-lie-orth-optimizer.md](/lustre/fast/fast/zqiu/slm-research/docs/superpowers/plans/2026-06-05-poet-lie-orth-optimizer.md). **Status:** the two completed runs in §2.3 are the new best POET; the lr / poet-scale / variant (band-vs-exact, ortho-vs-rms, head-on/off, 1st-vs-2nd-moment) sweeps are **in progress** ([sweep_lie_orth_lr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_lr.sh), [_scale](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_scale.sh), [_variants](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_variants.sh)).
+Realized per-plane angle = `lr · scale · ortho_c` (under `muon` the band makes `ortho_c` *nominal*, ≈0.75–1.0× that). First-moment-only by default (a second moment is partly undone by orthogonalization). Design doc: [docs/muon_orthogonalizing_optimizer_poet.md](/lustre/fast/fast/zqiu/slm-research/docs/muon_orthogonalizing_optimizer_poet.md); plan: [docs/superpowers/plans/2026-06-05-poet-lie-orth-optimizer.md](/lustre/fast/fast/zqiu/slm-research/docs/superpowers/plans/2026-06-05-poet-lie-orth-optimizer.md). **Status (2026-06-06):** champion is `5sbgancm` (c=8, lr 3e-3, muon, head-aligned) at **val/loss 3.5669**, **reproduced 4× exactly** across the lr/scale/variant sweeps — nothing beats it. Full sweep verdicts are in §2.5; headline: **ortho ≫ RMS** (matched-angle RMS sibling diverged), **muon-band ≈ exact `spectral`**, **1st-moment > 2nd**, and **`scale=0.5` is the stability ceiling** (`scale=0.75` diverged). Sweeps: [_lr](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_lr.sh), [_scale](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_scale.sh), [_variants](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_variants.sh), [_c](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_c.sh) (the c-sweep traces the same effective-angle axis as `_scale`). Still open: the `head`-on/off arm (`lieorth_c8_nohead`).
 
 ## 2.2 Experiment configs (the variants)
 
@@ -223,12 +223,12 @@ Best completed run per setting, ranked by `val/loss` (60m / 40 tokens-per-param)
 
 | # | Setting | val/loss | (ppl) | train | lr | rms/ortho c | head | Note |
 |---|---|---|---|---|---|---|---|---|
-| 1 | **muon_kimi** | **3.5352** | 34.30 | 3.4261 | 1e-3 | — | — | best overall |
+| 1 | **muon_kimi** | **3.5321** | 34.20 | 3.4219 | 1e-3 | — | — | best overall (run `of4bakqd`) |
 | 2 | adam (baseline) | 3.5570 | 35.06 | 3.4575 | 1e-3 | — | — | best dense baseline |
-| 3 | **poet_lie_orth (c8)** | **3.5669** | 35.41 | 3.4691 | **3e-3** | 8 (ortho) | yes | **best POET** (run `5sbgancm`) — Muon-band, full 9155 steps |
+| 3 | **poet_lie_orth (c8)** | **3.5669** | 35.41 | 3.4691 | **3e-3** | 8 (ortho) | yes | **best POET** (`5sbgancm`, **reproduced 4×** across sweeps) |
 | 4 | muon_hybrid | 3.5698 | 35.51 | 3.4705 | — | — | — | |
 | 5 | poet_lie_orth (c4) | 3.5715 | 35.57 | 3.4701 | 3e-3 | 4 (ortho) | yes | run `z1gpz9y7` |
-| 6 | poet_lie_rms | 3.6257 | 37.55 | 3.5220 | 3e-3 | 4 (rms) | no | prev. best POET (`tx67fwih`) |
+| 6 | poet_lie_rms | 3.6193 | 37.31 | 3.5220 | 3e-3 | 4 (rms) | no | best RMS-family (`98293d1u`; head-aligned twin `l2pzawa4` 3.6335 — worse) |
 | 7 | poet_dense_rms (c8) | 3.6344 | 37.88 | 3.5367 | 1e-3 | 8 (rms) | no | |
 | 8 | poet_lie_rms (c8) | 3.6404 | 38.11 | 3.5367 | 1e-3 | 8 (rms) | no | |
 | 9 | poet_lie | 3.6474 | 38.37 | 3.5437 | 1e-3 | — | no | Stage 1 |
@@ -240,11 +240,12 @@ Best completed run per setting, ranked by `val/loss` (60m / 40 tokens-per-param)
 | — | poet `exp` / Muon-on-Q | 3.70–3.82 | 41–46 | — | 1e-3 | — | no | regressions |
 
 **Conclusions (what's useful):**
-- **`lie_ortho` is the breakthrough — POET now nearly matches the baselines.** Best POET (poet_lie_orth, **3.5669** @ c=8) is only **+0.010** val/loss vs adam (3.557), **beats muon_hybrid** (3.570), and sits **#3 overall** behind only muon_kimi (3.535) and adam. That's a **−0.059** jump over the previous best POET (poet_lie_rms 3.626) — the long-standing POET gap is now ~closed.
-- **Orthogonalizing the rotation direction (`lie_ortho`) beats RMS-scaling it (`lie_rms`)** at the matched recipe: Muon's "equal per-plane angles" bet appears to hold for *rotational* updates. For ortho, **c=8 ≳ c=4** (3.5669 vs 3.5715). ⚠️ Both points are single (head-aligned, muon-band) runs; the lr / poet-scale / variant sweeps (band-vs-exact `spectral`, ortho-vs-rms at matched ∠, head-on/off, 1st-vs-2nd-moment) are **in progress** and will firm this up.
-- **The useful POET stack** is *single-step merge + Lie-algebra momentum + an angle-equalizing transform*: vanilla `poet` (≈3.70) → `poet_lie` (3.647) → `poet_lie_rms` (3.626) → **`poet_lie_orth` (3.567)**, all with **lr 3e-3**.
-- **The `c` knob has a sweet spot:** for RMS, c≈4–8 best (c=12 degrades, c=16 train ≈3.78); for ortho so far c=8 ≳ c=4. Larger c over-rotates.
-- **Head-aligned attention:** in the *RMS* family it did NOT help (head 3.654 vs dense 3.634–3.640 at lr 1e-3/c=8). But the two best `lie_ortho` runs **are** head-aligned — whether head-alignment helps *with* ortho is untested; the `lieorth_c8_nohead` arm of the variants sweep settles it.
+- **`lie_ortho` is the breakthrough — POET now nearly matches the baselines.** Best POET (poet_lie_orth, **3.5669** @ c=8) is only **+0.010** val/loss vs adam (3.557), **beats muon_hybrid** (3.570), and sits **#3 overall** behind only muon_kimi (3.532) and adam. That's a **−0.057** jump over the previous best POET (poet_lie_rms 3.626) — the long-standing POET gap is now ~closed. The champion is **reproduced 4× at exactly 3.5669**, so it's not noise.
+- **Orthogonalizing the rotation direction (`lie_ortho`) beats RMS-scaling it (`lie_rms`)** — now confirmed by the variants sweep: at the matched champion angle the RMS sibling `lierms_c8` **diverged** (val 6.38) while ortho held 3.567. Also from the sweeps: **muon-band ≈ exact `spectral`** (3.5669 vs 3.5703 — the cheap ~5-step quintic is enough, no need to pay for exact σ=1), **1st-moment beats 2nd** (3.5669 vs 3.5702), and for the angle **c=8 ≳ c=4** (3.5669 vs 3.5715). The `head`-on/off arm (`lieorth_c8_nohead`) is still running.
+- **The useful POET stack** is *single-step merge + Lie-algebra momentum + an angle-equalizing transform*: vanilla `poet` (≈3.70) → `poet_lie` (3.647) → `poet_lie_rms` (3.619) → **`poet_lie_orth` (3.567)**, all with **lr 3e-3**.
+- **The rotation angle has a hard ceiling.** `scale=0.5` (eff∠ 0.012) is best and stable; `scale=0.75` (eff∠ 0.018) **diverged** (val 4.55). Since c and scale are interchangeable under `muon` (`scale0.25/c8` ≡ `scale0.5/c4` → both 3.5715), the c-sweep's c≥12 arms (eff∠ ≥ 0.018) are expected to diverge too — keep the angle near eff∠ 0.012.
+- **The `c` knob has a sweet spot:** for RMS, c≈4 best at lr 3e-3 (c=8 *diverged* at this lr); for ortho c=8 ≳ c=4 and the band is wider. Larger c over-rotates.
+- **Head-aligned attention does NOT help.** Confirmed again at the best RMS recipe (lr 3e-3/c=4): head-aligned `l2pzawa4` 3.6335 vs no-head `98293d1u` 3.6193 (and earlier at lr 1e-3/c=8: head 3.654 vs dense 3.634). The best `lie_ortho` runs **are** head-aligned, but whether head-alignment helps *with* ortho is unresolved until `lieorth_c8_nohead` finishes.
 - **Alternating, `exp` parameterization, and (reset-regime) Muon-on-Q are current regressions.** Muon-on-Q (SkewMuon) was built for the `merge_period=0` no-reset regime and hasn't been retuned for it.
 
 ## 2.4 Head-aligned + RMS sweep (the `poet_h_*` / `poet_dense_*` runs)
@@ -264,11 +265,33 @@ All at lr 1e-3, `lie_rms_c` swept (the `aNNN` token in run names is the paired n
 
 Takeaway: **non-head-aligned (`dense`) beats head-aligned at every matched c**, RMS-on beats RMS-off, c=8 > c=12 > c=4 for the head-aligned family, and the `exp` head-aligned run crashed.
 
-## 2.5 Best runs leaderboard (settings + result)
+## 2.5 lie_ortho sweep results (as of 2026-06-06)
+
+Champion `5sbgancm` (lr 3e-3, scale 0.5, c=8, muon, head-aligned) = **val/loss 3.5669**, reproduced 4× (`lieorth_c8_muon`, `lieorth_lr0.003`, `lieorth_scale0.5`, + the original anchor). Completed arms, by sweep:
+
+**A — global LR** ([sweep_lie_orth_lr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_lr.sh)): 1e-3 → 3.6259 · 2e-3 → 3.5683 · **3e-3 → 3.5669** · (4e-3, 6e-3 not yet complete). Peak at 3e-3 so far.
+
+**B — POET scale / rotation-lr** ([sweep_lie_orth_scale.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_scale.sh)): 0.25 → 3.5715 · **0.5 → 3.5669** · **0.75 → 4.5527 (DIVERGED)** · (1.0, 1.5 incomplete). Stability ceiling at scale 0.5 (eff∠ 0.012).
+
+**C — variants at the champion angle** ([sweep_lie_orth_variants.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_variants.sh)):
+
+| arm | change vs control | val/loss |
+|---|---|---|
+| `lieorth_c8_muon` (control) | — | 3.5669 |
+| `lieorth_c8_spectral` | exact σ=1 (ns=20) | 3.5703 |
+| `lieorth_c8_2mom` | second moment on | 3.5702 |
+| `lierms_c8` | RMS instead of ortho | **6.3797 (DIVERGED)** |
+| `lieorth_c8_nohead` | head-aligned off | *running* |
+
+→ muon-band ≈ exact spectral; 1st-moment ≥ 2nd; **ortho far more stable than RMS** at this angle; head on/off unresolved.
+
+**D — native c** ([sweep_lie_orth_c.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lie_orth_c.sh)): not yet run. Degenerate with sweep B (eff∠ = lr·scale·c, and `orthogonalize(−m)` is magnitude-free), so c≥12 (eff∠ ≥ 0.018) will likely diverge like scale=0.75; the informative band is c≤8–10.
+
+## 2.6 Best runs leaderboard (settings + result)
 
 > Keep this current: when a run beats its family's entry, replace it (cite the run dir + W&B id).
 
-**🏆 Overall best (60m/40tpp):** [`muon_kimi-…-20260602T134241Z`](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260602T134241Z) — **val/loss 3.5352, ppl 34.30**, train 3.4261, 9155 steps, lr 1e-3.
+**🏆 Overall best (60m/40tpp):** [`muon_kimi-…-20260605T142324Z`](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260605T142324Z) (W&B `of4bakqd`) — **val/loss 3.5321, ppl 34.20**, train 3.4219, 9155 steps, lr 1e-3. (Earlier `…20260602T134241Z` was 3.5352; this is a same-config rerun.)
 
 **🥇 Best POET:** [`poet_lie_orth-…-20260605T190018Z`](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_orth-llama3-60m-s42-20260605T190018Z) (W&B `zeju-qiu/slm-zeju-dev/5sbgancm`) — **val/loss 3.5669, ppl 35.41**, train 3.4691, 9155 steps. The Muon-band orthogonalizing optimizer: `experiment=optim/poet_lie_orth`, **lr=0.003**, **lie_ortho_c=8** (method=muon, head-aligned; all other knobs = config default). Beats the previous best POET by **−0.059** and nearly matches the adam baseline (3.557). Command:
 ```bash
@@ -282,17 +305,17 @@ codexlog poet_lie_orth_best bash scripts/train_poet_lie_orth.sh llama3 \
 
 | Family | Run dir | val/loss | (ppl) | key settings |
 |---|---|---|---|---|
-| muon_kimi | [muon_kimi-…20260602T134241Z](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260602T134241Z) | 3.5352 | 34.30 | lr 1e-3 |
-| adam | [adam-…20260601T221123Z](/lustre/fast/fast/zqiu/slm-research/runs/adam-llama3-60m-s42-20260601T221123Z) | 3.5570 | 35.06 | lr 1e-3 |
+| muon_kimi | [muon_kimi-…20260605T142324Z](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260605T142324Z) (`of4bakqd`) | 3.5321 | 34.20 | lr 1e-3 |
+| adam | [adam-…20260605T142335Z](/lustre/fast/fast/zqiu/slm-research/runs/adam-llama3-60m-s42-20260605T142335Z) (`ylrd45af`) | 3.5570 | 35.06 | lr 1e-3 |
 | muon_hybrid | [muon-…20260602T001936Z](/lustre/fast/fast/zqiu/slm-research/runs/muon-llama3-60m-s42-20260602T001936Z) | 3.5698 | 35.51 | |
-| **poet_lie_orth** | [poet_lie_orth-…20260605T190018Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_orth-llama3-60m-s42-20260605T190018Z) | **3.5669** | 35.41 | lr 3e-3, c=8, muon, head-aligned |
-| poet_lie_rms (RMS family) | [poet_lie_rms-…20260604T140255Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260604T140255Z) | 3.6257 | 37.55 | lr 3e-3, c=4 |
+| **poet_lie_orth** | [poet_lie_orth-…20260605T190018Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_orth-llama3-60m-s42-20260605T190018Z) (`5sbgancm`) | **3.5669** | 35.41 | lr 3e-3, c=8, muon, head-aligned |
+| poet_lie_rms (RMS family) | [poet_lie_rms-…20260605T142434Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_rms-llama3-60m-s42-20260605T142434Z) (`98293d1u`) | 3.6193 | 37.31 | lr 3e-3, c=4 |
 | poet_lie | [poet_lie-…20260603T183821Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie-llama3-60m-s42-20260603T183821Z) | 3.6474 | 38.37 | lr 1e-3 |
 | poet0 | [poet0-…20260603T165332Z](/lustre/fast/fast/zqiu/slm-research/runs/poet0-llama3-60m-s42-20260603T165332Z) | 3.6518 | 38.55 | lr 1e-3 |
 | head-aligned | [poet_h_noperm_rms_c8-…20260605T112512Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_h_noperm_rms_c8-llama3-60m-s42-20260605T112512Z) | 3.6536 | 38.61 | lr 1e-3, c=8, noperm |
 | poet (vanilla) | `runs/poet-llama3-60m-s42-*` | ≈3.70 | ≈40.6 | lr 1e-3, merge_period 400 |
 
-## 2.6 How to update this tracker
+## 2.7 How to update this tracker
 
 - **Cohort matters:** only compare runs at the same scale + tokens/param. Everything above is 60m / 40tpp. A 300m or 20x table would be a separate block.
 - **Pull results** from each run's W&B summary: `runs/<dir>/**/wandb-summary.json`, keys `val/loss` / `train/loss` / `val/ppl` / `_step`. Treat `_step < 9000` as crashed/short for this cohort (full run = 9155 steps).
