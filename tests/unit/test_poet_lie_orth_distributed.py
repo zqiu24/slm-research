@@ -3,11 +3,22 @@ Each rank sees IDENTICAL grads (as Megatron guarantees post-all-reduce); the sha
 step must reproduce the single-rank (replicated) step bit-for-bit."""
 
 import os
+import socket
 
 import pytest
 import torch
 import torch.multiprocessing as mp
 import torch.nn as nn
+
+
+def _local_tcp_available():
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.close()
+        return True
+    except OSError:
+        return False
 
 
 def _single_rank_result(seed):
@@ -52,6 +63,7 @@ def _worker(rank, world, q):
 
 
 @pytest.mark.skipif(not torch.distributed.is_available(), reason="torch.distributed unavailable")
+@pytest.mark.skipif(not _local_tcp_available(), reason="local TCP sockets unavailable")
 def test_distributed_step_matches_single_rank():
     ref = _single_rank_result(seed=0)
     ctx = mp.get_context("spawn")
