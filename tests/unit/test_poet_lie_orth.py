@@ -190,3 +190,19 @@ def test_momentum_persists_across_value_reset():
     p.grad = torch.randn(1, ne)
     opt.step()
     assert torch.isfinite(p.data).all()
+
+
+def test_replicated_buffer_owns_all_params():
+    # At (dp_rank=0, dp_world=1) every skew param is owned, so its buffer slice is
+    # written (non-zero) — the replicated path covers everything.
+    torch.manual_seed(0)
+    ne = 8 * 7 // 2
+    ps = [nn.Parameter(torch.zeros(nb, ne)) for nb in (1, 3, 2)]
+    for p in ps:
+        p.grad = torch.randn_like(p)
+    opt = LieOrthMomentum([dict(params=ps, use_skew=True, side="out", lr=0.1)], ortho_c=0.05)
+    opt._lie_m_update(active=None)
+    buf, slices = opt._skew_update_buffer(dp_rank=0, dp_world=1, active=None)
+    assert len(slices) == 3
+    for off, n, _, _ in slices:
+        assert buf[off : off + n].abs().sum() > 0  # written, not left as zeros
