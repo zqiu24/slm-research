@@ -96,17 +96,24 @@ class LieOrthMomentum(torch.optim.Optimizer):
                     st = self.state[p]
                     if "lie_m" not in st:
                         st["lie_m"] = torch.zeros_like(g)
-                        if v_mode == "scalar":
-                            st["lie_v"] = torch.zeros(g.shape[0], 1, dtype=g.dtype, device=g.device)
-                        else:
-                            st["lie_v"] = torch.zeros_like(g)
-                    m, v = st["lie_m"], st["lie_v"]
+                        # lie_v (2nd moment) is only allocated when actually used; the
+                        # default first-moment-only direction is just -m, so skip it.
+                        if self.ortho_use_second_moment:
+                            if v_mode == "scalar":
+                                st["lie_v"] = torch.zeros(
+                                    g.shape[0], 1, dtype=g.dtype, device=g.device
+                                )
+                            else:
+                                st["lie_v"] = torch.zeros_like(g)
+                    m = st["lie_m"]
                     # Momentum accumulates on BOTH sides every step ...
                     m.mul_(b1).add_(g, alpha=1 - b1)
-                    if v_mode == "scalar":
-                        v.mul_(b2).add_(2.0 * (g * g).sum(dim=-1, keepdim=True), alpha=1 - b2)
-                    else:
-                        v.mul_(b2).add_(g * g, alpha=1 - b2)
+                    if self.ortho_use_second_moment:
+                        v = st["lie_v"]
+                        if v_mode == "scalar":
+                            v.mul_(b2).add_(2.0 * (g * g).sum(dim=-1, keepdim=True), alpha=1 - b2)
+                        else:
+                            v.mul_(b2).add_(g * g, alpha=1 - b2)
                     # ... but only the ACTIVE side's oft_R is written.
                     if self.alternating and side != active:
                         continue

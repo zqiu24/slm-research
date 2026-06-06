@@ -619,20 +619,25 @@ def get_megatron_poet_lie_momentum_optimizer(
             **shared_kwargs,
         )
 
+    # lie_v (2nd moment) is unused by LieOrthMomentum in its default first-moment-only
+    # mode, so don't pre-allocate it there. LieAlgebraMomentum always needs it (no such
+    # attr → getattr default True).
+    _needs_lie_v = getattr(optimizer, "ortho_use_second_moment", True)
+
     def init_state_fn(opt, _config=None):
         for group in opt.param_groups:
             for p in group["params"]:
                 st = opt.state[p]
                 if group["use_skew"]:
                     st.setdefault("lie_m", torch.zeros_like(p.data))
-                    if group["v_mode"] == "scalar":
+                    if _needs_lie_v and group["v_mode"] == "scalar":
                         st.setdefault(
                             "lie_v",
                             torch.zeros(
                                 p.data.shape[0], 1, dtype=p.data.dtype, device=p.data.device
                             ),
                         )
-                    else:
+                    elif _needs_lie_v:
                         st.setdefault("lie_v", torch.zeros_like(p.data))
                 elif "moment1" not in st:
                     st["step"] = 0

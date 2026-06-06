@@ -80,6 +80,31 @@ def _make_opt(p, lr, ortho_c, method="muon", ns_steps=5, **kw):
     )
 
 
+def test_first_moment_only_skips_lie_v_buffer():
+    # Default (first-moment-only): the direction is just -m, so the second-moment
+    # buffer lie_v should never be allocated or maintained.
+    torch.manual_seed(0)
+    ne = 8 * 7 // 2
+    p = nn.Parameter(torch.zeros(1, ne))
+    p.grad = torch.randn(1, ne)
+    opt = _make_opt(p, 0.1, 0.05)  # ortho_use_second_moment defaults to False
+    opt.step()
+    assert "lie_m" in opt.state[p]
+    assert "lie_v" not in opt.state[p]
+
+
+def test_second_moment_allocates_lie_v_buffer():
+    # With the second moment on, lie_v is allocated and updated.
+    torch.manual_seed(0)
+    ne = 8 * 7 // 2
+    p = nn.Parameter(torch.zeros(1, ne))
+    p.grad = torch.randn(1, ne)
+    opt = _make_opt(p, 0.1, 0.05, ortho_use_second_moment=True)
+    opt.step()
+    assert "lie_v" in opt.state[p]
+    assert opt.state[p]["lie_v"].abs().sum() > 0
+
+
 def test_muon_equalizes_plane_angles_into_a_band():
     # DEFAULT (muon): one step from identity -> the written oft_R's per-plane angles
     # form a tight band (cond < 2) at ~ lr*ortho_c. Equalized, but not exactly equal.
