@@ -99,6 +99,7 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-lie-ortho-method", choices=["muon", "spectral"], default="muon")
     group.add_argument("--poet-lie-ortho-ns-steps", type=int, default=5)
     group.add_argument("--poet-lie-ortho-use-second-moment", action="store_true")
+    group.add_argument("--poet-lie-ortho-distributed", action="store_true")
     # Head-aligned attention rotation (opt-in): q/k/v/o rotate their head-
     # structured side per head (block_size=head_dim, identity Psi, no perm);
     # the residual side stays a normal POET rotation. Requires --unfuse-qkv.

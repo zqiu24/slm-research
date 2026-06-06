@@ -263,3 +263,12 @@ def test_lie_ortho_knobs_default():
     assert args.poet_lie_ortho_method == "muon"
     assert args.poet_lie_ortho_ns_steps == 5
     assert args.poet_lie_ortho_use_second_moment is False
+
+
+def test_add_slm_args_accepts_lie_ortho_distributed():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    on = parser.parse_args(["--slm-config-path", "x.yaml", "--poet-lie-ortho-distributed"])
+    off = parser.parse_args(["--slm-config-path", "x.yaml"])
+    assert on.poet_lie_ortho_distributed is True
+    assert off.poet_lie_ortho_distributed is False
