@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the `lie_ortho` POET optimizer (`q_optimizer=lie_ortho`) ~as fast as its `lie_rms` sibling (target: ~1.18 s/step → ~0.3 s/step on 60m/8×H100) **without changing its numerical result**, so the champion run (`5sbgancm`, val/loss 3.5669) is preserved.
+**Goal:** Make the `lie_ortho` POET optimizer (`q_optimizer=lie_ortho`) ~as fast as its `lie_rms` sibling (target: ~1.18 s/step → ~0.3 s/step on 60m/8×H100) **without meaningfully changing its numerical result** (equivalent within float tolerance), so the champion run (`5sbgancm`, val/loss 3.5669) is preserved.
 
-**Architecture:** The slowdown is *not* the algorithm. The Newton–Schulz orthogonalization is only ~50 ms/step of real compute, but `LieOrthMomentum.step` costs ~960 ms because, **per skew param, per step**, it (a) rebuilds million-element `torch.triu_indices` on CPU and copies them to GPU, (b) materializes dense `(1, b, b)` skew matrices and scatters into them, (c) does all this in a ~250-iteration Python loop. The fast `lie_rms` avoids dense matrices entirely (it norms the packed vector). Fix = three numerically-exact changes: cache `triu_indices` on-device, and batch all same-block-size params into one `vec_to_skew → NS → skew_to_vec` call instead of a per-param loop. An optional bf16 NS path is included separately (it changes numerics, so it is opt-in and off by default).
+**Architecture:** The slowdown is *not* the algorithm. The Newton–Schulz orthogonalization is only ~50 ms/step of real compute, but `LieOrthMomentum.step` costs ~960 ms because, **per skew param, per step**, it (a) rebuilds million-element `torch.triu_indices` on CPU and copies them to GPU, (b) materializes dense `(1, b, b)` skew matrices and scatters into them, (c) does all this in a ~250-iteration Python loop. The fast `lie_rms` avoids dense matrices entirely (it norms the packed vector). Fix = two numerically-equivalent changes (within float tolerance): cache `triu_indices` on-device (bit-identical), and batch all same-block-size params into one `vec_to_skew → NS → skew_to_vec` call instead of a per-param loop (equivalent to ~1e-6/step — batched `bmm` may reorder reductions). An optional bf16 NS path is included separately (it changes numerics, so it is opt-in and off by default). Task 1 profiles the hotspot before any code changes, so we confirm the 50ms-vs-910ms split on the real GPU before committing to the fix.
 
 **Tech Stack:** PyTorch, pytest. CPU-only unit tests (the optimizer math runs on CPU); one GPU validation step run by the user.
 
@@ -35,7 +35,7 @@ Decomposition runs proved it is **not** head-alignment (lie_algebra 0.272→0.28
 
 - `tools/lie_orth_profile.py` — **new**. Standalone GPU microbenchmark that times a `LieOrthMomentum.step()` on representative 60m shapes and isolates (full step) vs (skew↔vec conversions) vs (NS matmuls). Confirms the hotspot before/after each change. One responsibility: profiling.
 - `src/diag/skew_conditioning.py` — **modify** `vec_to_skew` / `skew_to_vec` to use an on-device cached `triu_indices` helper `_triu_idx(b, device)`. Pure speedup, numerically identical.
-- `src/optim/poet_lie_orth.py` — **modify** `LieOrthMomentum.step` to batch all same-block-size skew params into one `vec_to_skew → orthogonalize → skew_to_vec` per block size, instead of one call per param. Numerically identical (batched NS == per-param NS, already covered by `test_orthogonalize_skew_direction_batches_per_block`).
+- `src/optim/poet_lie_orth.py` — **modify** `LieOrthMomentum.step` to batch all same-block-size skew params into one `vec_to_skew → orthogonalize → skew_to_vec` per block size, instead of one call per param. Numerically equivalent within float tolerance (batched NS ≈ per-param NS to ~1e-6, already covered by `test_orthogonalize_skew_direction_batches_per_block`).
 - `src/optim/poet_skew_muon.py` — **modify** (Task 4, optional) `orthogonalize_skew_blocks` / `orthogonalize_skew_direction` to accept an optional `compute_dtype` (bf16) for the matmul loop.
 - `src/optim/poet.py`, `src/utils/megatron_args.py`, `launchers/pretrain_gpt_slm.py` — **modify** (Task 4, optional) to thread a `poet_lie_ortho_compute_dtype` flag (default `fp32`, preserves results).
 - `tests/unit/test_diag_skew_conditioning.py` — **modify**: add cache-correctness tests.
@@ -169,7 +169,7 @@ git commit -m "perf(poet): add lie_ortho step microbenchmark to isolate the hots
 
 ---
 
-## Task 2: Cache triu_indices on-device (numerically exact)
+## Task 2: Cache triu_indices on-device (bit-identical)
 
 **Files:**
 - Modify: `src/diag/skew_conditioning.py`
@@ -259,7 +259,7 @@ git commit -m "perf(poet): cache on-device triu_indices in vec_to_skew/skew_to_v
 
 ---
 
-## Task 3: Batch same-block-size skew params in LieOrthMomentum.step (numerically exact)
+## Task 3: Batch same-block-size skew params in LieOrthMomentum.step (numerically equivalent within float tolerance)
 
 **Files:**
 - Modify: `src/optim/poet_lie_orth.py` (the `use_skew` branch of `step`, [poet_lie_orth.py:86-132](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth.py#L86-L132))
@@ -424,6 +424,8 @@ In `src/optim/poet_lie_orth.py`, replace the entire `if group["use_skew"]:` bloc
 
 (The `lr = group["lr"]` line above the `if group["use_skew"]:` stays; the `else:` AdamW branch is unchanged.)
 
+**Memory note:** batching collects all same-`b` params into one dense `(sum_nb, b, b)` tensor, and NS allocates a few more of that size — e.g. the 36 b=1536 out-side params become a `(36,1536,1536)` batch (~340 MB) with ~1.5 GB transient during NS. Fine at 60m on an H100, but at larger scale this could OOM; if so, cap the per-call batch (chunk `items` into groups of, say, 16 and loop the Pass-2 block over chunks). Out of scope for 60m; noted for scale-up.
+
 - [ ] **Step 4: Run the full lie_orth + skew suites to verify equivalence held**
 
 Run: `PY=/lustre/fast/fast/zqiu/slm_env/.venv/bin/python; $PY -m pytest tests/unit/test_poet_lie_orth.py tests/unit/test_diag_skew_conditioning.py tests/unit/test_poet_lie_momentum.py -v`
@@ -530,11 +532,22 @@ In `src/optim/poet.py` where `LieOrthMomentum(...)` is constructed ([poet.py:606
             ),
 ```
 
-In `src/utils/megatron_args.py` near the other `lie_ortho` reads ([megatron_args.py:315-341](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L315-L341)), emit the flag from config:
+In `src/utils/megatron_args.py`, add the value flag **inside the existing `poet_args` list literal**, immediately after the `--poet-lie-ortho-ns-steps` entry ([megatron_args.py:318-319](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L318-L319)). Change:
 
 ```python
-        poet_args += ["--poet-lie-ortho-compute-dtype", str(poet.get("lie_ortho_compute_dtype", "fp32"))]
+            "--poet-lie-ortho-ns-steps",
+            poet.get("lie_ortho_ns_steps", 5),
+            "--adam-beta1",
 ```
+to:
+```python
+            "--poet-lie-ortho-ns-steps",
+            poet.get("lie_ortho_ns_steps", 5),
+            "--poet-lie-ortho-compute-dtype",
+            poet.get("lie_ortho_compute_dtype", "fp32"),
+            "--adam-beta1",
+```
+(It's a `choices=["fp32","bf16"]` arg, so the raw string value is passed like the other value flags — no `str()` wrapper or `.append()` needed.)
 
 - [ ] **Step 5: Run tests + compile-check**
 
@@ -563,7 +576,7 @@ codexlog poet_lie_orth_fast bash scripts/train_poet_lie_orth.sh llama3 \
   optim.lr=0.003 \
   optim.poet.lie_ortho_c=8
 ```
-Expected: `perf/step_time_s` drops from ~1.18 s toward ~0.3 s; the early-step `train/loss` curve tracks the original `5sbgancm` (the default fp32 path is numerically exact, so loss should match closely). If you also enable `optim.poet.lie_ortho_compute_dtype=bf16`, expect a small extra speedup and a slightly different (not identical) curve.
+Expected: `perf/step_time_s` drops from ~1.18 s toward ~0.3 s; the early-step `train/loss` curve tracks the original `5sbgancm` (the default fp32 path is numerically equivalent within float tolerance, so loss should match closely). If you also enable `optim.poet.lie_ortho_compute_dtype=bf16`, expect a small extra speedup and a slightly different (not identical) curve.
 
 - [ ] **Step 2: Record the measured step time in the tracker**
 
@@ -584,7 +597,7 @@ git commit -m "docs(poet): record lie_ortho post-speedup step time"
 - Hotspot 1 (triu_indices rebuilt + H2D) → Task 2 (on-device cache). ✓
 - Hotspot 3 (per-param Python loop / dense materialization) → Task 3 (batch by block size). ✓
 - Hotspot driver fp32 NS → Task 4 (optional bf16, opt-in). ✓
-- "Don't change the result" → Tasks 2 & 3 are numerically exact (cache = same indices; batched NS == per-param NS, guarded by `test_batched_step_matches_solo_steps_same_block_size` + the existing `test_orthogonalize_skew_direction_batches_per_block`); bf16 is opt-in and off by default. ✓
+- "Don't change the result" → Task 2 is **bit-identical** (same indices, just cached/on-device); Task 3 is **equivalent within float tolerance** (~1e-6/step — batched `bmm` may reorder reductions vs the per-param loop; far inside seed/run-to-run noise), guarded by `test_batched_step_matches_solo_steps_same_block_size` + the existing `test_orthogonalize_skew_direction_batches_per_block`; bf16 is opt-in and off by default. ✓
 - Confirm-before-fix → Task 1 profiler runs first; re-run after Task 3. ✓
 - `block_count` (model change) explicitly out of scope. ✓
 
@@ -592,4 +605,4 @@ git commit -m "docs(poet): record lie_ortho post-speedup step time"
 
 **Type/name consistency:** `_triu_idx(b, device)` / `_TRIU_CACHE` defined in Task 2 and used by `vec_to_skew`/`skew_to_vec`; `buckets`/`A_cat`/`gen_cat` local to Task 3; `compute_dtype` added to `orthogonalize_skew_blocks` (Task 4 Step 3) and consumed by `orthogonalize_skew_direction` (same step) and `LieOrthMomentum` (Step 4); flag name `--poet-lie-ortho-compute-dtype` ↔ config key `lie_ortho_compute_dtype` ↔ `config.poet_lie_ortho_compute_dtype` consistent across launcher/megatron_args/poet.py. Batched `orthogonalize_skew_direction(vec_to_skew(A_cat, bsz), ...)` matches its `(num_blocks, b, b)` contract.
 
-**Risk note:** Task 3 is the structural change. Its equivalence is guaranteed by (a) cat/split preserving param order and (b) batched NS == stacked single NS (already an existing test). The three new guardrail tests are written to pass on the *current* code first (Step 2), then must keep passing after the refactor (Step 4) — that is the equivalence proof.
+**Risk note:** Task 3 is the structural change. Its equivalence (within float tolerance) rests on (a) cat/split preserving param order and (b) batched NS ≈ stacked single NS to ~1e-6 (already an existing test). The three new guardrail tests are written to pass on the *current* code first (Step 2), then must keep passing after the refactor (Step 4) — that is the equivalence check. Bit-identical output is not expected (batched `bmm` may reorder reductions); the ~1e-6/step delta is far inside seed/run-to-run training noise.
