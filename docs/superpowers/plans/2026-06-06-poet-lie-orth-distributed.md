@@ -4,7 +4,7 @@
 
 **Goal:** Make `LieOrthMomentum` shard the expensive Newton–Schulz orthogonalization across data-parallel ranks (round-robin) instead of every rank redundantly orthogonalizing the full `oft_R`, cutting that cost ≈`dp_world_size`× at scale — opt-in, numerically identical to the current replicated path.
 
-**Architecture:** Today every DP rank holds identical `oft_R` (grads are DP-all-reduced by Megatron before `step()`) and redundantly runs the full orthogonalization. We split `step()`'s skew branch into three phases: (a) momentum EMA update — cheap, run on **all** ranks so `lie_m`/`lie_v` stay in sync; (b) a **pure** `_skew_update_buffer(dp_rank, dp_world)` that computes the `lr·c·orthogonalize(−m)` update **only for the round-robin-owned `oft_R` params**, zeros elsewhere, packed into one flat fp32 buffer; (c) one **bucketed `dist.all_reduce(SUM)`** of that buffer over the DP group, then scatter-apply to `oft_R`. Summing `[real_on_owner, 0_elsewhere]` is exact (adding zeros never perturbs bits) and `all_reduce` returns identical bits to every rank, so all ranks end with identical `oft_R` — **no drift, no shape constraints** (unlike the reference's per-chunk `all_gather`, which requires same-shape params). The replicated path is just this with `(dp_rank=0, dp_world=1)` and no collective, so it's behavior-preserving and the default.
+**Architecture:** Today every DP rank holds identical `oft_R` (grads are DP-all-reduced by Megatron before `step()`) and redundantly runs the full orthogonalization. We split `step()`'s skew branch into three phases: (a) momentum EMA update — cheap, run on **all** ranks so `lie_m`/`lie_v` stay in sync; (b) a **pure** `_skew_update_buffer(dp_rank, dp_world)` that computes the generator `c·orthogonalize(−m)` **only for the round-robin-owned `oft_R` params** (lr applied at scatter, so the bf16 cast order matches the inline path bit-for-bit), zeros elsewhere, packed into one flat fp32 buffer; (c) one **bucketed `dist.all_reduce(SUM)`** of that buffer over the DP group, then scatter-apply to `oft_R`. Summing `[real_on_owner, 0_elsewhere]` is exact (adding zeros never perturbs bits) and `all_reduce` returns identical bits to every rank, so all ranks end with identical `oft_R` — **no drift, no shape constraints** (unlike the reference's per-chunk `all_gather`, which requires same-shape params). The replicated path is just this with `(dp_rank=0, dp_world=1)` and no collective, so it's behavior-preserving and the default.
 
 **Why all_reduce-of-deltas, not the reference's all_gather:** `oft_R` params have heterogeneous shapes `(n_blocks_i, n_elems)` (`n_blocks` varies per layer). `muon_official.py`'s `dist.all_gather(params_pad[base_i:base_i+W], params_pad[base_i+rank])` requires every rank's contributed tensor in a chunk to be the **same shape**, which fails for POET. Flattening per-rank update deltas into one buffer and `all_reduce`-summing sidesteps shapes entirely and is exact (zeros).
 
@@ -86,7 +86,7 @@ def test_replicated_buffer_owns_all_params():
     opt._lie_m_update(active=None)
     buf, slices = opt._skew_update_buffer(dp_rank=0, dp_world=1, active=None)
     assert len(slices) == 3
-    for off, n, _ in slices:
+    for off, n, _, _ in slices:
         assert buf[off : off + n].abs().sum() > 0  # written, not left as zeros
 ```
 
@@ -138,14 +138,18 @@ In `src/optim/poet_lie_orth.py`, replace the entire `step` method (the `@torch.n
                     yield p, group
 
     def _skew_update_buffer(self, dp_rank, dp_world, active):
-        """Phase (b), PURE (reads lie_m/lie_v, no mutation): compute the per-param
-        update lr*ortho_c*orthogonalize(-dir) for the round-robin-OWNED skew params
+        """Phase (b), PURE (reads lie_m/lie_v, no mutation): compute the generator
+        gen = ortho_c*orthogonalize(-dir) for the round-robin-OWNED skew params
         (i % dp_world == dp_rank), zeros for the rest, packed into one flat fp32 buffer.
-        Returns (flat_buffer, slices=[(offset, numel, param), ...])."""
+        NOTE: lr is NOT folded in here — it is applied at scatter (alpha=lr) so the cast
+        to bf16 happens in the same order as the inline path (gen.to(dtype) THEN *lr),
+        making the buffer path bit-identical to the old inline update. (Folding lr in
+        fp32 here would round differently in bf16 — verified ~3e-5 drift otherwise.)
+        Returns (flat_buffer, slices=[(offset, numel, param, lr), ...])."""
         items = list(self._iter_skew_params())
         slices, total = [], 0
-        for p, _ in items:
-            slices.append((total, p.numel(), p))
+        for p, group in items:
+            slices.append((total, p.numel(), p, group["lr"]))
             total += p.numel()
         if total == 0:
             return torch.zeros(0), []
@@ -168,15 +172,17 @@ In `src/optim/poet_lie_orth.py`, replace the entire `step` method (the `@torch.n
                 method=self.ortho_method,
                 ns_steps=self.ortho_ns_steps,
             )
-            gen = skew_to_vec(self.ortho_c * X, bsz)  # (n_blocks, n_elems) float
-            off, n, _ = slices[i]
-            buf[off : off + n] = (group["lr"] * gen).reshape(-1)
+            gen = skew_to_vec(self.ortho_c * X, bsz)  # (n_blocks, n_elems) float; lr at scatter
+            off, n = slices[i][0], slices[i][1]
+            buf[off : off + n] = gen.reshape(-1)
         return buf, slices
 
     def _apply_skew_update_buffer(self, buf, slices):
-        """Phase (d): scatter the (already all-reduced) flat buffer back onto oft_R."""
-        for off, n, p in slices:
-            p.add_(buf[off : off + n].view_as(p).to(p.dtype))
+        """Phase (d): scatter the (already all-reduced) flat buffer back onto oft_R,
+        applying each param's lr. Cast order (gen.to(dtype) then alpha=lr) matches the
+        inline path exactly, so the buffer/sharded path is bit-identical to replicated."""
+        for off, n, p, lr in slices:
+            p.add_(buf[off : off + n].view_as(p).to(p.dtype), alpha=lr)
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -319,7 +325,7 @@ def test_sharded_owns_each_param_exactly_once():
     nonzero_owners = [0] * len(ps)
     for r in range(dp_world):
         buf, slices = opt._skew_update_buffer(dp_rank=r, dp_world=dp_world, active=None)
-        for i, (off, n, _) in enumerate(slices):
+        for i, (off, n, _, _) in enumerate(slices):
             if buf[off : off + n].abs().sum() > 0:
                 nonzero_owners[i] += 1
     assert all(c == 1 for c in nonzero_owners), nonzero_owners
