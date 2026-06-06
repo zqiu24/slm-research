@@ -206,3 +206,52 @@ def test_replicated_buffer_owns_all_params():
     assert len(slices) == 3
     for off, n, _, _ in slices:
         assert buf[off : off + n].abs().sum() > 0  # written, not left as zeros
+
+
+@pytest.mark.parametrize("dp_world", [2, 3, 4])
+def test_sharded_buffers_sum_to_replicated(dp_world):
+    # Build several skew params of DIFFERENT shapes (heterogeneous n_blocks), one opt.
+    torch.manual_seed(0)
+    ne = 8 * 7 // 2
+    ps = [nn.Parameter(torch.zeros(nb, ne)) for nb in (1, 3, 2, 5)]
+    for p in ps:
+        p.grad = torch.randn_like(p)
+    opt = LieOrthMomentum(
+        [dict(params=ps, use_skew=True, side="out", lr=0.1)],
+        b1=0.9,
+        b2=0.95,
+        eps=1e-8,
+        ortho_c=0.05,
+        ortho_method="muon",
+        ortho_ns_steps=5,
+    )
+    opt._lie_m_update(active=None)  # momentum once (shared across the simulated ranks)
+    replicated, _ = opt._skew_update_buffer(dp_rank=0, dp_world=1, active=None)
+    summed = torch.zeros_like(replicated)
+    for r in range(dp_world):
+        buf_r, _ = opt._skew_update_buffer(dp_rank=r, dp_world=dp_world, active=None)
+        summed += buf_r
+    # Each param is owned by exactly one rank; zeros elsewhere ⇒ sum == replicated, exactly.
+    assert torch.equal(summed, replicated), (summed - replicated).abs().max()
+
+
+def test_sharded_owns_each_param_exactly_once():
+    # Every skew param must be written by exactly one rank (no double-count, no drop).
+    torch.manual_seed(0)
+    ne = 8 * 7 // 2
+    ps = [nn.Parameter(torch.zeros(nb, ne)) for nb in (1, 3, 2, 5, 4)]
+    for p in ps:
+        p.grad = torch.randn_like(p)
+    opt = LieOrthMomentum(
+        [dict(params=ps, use_skew=True, side="out", lr=0.1)],
+        ortho_c=0.05,
+    )
+    opt._lie_m_update(active=None)
+    dp_world = 3
+    nonzero_owners = [0] * len(ps)
+    for r in range(dp_world):
+        buf, slices = opt._skew_update_buffer(dp_rank=r, dp_world=dp_world, active=None)
+        for i, (off, n, _, _) in enumerate(slices):
+            if buf[off : off + n].abs().sum() > 0:
+                nonzero_owners[i] += 1
+    assert all(c == 1 for c in nonzero_owners), nonzero_owners
