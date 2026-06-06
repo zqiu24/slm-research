@@ -11,6 +11,18 @@ import math
 
 import torch
 
+_TRIU_CACHE: dict[tuple[int, str], tuple[torch.Tensor, torch.Tensor]] = {}
+
+
+def _triu_idx(b: int, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    key = (int(b), str(device))
+    cached = _TRIU_CACHE.get(key)
+    if cached is None:
+        idx = torch.triu_indices(b, b, 1, device=device)
+        cached = (idx[0].contiguous(), idx[1].contiguous())
+        _TRIU_CACHE[key] = cached
+    return cached
+
 
 def block_spectral_stats(skew: torch.Tensor, eps: float = 1e-12) -> dict[str, torch.Tensor]:
     """Summarize the singular-value spectrum of a batch of (skew-symmetric) blocks.
@@ -61,7 +73,7 @@ def vec_to_skew(vec: torch.Tensor, block_size: int) -> torch.Tensor:
         vec = vec.unsqueeze(0)
     b = block_size
     n = vec.shape[0]
-    rows, cols = torch.triu_indices(b, b, 1)
+    rows, cols = _triu_idx(b, vec.device)
     q = torch.zeros(n, b, b, dtype=vec.dtype, device=vec.device)
     q[:, rows, cols] = vec
     q[:, cols, rows] = -vec
@@ -86,5 +98,5 @@ def skew_to_vec(skew: torch.Tensor, block_size: int) -> torch.Tensor:
     if skew.dim() == 2:
         skew = skew.unsqueeze(0)
     b = block_size
-    rows, cols = torch.triu_indices(b, b, 1)
+    rows, cols = _triu_idx(b, skew.device)
     return skew[:, rows, cols]

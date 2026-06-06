@@ -75,6 +75,29 @@ def test_skew_to_vec_is_inverse_of_vec_to_skew():
     assert torch.allclose(round_trip, vec)
 
 
+def test_triu_idx_is_cached():
+    from src.diag.skew_conditioning import _TRIU_CACHE, _triu_idx
+
+    _TRIU_CACHE.clear()
+    a = _triu_idx(8, torch.device("cpu"))
+    b = _triu_idx(8, torch.device("cpu"))
+    assert a[0] is b[0] and a[1] is b[1]
+    assert (8, "cpu") in _TRIU_CACHE
+
+
+def test_vec_to_skew_correct_after_caching():
+    from src.diag.skew_conditioning import skew_to_vec, vec_to_skew
+
+    torch.manual_seed(0)
+    b = 8
+    vec = torch.randn(3, b * (b - 1) // 2)
+    q = vec_to_skew(vec, b)
+    assert torch.allclose(q, -q.transpose(-2, -1))
+    rows, cols = torch.triu_indices(b, b, 1)
+    assert torch.allclose(q[:, rows, cols], vec)
+    assert torch.allclose(skew_to_vec(q, b), vec)
+
+
 def test_block_size_from_nelems():
     from src.diag.skew_conditioning import block_size_from_nelems
 
