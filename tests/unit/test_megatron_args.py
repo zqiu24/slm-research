@@ -278,6 +278,22 @@ def test_poet_argv_lie_ortho_defaults():
     assert args[args.index("--poet-lie-ortho-method") + 1] == "muon"
 
 
+def test_poet_argv_emits_lie_ortho_distributed():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg({"block_count": 1, "q_optimizer": "lie_ortho", "lie_ortho_distributed": True})
+    )
+    assert "--poet-lie-ortho-distributed" in args
+
+
+def test_poet_argv_omits_lie_ortho_distributed_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-lie-ortho-distributed" not in args
+
+
 def test_wsd_scheduler_emits_wsd_flags():
     cfg = _parse_overrides(
         [
