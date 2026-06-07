@@ -14,3 +14,5 @@ from .poet_cayley_layer import replace_linear_with_poet_cayley as replace_linear
 from .poet_cayley_layer import check_and_merge_cayley as check_and_merge_cayley
 
 from .head_aligned_layer import HeadAlignedPOETLinear as HeadAlignedPOETLinear
+
+from .single_step import SingleStepPOETFunction as SingleStepPOETFunction
