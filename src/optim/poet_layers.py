@@ -192,6 +192,7 @@ def replace_linears_with_poet(
     head_dim: int | None = None,
     resid_permute: bool = True,
     single_step_fast: bool = False,
+    single_step_native: bool = False,
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -268,7 +269,7 @@ def replace_linears_with_poet(
                         **resid_kwargs,
                     )
                     _copy_and_init_weight(pl, child, init_type, mup_alpha)
-                    pl.single_step_fast = single_step_fast
+                    pl.single_step_fast = single_step_fast or single_step_native
                     wrapper = POETMegatronLinear(
                         pl, skip_bias_add=getattr(child, "skip_bias_add", False)
                     )
@@ -308,7 +309,11 @@ def replace_linears_with_poet(
 
                 has_bias = child.bias is not None and child.bias.numel() > 0
                 if cache_mode == "none":
-                    pl = POETLinear(
+                    if single_step_native:
+                        from poet_torch import SingleStepPOETLinear as _PoetCls
+                    else:
+                        _PoetCls = POETLinear  # noqa: N806
+                    pl = _PoetCls(
                         in_features=in_f,
                         out_features=out_f,
                         bias=has_bias,

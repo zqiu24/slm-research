@@ -428,3 +428,26 @@ def test_single_step_fast_flag_set_on_wrapped_layers():
     )
     assert isinstance(m.fc1, POETMegatronLinear)
     assert m.fc1.poet_linear.single_step_fast is True
+
+
+def test_single_step_native_uses_new_class():
+    import torch.nn as nn
+    from poet_torch import SingleStepPOETLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 16, bias=False)
+
+    m = M()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_native=True,
+    )
+    assert isinstance(m.fc1, POETMegatronLinear)
+    assert isinstance(m.fc1.poet_linear, SingleStepPOETLinear)
