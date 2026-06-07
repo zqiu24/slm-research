@@ -181,8 +181,11 @@ class HeadAlignedSingleStepFunction(torch.autograd.Function):
 
         grad_oft_R_in = grad_oft_R_in.to(weight.dtype)
         grad_oft_R_out = grad_oft_R_out.to(weight.dtype)
+        # 12 forward inputs -> 12 returns: real grads for x/oft_R_in/oft_R_out, then
+        # 9 None for weight, bias, rows_in, cols_in, rows_out, cols_out,
+        # block_size_in, block_size_out, head_side.
         return (grad_x, grad_oft_R_in, grad_oft_R_out,
-                None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None, None)
 ```
 
 - [ ] **Step 4: Export it.** Add to `third_party/poet_torch/__init__.py`:
@@ -240,7 +243,8 @@ Expected: FAIL — `forward` ignores `single_step_fast`, routes to the compiled/
 - [ ] **Step 3: Dispatch.** In `third_party/poet_torch/head_aligned_layer.py`, at the top of `HeadAlignedPOETLinear.forward` (immediately after `def forward(self, x):`, ~line 230), add:
 
 ```python
-        if getattr(self, "single_step_fast", False):
+        # Single-step fast path (R=I); cayley guard is defensive (see Plan 1 Task 2).
+        if getattr(self, "single_step_fast", False) and self.parameterization == "cayley":
             from .single_step import HeadAlignedSingleStepFunction
             return HeadAlignedSingleStepFunction.apply(
                 x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
@@ -297,5 +301,6 @@ git add -A && git commit -m "chore(poet): head-aligned single-step fast path Pla
 
 - **Spec coverage:** block-local helpers + `HeadAlignedSingleStepFunction` (T1) → layer dispatch (T2) → regression + GPU handoff (T3). Both `head_side` values covered (parametrized tests). Residual (dense) side reuses Plan 1's `_blockdiag_skew_vec`; head side uses the new block-local helpers. The `single_step_fast` flag, CLI, and `merge_period==1`/cayley validation come from Plan 1 (prerequisite) — not duplicated.
 - **Type consistency:** `HeadAlignedSingleStepFunction.apply(...)` arg order is identical in `_ha_fast` (test), the layer dispatch (T2), and the Function signature (T1): `(x, oft_R_in, oft_R_out, weight, bias, rows_in, cols_in, rows_out, cols_out, block_size_in, block_size_out, head_side)`. `_head_out_skew_vec`/`_head_in_skew_vec` return `(num_heads, n_elems)` matching `oft_R`; `_blockdiag_skew_vec` (from Plan 1) handles the dense residual side. `head_side` is the layer attribute (`"out"`/`"in"`).
+- **Backward arity (verified end-to-end via [/tmp/poet_fn_integration.py](/tmp/poet_fn_integration.py), which runs `.apply()`+`.backward()`):** 12 forward inputs → 12 returns (3 real grads + 9 `None`). An off-by-one here raises `RuntimeError: returned an incorrect number of gradients`; the integration test catches it. The same test confirms grads route to the `oft_R_in`/`oft_R_out` leaves.
 - **Placeholder scan:** none — all code blocks are complete; line-number anchors are approximate ("~line N") but the surrounding text uniquely identifies the insertion point.
 - **Cross-plan check:** `replace_linears_with_poet` (Plan 1, Task 3) already sets `pl.single_step_fast` in the head-aligned branch, so head-aligned layers carry the flag before this plan runs; T2's dispatch is the only thing needed to activate it.

@@ -226,6 +226,9 @@ class SingleStepPOETFunction(torch.autograd.Function):
 
         grad_oft_R_in = grad_oft_R_in.to(weight.dtype)
         grad_oft_R_out = grad_oft_R_out.to(weight.dtype)
+        # 15 forward inputs -> 15 returns: real grads for x/oft_R_in/oft_R_out, then
+        # 12 None (weight, bias, perm_in_inv, perm_in, perm_out, perm_out_inv,
+        # rows_in, cols_in, rows_out, cols_out, block_size_in, block_size_out).
         return (grad_x, grad_oft_R_in, grad_oft_R_out,
                 None, None, None, None, None, None,
                 None, None, None, None, None, None)
@@ -294,7 +297,11 @@ Expected: FAIL — `POETLinear` has no `single_step_fast` attribute / forward ig
 - [ ] **Step 4: Dispatch in `POETLinear.forward`.** At the very top of `forward` (before the `if self.parameterization == "exp"` branch, ~line 720), add:
 
 ```python
-        if getattr(self, "single_step_fast", False):
+        # Single-step fast path (R=I). The cayley guard is defensive: the factor-2
+        # closed form is Cayley-specific, and build-time validation already forbids
+        # single_step_fast with parameterization='exp' — this just fails safe
+        # (falls through to the correct chain) if the flag is ever set directly.
+        if getattr(self, "single_step_fast", False) and self.parameterization == "cayley":
             from .single_step import SingleStepPOETFunction
             return SingleStepPOETFunction.apply(
                 x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
@@ -447,25 +454,26 @@ git commit -m "feat(poet): register --poet-single-step-fast CLI flag"
 - Modify: `src/utils/megatron_args.py` (poet branch, validation near ~line 259-266; emission near ~line 346)
 - Modify: `tests/unit/test_megatron_args.py`
 
-- [ ] **Step 1: Write the failing test.** Append to `tests/unit/test_megatron_args.py` (follow the existing config-construction helper in that file; if it builds an OmegaConf dict, mirror it):
+- [ ] **Step 1: Write the failing test.** Append to `tests/unit/test_megatron_args.py`. This reuses the file's existing `_poet_cfg(poet_overrides)` helper (lines ~130-148; note it defaults `merge_period=200`) and the `_optimizer_args` entry point used by the sibling poet tests (e.g. `test_poet_argv_emits_lie_ortho_distributed`):
 
 ```python
 def test_single_step_fast_requires_merge_period_one():
     import pytest
-    from omegaconf import OmegaConf
-    from src.utils.megatron_args import _optimizer_args  # adjust to the real entry point used by sibling tests
+    from src.utils.megatron_args import _optimizer_args
 
-    cfg = OmegaConf.create({
-        "optim": {"type": "poet", "lr": 1e-3, "betas": [0.9, 0.95], "eps": 1e-8,
-                  "weight_decay": 0.1,
-                  "poet": {"block_count": 1, "merge_period": 2, "reinit_period": -1,
-                           "parameterization": "cayley", "single_step_fast": True}},
-    })
+    # _poet_cfg defaults merge_period=200 -> single_step_fast must be rejected.
     with pytest.raises(ValueError, match="single_step_fast"):
-        _optimizer_args(cfg)  # adjust call to match how sibling tests invoke the builder
-```
+        _optimizer_args(_poet_cfg({"block_count": 1, "single_step_fast": True}))
 
-NOTE: open `tests/unit/test_megatron_args.py` first and copy the exact helper/entry-point the existing poet tests use (e.g. how they pass the merged config). Match that calling convention rather than the placeholder `_optimizer_args` above.
+
+def test_single_step_fast_emits_flag_when_merge_period_one():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg({"block_count": 1, "merge_period": 1, "single_step_fast": True})
+    )
+    assert "--poet-single-step-fast" in args
+```
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -593,4 +601,5 @@ git add -A && git commit -m "chore(poet): single-step fast path Plan 1 complete"
 
 - **Spec coverage:** Function (T1) → layer dispatch (T2) → walk plumbing (T3) → apply patch (T4) → CLI flag (T5) → emit+validate (T6) → config/docs (T7) → regression+GPU handoff (T8). The `merge_period=1` and `cayley` invariants are validated at build time (T6). `HeadAlignedPOETLinear` deliberately out of scope (its `forward` override is untouched → still correct via the chain; Plan 2 handles it).
 - **Type consistency:** `single_step_fast` (bool) is the name used everywhere: layer attr, walk kwarg, arg `poet_single_step_fast`, CLI `--poet-single-step-fast`, config `optim.poet.single_step_fast`. `SingleStepPOETFunction.apply(...)` arg order matches between the test, the layer dispatch (T2), and the Function signature (T1). `_blockdiag_skew_vec(full, b, rows, cols, factor)` returns `(nb, n_elems)` matching `oft_R` layout.
-- **Placeholder scan:** the only deferred detail is the exact entry-point name in `test_megatron_args.py` (T6 Step 1) — flagged explicitly with an instruction to copy the sibling tests' convention, since that file's helper name must be read from disk, not guessed.
+- **Placeholder scan:** none. T6's test uses the real `_optimizer_args` entry point and the existing `_poet_cfg` helper (verified in `tests/unit/test_megatron_args.py`, which defaults `merge_period=200`). All insertion points (poet_layer.py forward ~720 / `__init__` ~548; poet_layers.py ~193/~269/~334; megatron_args.py ~250-266/~347; pretrain_gpt_slm.py ~108) verified against the current repo.
+- **Defensive guards:** the forward dispatch also checks `self.parameterization == "cayley"` (the factor-2 form is Cayley-specific) so it fails safe even if the flag is set on an `exp` layer outside the build-time validation.
