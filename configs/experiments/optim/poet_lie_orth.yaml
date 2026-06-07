@@ -68,7 +68,8 @@ optim:
     lie_ortho_use_second_moment: false  # first-moment-only by default (docs SS4)
     lie_ortho_distributed: true  # shard NS orthogonalization across DP ranks; identical result
     head_aligned_attn: true      # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
-    single_step_fast: true       # R=I fast path (merge_period=1 + cayley); exact, -10% step / -12% mem
+    single_step_fast: true       # documented fallback for the R=I fast path (merge_period=1 + cayley)
+    single_step_native: true     # gather-free native-frame path (implies fast); ~5.6% faster than fast at 60m, same mem
     train_output_rotation: true
 
 base:
