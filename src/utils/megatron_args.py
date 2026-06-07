@@ -264,6 +264,18 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 f"poet.merge_period ({merge_period}); reinit boundaries must land "
                 "on a folding step."
             )
+        if poet.get("single_step_fast", False):
+            if merge_period != 1:
+                raise ValueError(
+                    "optim.poet.single_step_fast requires merge_period=1 "
+                    f"(R=Identity at forward only holds when oft_R is folded+zeroed "
+                    f"every step); got merge_period={merge_period}."
+                )
+            if poet.get("parameterization", "cayley") != "cayley":
+                raise ValueError(
+                    "optim.poet.single_step_fast requires parameterization=cayley "
+                    "(the factor-2 closed-form grad is the Cayley Jacobian at 0)."
+                )
         # block_count (decoupled block sizes) takes precedence over block_size.
         block_count = poet.get("block_count", None)
         if block_count is not None:
@@ -347,6 +359,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet_args.append("--poet-head-aligned-attn")
         if not poet.get("head_resid_perm", True):
             poet_args.append("--poet-no-head-resid-perm")
+        # store_true: single-step (R=I) fast path (closed-form backward).
+        if poet.get("single_step_fast", False):
+            poet_args.append("--poet-single-step-fast")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":

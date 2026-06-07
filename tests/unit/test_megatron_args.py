@@ -821,3 +821,22 @@ def test_poet_experiment_yamls_enable_lie_ortho_distributed():
         if cfg.optim.poet.get("lie_ortho_distributed") is not True:
             failures.append(path.relative_to(root).as_posix())
     assert failures == []
+
+
+def test_single_step_fast_requires_merge_period_one():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    # _poet_cfg defaults merge_period=200 -> single_step_fast must be rejected.
+    with pytest.raises(ValueError, match="single_step_fast"):
+        _optimizer_args(_poet_cfg({"block_count": 1, "single_step_fast": True}))
+
+
+def test_single_step_fast_emits_flag_when_merge_period_one():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg({"block_count": 1, "merge_period": 1, "single_step_fast": True})
+    )
+    assert "--poet-single-step-fast" in args
