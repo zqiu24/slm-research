@@ -191,6 +191,7 @@ def replace_linears_with_poet(
     head_aligned_attn: bool = False,
     head_dim: int | None = None,
     resid_permute: bool = True,
+    single_step_fast: bool = False,
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -267,6 +268,7 @@ def replace_linears_with_poet(
                         **resid_kwargs,
                     )
                     _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                    pl.single_step_fast = single_step_fast
                     wrapper = POETMegatronLinear(
                         pl, skip_bias_add=getattr(child, "skip_bias_add", False)
                     )
@@ -332,6 +334,7 @@ def replace_linears_with_poet(
                     # optimizer param groups (which only take requires_grad params).
                     pl.oft_R_out.requires_grad_(False)
                 _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                pl.single_step_fast = single_step_fast
 
                 wrapper = POETMegatronLinear(
                     pl, skip_bias_add=getattr(child, "skip_bias_add", False)
