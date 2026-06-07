@@ -106,6 +106,10 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-head-aligned-attn", action="store_true")
     # Disable the residual side's permutation (off-switch ablation).
     group.add_argument("--poet-no-head-resid-perm", action="store_true")
+    # Single-step (R=I) fast path: collapse the identity-rotation chain to a
+    # permuted GEMM + closed-form oft_R grad. ONLY valid with merge_period=1 and
+    # parameterization=cayley (validated in src/utils/megatron_args.py).
+    group.add_argument("--poet-single-step-fast", action="store_true")
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")
