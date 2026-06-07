@@ -13,6 +13,7 @@
 **Correctness invariants this relies on (do not break):**
 - With `merge_period=1, reinit_period<0` (deployed), `reinit_perm=False` every step → no `randperm` → the merge is a deterministic function of `(oft_R, W)`.
 - `oft_R` is DP-identical after the step (grads all-reduced by DDP; `lie_ortho_distributed` all-reduces to an identical result), and `W` was identical coming in → replicated fold yields bit-identical `W` on every rank with no communication. (Embeddings/norms already rely on exactly this; they are never broadcast.)
+- **Permutations are DP-identical.** They are `torch.randperm` at init ([poet_layer.py:609](/lustre/fast/fast/zqiu/slm-research/third_party/poet_torch/poet_layer.py#L609)); Megatron's identical DP model-init seed *should* make them match across ranks, but the current per-step broadcast masks any mismatch. The replicate path therefore does a **one-time** perm broadcast (first merge only) before trusting determinism — a no-op if perms already match, a fix if not. After that, with `reinit_period<0` perms never change, so no further sync is needed. (This matches the current code's guarantee: perms consistent from the first merge onward.)
 - Cayley acts **independently per `[b,b]` block**, so concatenating blocks across layers and running one kernel is bit-identical to per-layer calls.
 
 ---
@@ -31,8 +32,8 @@ No config/CLI changes: batched merge is bit-identical and always on for cayley l
 ## Task 1: Split the per-layer merge into `_merge_R` + `_fold_with_R`
 
 **Files:**
-- Modify: `third_party/poet_torch/poet_layer.py` (`POETLinear.merge_then_reinitialize`, lines 686-723)
-- Modify: `third_party/poet_torch/head_aligned_layer.py` (`HeadAlignedPOETLinear.merge_then_reinitialize`, lines 252-264)
+- Modify: `third_party/poet_torch/poet_layer.py` (`POETLinear.merge_then_reinitialize`, line 687)
+- Modify: `third_party/poet_torch/head_aligned_layer.py` (`HeadAlignedPOETLinear.merge_then_reinitialize`, line 262)
 - Create: `tests/unit/test_poet_merge_batched.py`
 
 - [ ] **Step 1: Write the failing test** (`_fold_with_R` with identity R is a no-op on W and zeros oft_R)
@@ -328,6 +329,10 @@ Expected: PASS. (It validates the orchestration contract that `_run_merge` will 
 - [ ] **Step 3: Rewrite `_run_merge` to use the batched path.** Replace the body of `_run_merge` (lines 235-271) in `src/patches/poet_merge_step.py` with:
 
 ```python
+# Module-level: the one-time perm sync flag for the replicate path (see below).
+_perms_synced = False
+
+
 def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
     import os
 
@@ -335,6 +340,8 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
     from poet_torch import POETLinear
 
     from src.optim.poet_layers import POETMegatronLinear
+
+    global _perms_synced
 
     is_dist = dist.is_available() and dist.is_initialized()
     rank = dist.get_rank() if is_dist else 0
@@ -364,6 +371,16 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
     replicate = (not reinit_perm) and (not force_broadcast)
 
     if replicate:
+        # One-time perm sync: guarantee DP-identical permutations before trusting
+        # determinism. randperm-at-init *should* match across DP (identical model
+        # seed), but sync once to be certain — without it, divergent perms would
+        # silently diverge W. No-op if already identical; perms never change after
+        # (reinit_period<0), so this runs at most once per process.
+        if is_dist and not _perms_synced:
+            for pl in pls:
+                for buf in (pl.perm_in, pl.perm_in_inv, pl.perm_out, pl.perm_out_inv):
+                    dist.broadcast(buf, src=0)
+            _perms_synced = True
         with torch.no_grad():
             _merge_layers(pls, reinit_perm=False, disable_batch=disable_batch)
         for pl in pls:
@@ -456,7 +473,7 @@ Expected: `All checks passed!`
           if rank == 0:
               print(f"[POET] merge cross-rank drift (rank-vs-0): {drift.item():.2e}", flush=True)
   ```
-  Acceptance: drift `== 0.0` on every step (proves replicas stay in sync with no broadcast). If non-zero, a kernel is non-deterministic on this hardware → set `POET_FORCE_MERGE_BROADCAST=1` and file it.
+  Acceptance: drift `== 0.0` on every step (proves replicas stay in sync with no broadcast). This is also the direct test of the **DP-identical-perms** assumption: if init perms differed and the one-time sync somehow missed a layer, `W` would diverge and drift would be non-zero. If non-zero, a kernel is non-deterministic on this hardware (or perms desynced) → set `POET_FORCE_MERGE_BROADCAST=1` and file it.
 
 - [ ] **Step 4: Final commit (any doc/CHANGELOG updates)**
 
@@ -471,5 +488,6 @@ git add -A && git commit -m "docs(poet): batched/replicated merge verification n
 - **Spec coverage:** batched Cayley = Task 2 (`_build_R_batched`, grouped by block size, small-blocks-only) + Task 3 (wired in). Replicate-no-broadcast = Task 3 (`replicate` branch, gated on `reinit_perm=False`). Refactor enabling both = Task 1 (`_fold_with_R`). Escape hatches (`POET_DISABLE_BATCHED_MERGE`, `POET_FORCE_MERGE_BROADCAST`) = Task 3. Cross-rank correctness gate = Task 4 Step 3(b).
 - **Placeholder scan:** none — every code step is complete. CPU tests inject `cayley_fn=cayley_batch` (real Cayley is Triton/GPU); the GPU steps are explicitly the user's to run, with exact commands and acceptance criteria.
 - **Type consistency:** `_fold_with_R(R_out, R_in, reinit_perm)` signature identical in both layer classes, the orchestrator, and tests. `_build_R_batched(layers, cayley_fn, max_batch_block) -> {id(pl): (R_out, R_in)}`; callers always unpack `(R_out, R_in)` in that order (matches `_per_layer_R` and `get_weight_poet_decoupled`'s `(R_out, R_in)` convention). `cayley_fn(Q) -> R` (default does the `[0]` unwrap of the Triton op; tests pass `cayley_batch` which already returns `R`).
-- **Determinism caveat is explicit:** replicate is gated on `reinit_perm=False`; `reinit_perm=True` keeps rank-0 + broadcast. If reinit is ever re-enabled with replicate, the follow-up is to seed the perm RNG identically across ranks (sync a seed, not weights) — noted but out of scope here.
+- **Determinism caveat is explicit:** replicate is gated on `reinit_perm=False`; `reinit_perm=True` keeps rank-0 + broadcast. The DP-identical-perms requirement is guaranteed by a **one-time** perm broadcast in the replicate branch (module-level `_perms_synced`), not assumed — and re-verified at runtime by the Task 4 drift check. If reinit is ever re-enabled with replicate, the follow-up is to seed the perm RNG identically across ranks (sync a seed, not weights) — out of scope here.
 - **Composes with distribution:** `_merge_layers` is distribution-agnostic; a future sharded-weight mode would partition `pls` across ranks and call the same `_merge_layers` per shard.
+- **Line numbers + APIs verified against the current repo** (post Plan-1/2): `POETLinear.merge_then_reinitialize` @687, `HeadAlignedPOETLinear.merge_then_reinitialize` @262 (shifted by Plan 2's forward dispatch), `_run_merge` @235; both classes expose `r_in`/`r_out`, `block_size_in/out`, `oft_R_in/out`, `rows_*`/`cols_*`. Core logic (identity-R no-op incl. perm round-trip, batched-R == per-layer-R, batched-merge == per-layer-merge) verified bit-identical on CPU in [/tmp/poet_merge_plan_selfcheck.py](/tmp/poet_merge_plan_selfcheck.py); the `@torch.no_grad()` decorator on `_fold_with_R` is load-bearing (in-place `oft_R.zero_()` on a grad-requiring leaf otherwise errors).
