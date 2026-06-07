@@ -333,6 +333,19 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
             _perms_synced = True
         with torch.no_grad():
             _merge_layers(pls, reinit_perm=False, disable_batch=disable_batch)
+        # Debug gate (off by default): verify the no-broadcast replicate fold keeps
+        # every DP rank's frozen W bit-identical. Acceptance is drift == 0.0 every
+        # step; non-zero means a non-deterministic kernel or desynced perms.
+        if os.environ.get("POET_CHECK_MERGE_SYNC") == "1" and is_dist and pls:
+            w = pls[0].weight.data.clone()
+            ref = w.clone()
+            dist.broadcast(ref, src=0)
+            drift = (w - ref).abs().max()
+            if rank == 0:
+                print(
+                    f"[POET] merge cross-rank drift (rank-vs-0): {drift.item():.2e}",
+                    flush=True,
+                )
         for pl in pls:
             if hasattr(pl, "_invalidate_R_cache"):
                 pl._invalidate_R_cache()
