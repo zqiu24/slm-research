@@ -87,6 +87,8 @@ ignore = ["E501"]
 # Newton-Schulz orthogonalization: G/X/A/B are the standard matrix names.
 "src/diag/orthogonalize.py" = ["N803", "N806"]
 "tests/unit/test_diag_orthogonalize.py" = ["N806"]
+# Batched merge tests: R_in/R_out/W0 are the standard rotation/weight matrix names.
+"tests/unit/test_poet_merge_batched.py" = ["N802", "N806"]
 
 [tool.ruff.format]
 quote-style = "double"

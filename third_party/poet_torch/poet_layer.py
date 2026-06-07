@@ -685,9 +685,14 @@ class POETLinear(nn.Module):
 
     @torch.no_grad()
     def merge_then_reinitialize(self, reinit_perm: bool = True) -> None:
-        # Same math as POETLinear.merge_then_reinitialize, but float compute + requantize
         R_out, R_in = self._merge_R()
+        self._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
 
+    @torch.no_grad()
+    def _fold_with_R(self, R_out, R_in, reinit_perm: bool = True) -> None:
+        """Fold given (already-built) rotations into the frozen weight and zero
+        oft_R. Split out of merge_then_reinitialize so a batched orchestrator can
+        build R for many layers in one Cayley call, then fold each here."""
         W = self.weight.detach().clone()
         tmp = W.t()
         tmp = block_diag_lr_matmul_decoupled(R_in, tmp, R_out)
@@ -696,26 +701,18 @@ class POETLinear(nn.Module):
         expected = tmp.t()
 
         if reinit_perm:
-            # Legacy: generate a NEW permutation, re-permute the folded weight into
-            # the new block-aligned layout, and update the perm buffers.
             device = self.weight.device
             perm_in = torch.randperm(self.in_features, device=device).to(torch.int32)
             perm_out = torch.randperm(self.out_features, device=device).to(torch.int32)
             perm_in_inv = torch.argsort(perm_in).to(torch.int32)
             perm_out_inv = torch.argsort(perm_out).to(torch.int32)
-
             expected = expected.index_select(0, perm_out_inv).index_select(1, perm_in_inv)
             self.weight.detach().copy_(expected)
-
             self.perm_in.copy_(perm_in)
             self.perm_in_inv.copy_(perm_in_inv)
             self.perm_out.copy_(perm_out)
             self.perm_out_inv.copy_(perm_out_inv)
         else:
-            # Fold-only (poet0 non-boundary step): keep the CURRENT permutation.
-            # Re-permute the folded weight back into the current block-aligned
-            # layout using the existing inverse perms so the next forward with the
-            # unchanged Ψ is consistent. Perm buffers are left untouched.
             expected = expected.index_select(0, self.perm_out_inv).index_select(1, self.perm_in_inv)
             self.weight.detach().copy_(expected)
 

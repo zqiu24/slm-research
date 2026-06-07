@@ -260,11 +260,13 @@ class HeadAlignedPOETLinear(POETLinear):
 
     @torch.no_grad()
     def merge_then_reinitialize(self, reinit_perm: bool = True) -> None:
-        # Permutation-free fold: weight <- (R_in @ Wᵀ @ R_out)ᵀ, then reset the
-        # generators to identity. This is the stock POET fold specialized to
-        # identity Ψ (no index_select, no resample). There is no permutation to
-        # resample, so reinit_perm is accepted for API parity but is a no-op.
         R_out, R_in = self._merge_R()
+        self._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
+
+    @torch.no_grad()
+    def _fold_with_R(self, R_out, R_in, reinit_perm: bool = True) -> None:
+        # Permutation-free fold (identity Ψ): weight <- (R_in @ Wᵀ @ R_out)ᵀ, then
+        # reset generators. reinit_perm is accepted for API parity (no-op here).
         W = self.weight.detach().clone()
         tmp = block_diag_lr_matmul_decoupled(R_in, W.t(), R_out)
         self.weight.detach().copy_(tmp.t())
