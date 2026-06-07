@@ -547,6 +547,11 @@ class POETLinear(nn.Module):
             ) == "1"
         self.mem_efficient_mode = mem_efficient_mode
 
+        # Single-step (R=I) fast path: collapses the identity-rotation chain to a
+        # permuted GEMM + closed-form oft_R grad. Set by replace_linears_with_poet
+        # when optim.poet.single_step_fast is on (requires merge_period=1, cayley).
+        self.single_step_fast = False
+
         if (bsz is None) == (block_count is None):
             raise ValueError("exactly one of bsz or block_count must be set")
         if bsz is not None:
@@ -718,6 +723,18 @@ class POETLinear(nn.Module):
         self.oft_R_out.zero_()
 
     def forward(self, x):
+        # Single-step fast path (R=I). The cayley guard is defensive: the factor-2
+        # closed form is Cayley-specific, and build-time validation already forbids
+        # single_step_fast with parameterization='exp' — this just fails safe
+        # (falls through to the correct chain) if the flag is ever set directly.
+        if getattr(self, "single_step_fast", False) and self.parameterization == "cayley":
+            from .single_step import SingleStepPOETFunction
+            return SingleStepPOETFunction.apply(
+                x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
+                self.perm_in_inv, self.perm_in, self.perm_out, self.perm_out_inv,
+                self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+                self.block_size_in, self.block_size_out,
+            )
         if self.parameterization == "exp":
             return forward_core_decoupled_exp(
                 x, self.oft_R_in, self.oft_R_out,

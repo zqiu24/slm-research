@@ -95,3 +95,19 @@ def test_fast_matches_chain_at_zero(in_f, out_f, bc, bias):
     assert torch.allclose(g_in_ref, g_in_fast, atol=1e-9), (g_in_ref - g_in_fast).abs().max()
     assert torch.allclose(g_out_ref, g_out_fast, atol=1e-9), (g_out_ref - g_out_fast).abs().max()
     assert torch.allclose(gx_ref, gx_fast, atol=1e-9), (gx_ref - gx_fast).abs().max()
+
+
+def test_layer_forward_uses_fast_path_when_flagged():
+    torch.manual_seed(1)
+    torch.set_default_dtype(torch.float64)
+    pl = POETLinear(in_features=12, out_features=8, block_count=2, bias=False)
+    with torch.no_grad():
+        pl.weight.normal_()
+    pl.single_step_fast = True
+    x = torch.randn(3, 12, requires_grad=True)
+    gy = torch.randn(3, 8)
+    # layer forward (fast) must equal the reference chain at oft_R=0
+    y = pl(x)
+    assert torch.allclose(y, _reference_chain(pl, x), atol=1e-10)
+    (y * gy).sum().backward()
+    assert pl.oft_R_in.grad is not None and pl.oft_R_out.grad is not None
