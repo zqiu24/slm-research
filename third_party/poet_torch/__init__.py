@@ -17,3 +17,6 @@ from .head_aligned_layer import HeadAlignedPOETLinear as HeadAlignedPOETLinear
 
 from .single_step import SingleStepPOETFunction as SingleStepPOETFunction
 from .single_step import HeadAlignedSingleStepFunction as HeadAlignedSingleStepFunction
+
+from .single_step_native import NativeSingleStepFunction as NativeSingleStepFunction
+from .single_step_native import SingleStepPOETLinear as SingleStepPOETLinear
