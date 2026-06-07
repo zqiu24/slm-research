@@ -28,3 +28,25 @@ subspace) — Muon's bet, applied to rotational updates. First-moment-only by de
 Run head-to-head vs `poet_lie_rms` to test whether the gradient's relative per-plane
 angles are signal or noise for rotational updates (docs §7) — and `muon` vs `spectral`
 to test whether a cheap band is as good as exact equalization.
+
+## Single-step fast path (`single_step_fast`)
+
+With `merge_period=1` the rotation is folded into `W` and `oft_R` zeroed every
+step, so `R=Identity` at every forward. `optim.poet.single_step_fast=true`
+collapses the identity-rotation chain to a permuted GEMM and computes the `oft_R`
+gradient in closed form (factor-2 Cayley Jacobian), removing ~3x the base-GEMM
+rotation FLOPs from the MLP (and non-head-aligned attention). Mathematically
+identical training. A/B:
+
+```bash
+# baseline (chain)
+codexlog lieorth_chain bash scripts/train_poet_lie_orth.sh llama3 \
+  optim.lr=0.003 optim.poet.lie_ortho_c=8 optim.poet.lie_ortho_distributed=true
+# fast path
+codexlog lieorth_fast bash scripts/train_poet_lie_orth.sh llama3 \
+  optim.lr=0.003 optim.poet.lie_ortho_c=8 optim.poet.lie_ortho_distributed=true \
+  optim.poet.single_step_fast=true
+```
+
+Compare steady-state `elapsed time per iteration (ms)` (skip first ~20 iters for
+compile warmup) and confirm the loss curves overlap.
