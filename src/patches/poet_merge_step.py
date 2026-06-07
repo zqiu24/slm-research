@@ -232,6 +232,53 @@ def _reset_vanilla_oft_state(optimizer, model, iteration: int, reset_moments: bo
                     group["step"] = 0
 
 
+def _build_R_batched(layers, cayley_fn=None, max_batch_block: int = 256):
+    """Build (R_out, R_in) for every layer, batching the Cayley across layers that
+    share a block size on a side (small blocks only). Returns {id(layer): (R_out, R_in)}.
+
+    Cayley acts independently per [b,b] block, so concatenating blocks across layers
+    and running one kernel is bit-identical to per-layer calls. Sides with block_size
+    > max_batch_block (e.g. block_count=1 dense) are built per-layer to bound the
+    transient memory of stacking big blocks.
+
+    cayley_fn(Q[*, b, b]) -> R[*, b, b]; defaults to the Triton op. Tests inject the
+    pure-torch cayley_batch.
+    """
+    import torch
+    from poet_torch.poet_layer import pytorch_skew_symmetric
+
+    if cayley_fn is None:
+
+        def cayley_fn(Q):
+            return torch.ops.poet.cayley(Q)[0]
+
+    result = {id(pl): [None, None] for pl in layers}  # [R_out, R_in]
+    # side_idx 0 -> out, 1 -> in
+    for side_idx, side in enumerate(("out", "in")):
+        groups = {}  # block_size -> list of (pl, oft, rows, cols)
+        for pl in layers:
+            if side == "out":
+                b, oft, rows, cols = pl.block_size_out, pl.oft_R_out, pl.rows_out, pl.cols_out
+            else:
+                b, oft, rows, cols = pl.block_size_in, pl.oft_R_in, pl.rows_in, pl.cols_in
+            groups.setdefault(int(b), []).append((pl, oft, rows, cols))
+        for b, items in groups.items():
+            if b <= max_batch_block and len(items) > 1:
+                rows, cols = items[0][2], items[0][3]
+                skews = [pytorch_skew_symmetric(oft, b, rows, cols) for (_, oft, _, _) in items]
+                sizes = [s.shape[0] for s in skews]
+                R = cayley_fn(torch.cat(skews, dim=0))  # ONE Cayley for the whole group
+                off = 0
+                for (pl, _, _, _), n in zip(items, sizes, strict=True):
+                    result[id(pl)][side_idx] = R[off : off + n]
+                    off += n
+            else:
+                for pl, oft, rows, cols in items:
+                    R = cayley_fn(pytorch_skew_symmetric(oft, b, rows, cols))
+                    result[id(pl)][side_idx] = R
+    return {k: (v[0], v[1]) for k, v in result.items()}
+
+
 def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
     import torch
     from poet_torch import POETLinear
