@@ -72,6 +72,7 @@ optim:
     #     and rescale to a constant rotation angle muon_theta. Fixes heavy-tailed
     #     df/dQ conditioning (Probe 0B). Use with merge_period=0 (no-reset regime).
     q_optimizer: adam
+    lie_ortho_distributed: true # enable if q_optimizer is switched to lie_ortho
     muon_theta: 0.1        # target per-step rotation angle (the single Muon tunable)
     muon_ns_steps: 5       # Newton-Schulz iterations
     muon_momentum: 0.95

@@ -804,4 +804,20 @@ def test_poet_lie_orth_experiment_yaml():
     assert cfg.optim.poet.q_optimizer == "lie_ortho"
     assert cfg.optim.poet.lie_ortho_method == "muon"
     assert cfg.optim.poet.lie_ortho_c == 4
-    assert cfg.optim.poet.lie_ortho_distributed is False
+    assert cfg.optim.poet.lie_ortho_distributed is True
+
+
+def test_poet_experiment_yamls_enable_lie_ortho_distributed():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    root = Path(__file__).resolve().parents[2]
+    failures = []
+    for path in sorted((root / "configs/experiments").rglob("*.yaml")):
+        cfg = OmegaConf.load(path)
+        if cfg.get("optim", {}).get("type") != "poet":
+            continue
+        if cfg.optim.poet.get("lie_ortho_distributed") is not True:
+            failures.append(path.relative_to(root).as_posix())
+    assert failures == []

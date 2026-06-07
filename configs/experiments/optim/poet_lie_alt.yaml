@@ -48,6 +48,7 @@ optim:
     use_poet_adam: false
     parameterization: cayley
     q_optimizer: lie_algebra
+    lie_ortho_distributed: true # enable if q_optimizer is switched to lie_ortho
     lie_b1: 0.9
     lie_b2: 0.95
     lie_eps: 1.0e-8
