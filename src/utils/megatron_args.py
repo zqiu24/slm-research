@@ -276,6 +276,14 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                     "optim.poet.single_step_fast requires parameterization=cayley "
                     "(the factor-2 closed-form grad is the Cayley Jacobian at 0)."
                 )
+        if poet.get("single_step_native", False):
+            if merge_period != 1:
+                raise ValueError(
+                    "optim.poet.single_step_native requires merge_period=1 "
+                    f"(R=Identity at forward); got merge_period={merge_period}."
+                )
+            if poet.get("parameterization", "cayley") != "cayley":
+                raise ValueError("optim.poet.single_step_native requires parameterization=cayley.")
         # block_count (decoupled block sizes) takes precedence over block_size.
         block_count = poet.get("block_count", None)
         if block_count is not None:
@@ -362,6 +370,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: single-step (R=I) fast path (closed-form backward).
         if poet.get("single_step_fast", False):
             poet_args.append("--poet-single-step-fast")
+        # store_true: gather-free native-frame single-step path.
+        if poet.get("single_step_native", False):
+            poet_args.append("--poet-single-step-native")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":
