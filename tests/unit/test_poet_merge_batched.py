@@ -95,3 +95,30 @@ def test_batched_build_R_matches_per_layer():
         R_out_b, R_in_b = built[id(pl)]
         assert torch.allclose(R_out_b, R_out_ref, atol=1e-12), (R_out_b - R_out_ref).abs().max()
         assert torch.allclose(R_in_b, R_in_ref, atol=1e-12), (R_in_b - R_in_ref).abs().max()
+
+
+def test_batched_merge_equals_per_layer_merge():
+    torch.set_default_dtype(torch.float64)
+    torch.manual_seed(0)
+    from src.patches.poet_merge_step import _build_R_batched
+
+    layers = _mixed_layers()
+    # snapshot inputs and compute the PER-LAYER reference (cayley_batch + _fold_with_R)
+    import copy
+
+    ref_layers = copy.deepcopy(layers)
+    for pl in ref_layers:
+        R_out, R_in = _per_layer_R(pl, cayley_batch)
+        pl._fold_with_R(R_out, R_in, reinit_perm=False)
+
+    # BATCHED path on the originals
+    built = _build_R_batched(layers, cayley_fn=cayley_batch, max_batch_block=256)
+    for pl in layers:
+        R_out, R_in = built[id(pl)]
+        pl._fold_with_R(R_out, R_in, reinit_perm=False)
+
+    for pl, ref in zip(layers, ref_layers, strict=True):
+        assert torch.allclose(pl.weight, ref.weight, atol=1e-12), (
+            (pl.weight - ref.weight).abs().max()
+        )
+        assert torch.count_nonzero(pl.oft_R_in) == 0 and torch.count_nonzero(pl.oft_R_out) == 0

@@ -279,15 +279,25 @@ def _build_R_batched(layers, cayley_fn=None, max_batch_block: int = 256):
     return {k: (v[0], v[1]) for k, v in result.items()}
 
 
+# Module-level: the one-time perm sync flag for the replicate path (see below).
+_perms_synced = False
+
+
 def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
+    import os
+
     import torch
     from poet_torch import POETLinear
 
     from src.optim.poet_layers import POETMegatronLinear
 
+    global _perms_synced
+
     is_dist = dist.is_available() and dist.is_initialized()
     rank = dist.get_rank() if is_dist else 0
 
+    # Collect the POET layers to merge (same filter as before).
+    pls = []
     chunks = model if isinstance(model, list) else [model]
     for m in chunks:
         for _, mod in m.named_modules():
@@ -296,22 +306,73 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
             pl = mod.poet_linear
             if not isinstance(pl, POETLinear) or pl.block_size <= 0:
                 continue
-            with torch.no_grad():
-                if rank == 0:
-                    pl.merge_then_reinitialize(reinit_perm=reinit_perm)
-                if is_dist:
-                    for buf in (
-                        pl.oft_R_in.data,
-                        pl.oft_R_out.data,
-                        pl.weight.data,
-                        pl.perm_in,
-                        pl.perm_in_inv,
-                        pl.perm_out,
-                        pl.perm_out_inv,
-                    ):
-                        dist.broadcast(buf, src=0)
-            # Cache invalidation: weight and oft_R both changed under merge,
-            # so any cached R blocks are stale. Guard with hasattr because
-            # upstream POETLinear (cache_mode=none) doesn't have this method.
+            pls.append(pl)
+
+    # Escape hatches (debugging only): force the legacy rank-0 + broadcast path,
+    # and/or disable Cayley batching.
+    force_broadcast = os.environ.get("POET_FORCE_MERGE_BROADCAST") == "1"
+    disable_batch = os.environ.get("POET_DISABLE_BATCHED_MERGE") == "1"
+
+    # REPLICATE: when permutations are NOT being resampled, the fold is a
+    # deterministic function of DP-identical (oft_R, W), so every rank folds its
+    # own replica to a bit-identical result with NO communication (same reason DDP
+    # never broadcasts weights). reinit_perm=True (randperm) is rank-divergent, so
+    # fall back to rank-0 + broadcast for that (rare/disabled) case.
+    replicate = (not reinit_perm) and (not force_broadcast)
+
+    if replicate:
+        # One-time perm sync: guarantee DP-identical permutations before trusting
+        # determinism. randperm-at-init *should* match across DP (identical model
+        # seed), but sync once to be certain — without it, divergent perms would
+        # silently diverge W. No-op if already identical; perms never change after
+        # (reinit_period<0), so this runs at most once per process.
+        if is_dist and not _perms_synced:
+            for pl in pls:
+                for buf in (pl.perm_in, pl.perm_in_inv, pl.perm_out, pl.perm_out_inv):
+                    dist.broadcast(buf, src=0)
+            _perms_synced = True
+        with torch.no_grad():
+            _merge_layers(pls, reinit_perm=False, disable_batch=disable_batch)
+        for pl in pls:
             if hasattr(pl, "_invalidate_R_cache"):
                 pl._invalidate_R_cache()
+        return
+
+    # Legacy path: rank-0 folds, then broadcast (covers reinit_perm=True and the
+    # forced escape hatch).
+    with torch.no_grad():
+        if rank == 0:
+            _merge_layers(pls, reinit_perm=reinit_perm, disable_batch=disable_batch)
+        if is_dist:
+            for pl in pls:
+                for buf in (
+                    pl.oft_R_in.data,
+                    pl.oft_R_out.data,
+                    pl.weight.data,
+                    pl.perm_in,
+                    pl.perm_in_inv,
+                    pl.perm_out,
+                    pl.perm_out_inv,
+                ):
+                    dist.broadcast(buf, src=0)
+    for pl in pls:
+        if hasattr(pl, "_invalidate_R_cache"):
+            pl._invalidate_R_cache()
+
+
+def _merge_layers(pls, reinit_perm: bool, disable_batch: bool) -> None:
+    """Fold every layer. With batching on, split layers into cayley (batched
+    R-build) and non-cayley (per-layer merge_then_reinitialize, e.g. exp)."""
+    if disable_batch:
+        for pl in pls:
+            pl.merge_then_reinitialize(reinit_perm=reinit_perm)
+        return
+    cayley_pls = [pl for pl in pls if getattr(pl, "parameterization", "cayley") == "cayley"]
+    other_pls = [pl for pl in pls if getattr(pl, "parameterization", "cayley") != "cayley"]
+    for pl in other_pls:
+        pl.merge_then_reinitialize(reinit_perm=reinit_perm)
+    if cayley_pls:
+        built = _build_R_batched(cayley_pls)  # default cayley_fn = Triton op
+        for pl in cayley_pls:
+            R_out, R_in = built[id(pl)]
+            pl._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
