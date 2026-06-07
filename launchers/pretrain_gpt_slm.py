@@ -110,6 +110,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # permuted GEMM + closed-form oft_R grad. ONLY valid with merge_period=1 and
     # parameterization=cayley (validated in src/utils/megatron_args.py).
     group.add_argument("--poet-single-step-fast", action="store_true")
+    # Gather-free native-frame single-step path (standard POETLinear). Implies the
+    # single-step fast path; requires merge_period=1 + cayley.
+    group.add_argument("--poet-single-step-native", action="store_true")
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")

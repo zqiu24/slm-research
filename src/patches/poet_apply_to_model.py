@@ -69,6 +69,7 @@ def apply() -> None:
         head_aligned_attn = getattr(args, "poet_head_aligned_attn", False)
         resid_permute = not getattr(args, "poet_no_head_resid_perm", False)
         single_step_fast = getattr(args, "poet_single_step_fast", False)
+        single_step_native = getattr(args, "poet_single_step_native", False)
         head_dim = getattr(args, "kv_channels", None)
         if head_dim is None:
             head_dim = args.hidden_size // args.num_attention_heads
@@ -85,6 +86,7 @@ def apply() -> None:
             head_dim=head_dim,
             resid_permute=resid_permute,
             single_step_fast=single_step_fast,
+            single_step_native=single_step_native,
         )
 
     def _wrapped(*a, **kw):
