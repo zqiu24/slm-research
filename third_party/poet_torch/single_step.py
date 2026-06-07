@@ -99,3 +99,93 @@ class SingleStepPOETFunction(torch.autograd.Function):
         return (grad_x, grad_oft_R_in, grad_oft_R_out,
                 None, None, None, None, None, None,
                 None, None, None, None, None, None)
+
+
+def _head_out_skew_vec(A, weight, bias, gsum, head_dim, rows, cols, factor=2.0):
+    """Diagonal blocks of M_out = W@A (+ outer(bias,gsum)) over OUT blocks, block-local.
+
+    A = x^T @ Gv  [in,out]; block k = W[k] @ A[:,k] with W[k] [head_dim, in] and
+    A[:,k] [in, head_dim]. The bias rank-1 term is added per head as
+    outer(bias_k, gsum_k). Never forms the full [out,out]. Returns (num_heads, n_elems).
+    """
+    out_f, in_f = weight.shape
+    nb = out_f // head_dim
+    w_blocks = weight.reshape(nb, head_dim, in_f)               # (nb, head_dim, in)
+    a_cols = A.reshape(in_f, nb, head_dim).permute(1, 0, 2)     # (nb, in, head_dim)
+    blocks = torch.bmm(w_blocks, a_cols)                        # (nb, hd, hd) = W_k @ A_:,k
+    if bias is not None:
+        bb = bias.reshape(nb, head_dim)
+        gb = gsum.reshape(nb, head_dim)
+        blocks = blocks + bb[:, :, None] * gb[:, None, :]       # + outer(bias_k, gsum_k)
+    skew = blocks - blocks.transpose(-1, -2)
+    return factor * skew[:, rows.long(), cols.long()]
+
+
+def _head_in_skew_vec(A, weight, head_dim, rows, cols, factor=2.0):
+    """Diagonal blocks of M_in = A @ W over IN blocks (heads), block-local.
+
+    A = x^T @ Gv  [in, out]; block k = A[k] @ W[:,k] with A[k] [head_dim, out] and
+    W[:,k] [out, head_dim]. Never forms the full [in,in].  Returns (num_heads, n_elems).
+    """
+    out_f, in_f = weight.shape
+    nb = in_f // head_dim
+    a_blocks = A.reshape(nb, head_dim, out_f)                       # (nb, head_dim, out)
+    w_cols = weight.reshape(out_f, nb, head_dim).permute(1, 0, 2)   # (nb, out, head_dim)
+    blocks = torch.bmm(a_blocks, w_cols)                            # (nb, head_dim, head_dim)
+    skew = blocks - blocks.transpose(-1, -2)
+    return factor * skew[:, rows.long(), cols.long()]
+
+
+class HeadAlignedSingleStepFunction(torch.autograd.Function):
+    """Single-step (R=I) fast path for HeadAlignedPOETLinear (permutation-free).
+
+    Forward is a bare GEMM (no gathers). Backward saves ONLY x and (chain's
+    right-multiply orientation, factor 2; Gv = grad_y since no perms) builds
+    A = x^T@Gv once: head side -> block-local skew grad (batched per-head matmul,
+    no full [d,d]); residual (dense, single block) side -> _blockdiag_skew_vec on
+    the one full matrix. M_in = A@W, M_out = W@A + outer(bias, Gv.sum(0)).
+    """
+
+    @staticmethod
+    def forward(ctx, x, oft_R_in, oft_R_out, weight, bias,
+                rows_in, cols_in, rows_out, cols_out,
+                block_size_in, block_size_out, head_side):
+        y = x @ weight.t()
+        if bias is not None:
+            y = y + bias
+        ctx.save_for_backward(x, weight, bias, rows_in, cols_in, rows_out, cols_out)
+        ctx.block_size_in = block_size_in
+        ctx.block_size_out = block_size_out
+        ctx.head_side = head_side
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_y):
+        (x, weight, bias, rows_in, cols_in, rows_out, cols_out) = ctx.saved_tensors
+        bs_in, bs_out, head_side = ctx.block_size_in, ctx.block_size_out, ctx.head_side
+        out_f, in_f = weight.shape
+
+        grad_x = grad_y @ weight
+        Gv2 = grad_y.reshape(-1, out_f)
+        A = x.reshape(-1, in_f).t() @ Gv2                # (in, out) = x^T @ Gv
+        gsum = Gv2.sum(0)
+
+        if head_side == "out":
+            # head side = OUT (block-diagonal, head_dim=bs_out); residual = IN (dense)
+            grad_oft_R_out = _head_out_skew_vec(A, weight, bias, gsum, bs_out, rows_out, cols_out)
+            grad_oft_R_in = _blockdiag_skew_vec(A @ weight, bs_in, rows_in, cols_in)
+        else:  # head_side == "in"
+            # head side = IN (block-diagonal, head_dim=bs_in); residual = OUT (dense)
+            grad_oft_R_in = _head_in_skew_vec(A, weight, bs_in, rows_in, cols_in)
+            M_out = weight @ A
+            if bias is not None:
+                M_out = M_out + torch.outer(bias, gsum)
+            grad_oft_R_out = _blockdiag_skew_vec(M_out, bs_out, rows_out, cols_out)
+
+        grad_oft_R_in = grad_oft_R_in.to(weight.dtype)
+        grad_oft_R_out = grad_oft_R_out.to(weight.dtype)
+        # 12 forward inputs -> 12 returns: real grads for x/oft_R_in/oft_R_out, then
+        # 9 None (weight, bias, rows_in, cols_in, rows_out, cols_out,
+        # block_size_in, block_size_out, head_side).
+        return (grad_x, grad_oft_R_in, grad_oft_R_out,
+                None, None, None, None, None, None, None, None, None)

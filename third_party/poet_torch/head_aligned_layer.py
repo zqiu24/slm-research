@@ -228,6 +228,15 @@ class HeadAlignedPOETLinear(POETLinear):
         self.register_buffer("perm_out_inv", perm_out.clone())
 
     def forward(self, x):
+        # Single-step fast path (R=I); cayley guard is defensive (see POETLinear.forward).
+        if getattr(self, "single_step_fast", False) and self.parameterization == "cayley":
+            from .single_step import HeadAlignedSingleStepFunction
+
+            return HeadAlignedSingleStepFunction.apply(
+                x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
+                self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+                self.block_size_in, self.block_size_out, self.head_side,
+            )
         use_exp = self.parameterization == "exp"
         # exp builds R via matrix_exp (backward not compile-safe) and the
         # mem-efficient path wraps the chain in checkpoint() — both run eager.

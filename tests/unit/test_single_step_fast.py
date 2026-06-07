@@ -9,7 +9,13 @@ faithful check of the production math, not a toy reimplementation.
 
 import pytest
 import torch
-from poet_torch import POETLinear, SingleStepPOETFunction
+from poet_torch import (
+    HeadAlignedPOETLinear,
+    HeadAlignedSingleStepFunction,
+    POETLinear,
+    SingleStepPOETFunction,
+)
+from poet_torch.head_aligned_layer import chain_noperm
 from poet_torch.poet_layer import (
     cayley_batch,
     chain_layer_x_fast_decoupled,
@@ -110,4 +116,90 @@ def test_layer_forward_uses_fast_path_when_flagged():
     y = pl(x)
     assert torch.allclose(y, _reference_chain(pl, x), atol=1e-10)
     (y * gy).sum().backward()
+    assert pl.oft_R_in.grad is not None and pl.oft_R_out.grad is not None
+
+
+def _ha_reference(pl, x):
+    """Forward through the REAL permutation-free chain (R from cayley_batch)."""
+    q_in = pytorch_skew_symmetric(pl.oft_R_in, pl.block_size_in, pl.rows_in, pl.cols_in)
+    q_out = pytorch_skew_symmetric(pl.oft_R_out, pl.block_size_out, pl.rows_out, pl.cols_out)
+    r_in, r_out = cayley_batch(q_in), cayley_batch(q_out)
+    return chain_noperm(x, r_in, pl.weight, pl.bias, r_out, pl.block_size_in, pl.block_size_out)
+
+
+def _ha_fast(pl, x):
+    return HeadAlignedSingleStepFunction.apply(
+        x,
+        pl.oft_R_in,
+        pl.oft_R_out,
+        pl.weight,
+        pl.bias,
+        pl.rows_in,
+        pl.cols_in,
+        pl.rows_out,
+        pl.cols_out,
+        pl.block_size_in,
+        pl.block_size_out,
+        pl.head_side,
+    )
+
+
+@pytest.mark.parametrize("head_side,in_f,out_f", [("out", 12, 8), ("in", 8, 12)])
+def test_head_aligned_fast_matches_chain(head_side, in_f, out_f):
+    torch.manual_seed(0)
+    torch.set_default_dtype(torch.float64)
+    pl = HeadAlignedPOETLinear(
+        in_features=in_f,
+        out_features=out_f,
+        head_side=head_side,
+        head_dim=4,
+        resid_block_count=1,
+        bias=False,
+    )
+    with torch.no_grad():
+        pl.weight.normal_()
+    assert torch.count_nonzero(pl.oft_R_in) == 0 and torch.count_nonzero(pl.oft_R_out) == 0
+
+    x = torch.randn(5, in_f)
+    gy = torch.randn(5, out_f)
+
+    # forward equality
+    assert torch.allclose(_ha_reference(pl, x), _ha_fast(pl, x), atol=1e-10)
+
+    # grad equality
+    pl.oft_R_in.grad = pl.oft_R_out.grad = None
+    xr = x.clone().requires_grad_(True)
+    (_ha_reference(pl, xr) * gy).sum().backward()
+    gin_ref, gout_ref, gx_ref = pl.oft_R_in.grad.clone(), pl.oft_R_out.grad.clone(), xr.grad.clone()
+
+    pl.oft_R_in.grad = pl.oft_R_out.grad = None
+    xf = x.clone().requires_grad_(True)
+    (_ha_fast(pl, xf) * gy).sum().backward()
+    gin_f, gout_f, gx_f = pl.oft_R_in.grad.clone(), pl.oft_R_out.grad.clone(), xf.grad.clone()
+
+    assert torch.allclose(gin_ref, gin_f, atol=1e-9), (gin_ref - gin_f).abs().max()
+    assert torch.allclose(gout_ref, gout_f, atol=1e-9), (gout_ref - gout_f).abs().max()
+    assert torch.allclose(gx_ref, gx_f, atol=1e-9), (gx_ref - gx_f).abs().max()
+
+
+@pytest.mark.parametrize("head_side,in_f,out_f", [("out", 12, 8), ("in", 8, 12)])
+def test_head_aligned_layer_uses_fast_path_when_flagged(head_side, in_f, out_f):
+    torch.manual_seed(2)
+    torch.set_default_dtype(torch.float64)
+    pl = HeadAlignedPOETLinear(
+        in_features=in_f,
+        out_features=out_f,
+        head_side=head_side,
+        head_dim=4,
+        resid_block_count=1,
+        bias=False,
+    )
+    with torch.no_grad():
+        pl.weight.normal_()
+    pl.single_step_fast = True
+    x = torch.randn(3, in_f, requires_grad=True)
+    # would call the Triton cayley on the slow path -> CPU error; fast path avoids it.
+    y = pl(x)
+    assert torch.allclose(y, _ha_reference(pl, x), atol=1e-10)
+    (y * torch.randn(3, out_f)).sum().backward()
     assert pl.oft_R_in.grad is not None and pl.oft_R_out.grad is not None

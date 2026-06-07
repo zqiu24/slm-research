@@ -16,3 +16,4 @@ from .poet_cayley_layer import check_and_merge_cayley as check_and_merge_cayley
 from .head_aligned_layer import HeadAlignedPOETLinear as HeadAlignedPOETLinear
 
 from .single_step import SingleStepPOETFunction as SingleStepPOETFunction
+from .single_step import HeadAlignedSingleStepFunction as HeadAlignedSingleStepFunction
