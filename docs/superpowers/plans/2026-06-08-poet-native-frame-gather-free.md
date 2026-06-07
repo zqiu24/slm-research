@@ -207,6 +207,17 @@ class SingleStepPOETLinear(POETLinear):
     routes to NativeSingleStepFunction. Valid only at oft_R=0 (merge_period=1, cayley).
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The native backward hard-codes the factor-2 Cayley Jacobian and has NO
+        # chain fallback, so refuse exp loudly rather than silently produce wrong
+        # grads (build-time validation also forbids it; this guards direct use).
+        if self.parameterization != "cayley":
+            raise ValueError(
+                "SingleStepPOETLinear requires parameterization='cayley'; "
+                f"got {self.parameterization!r}."
+            )
+
     def forward(self, x):
         return NativeSingleStepFunction.apply(
             x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
@@ -514,6 +525,8 @@ codexlog native_baseline bash scripts/train_poet_lie_orth.sh llama3 \
 
 Send the two logs for the loss/timing/memory comparison.
 
+**Launch-count caveat:** the native path trades 5 `O(N·d)` activation gathers for ~8 `O(d²)` `index_select` launches/layer/microbatch (two `W_eff` relabels — forward + backward — plus the two `_conj` per side). Far less data moved, but *more, smaller* kernel launches. At 60m that could partly offset the gather removal; if the A/B shows the relabels dominating, the follow-up is to **cache `W_eff`** (recompute lazily, invalidate on merge) so it's built once per step rather than per microbatch. (`W_eff` is recomputed rather than `save_for_backward`'d on purpose — saving it would add `O(d²)` activation memory per layer, against the save-only-`x` memory goal.)
+
 - [ ] **Step 4: Config key (optional, after A/B clears).** Once the A/B confirms loss overlap, flip the default in `configs/experiments/optim/poet_lie_orth.yaml`: add `single_step_native: true` under `optim.poet` (and it implies the single-step fast path). Leave `single_step_fast` as the documented fallback.
 
 ```bash
@@ -529,4 +542,5 @@ git commit -m "feat(poet): enable single_step_native by default for poet_lie_ort
 - **Placeholder scan:** none — every code step is complete; the GPU A/B is explicitly the user's to run with exact commands and the loss-overlap (not 0.0) acceptance.
 - **Type consistency:** `NativeSingleStepFunction.apply(...)` arg order is identical in the test (`_native`), the layer (`SingleStepPOETLinear.forward`), and the Function signature: `(x, oft_R_in, oft_R_out, weight, bias, perm_in, perm_in_inv, perm_out, perm_out_inv, rows_in, cols_in, rows_out, cols_out, block_size_in, block_size_out)` — 15 inputs → 15 backward returns (3 grads + 12 None). `_conj(M,p)=M[p][:,p]`; `_blockdiag_skew_vec` reused from `single_step` (factor 2 default). `single_step_native` is the name across config/CLI(`--poet-single-step-native`)/arg(`poet_single_step_native`)/walk.
 - **Correctness basis:** the exact forward+backward were verified bit-against the real chain to ~1e-14 (fp64) in [/tmp/poet_native_frame_selfcheck.py](/tmp/poet_native_frame_selfcheck.py); identity-perm forward is 0.0. Not bit-identical to `single_step_fast` on GPU (different reduction order) → loss-overlap acceptance, same as the original fast-vs-chain A/B.
-- **Old code intact:** `POETLinear`, `SingleStepPOETFunction`, `chain_layer_x_fast_decoupled`, and the merge are untouched; `SingleStepPOETLinear` subclasses `POETLinear` and overrides only `forward`, so the verified merge machinery (`_run_merge`/`_build_R_batched`/`_fold_with_R`) applies to it unchanged (`isinstance(pl, POETLinear)` holds).
+- **Old code intact:** `POETLinear`, `SingleStepPOETFunction`, `chain_layer_x_fast_decoupled`, and the merge are untouched; `SingleStepPOETLinear` subclasses `POETLinear` and overrides only `forward` (+ a one-line `__init__` cayley guard), so the verified merge machinery (`_run_merge`/`_build_R_batched`/`_fold_with_R`) applies to it unchanged (`isinstance(pl, POETLinear)` holds; it stores natural `W`, which the inherited merge reads identically to the chain — confirmed: chain effective base `(x[perm_in_inv]@Wᵀ)[perm_out]` equals native `x@W_effᵀ` with `W_eff=W[perm_out][:,perm_in]`).
+- **Review fixes applied:** (1) `__init__` fail-fast for non-cayley (the native backward is Cayley-specific, no fallback); (2) launch-count caveat in Task 6 (relabels are more/smaller launches — cache `W_eff` if they offset the gather win). Precedence note: if both `single_step_fast` and `single_step_native` are set, the native class wins for standard layers (its forward ignores `single_step_fast`); harmless. End-to-end `autograd.Function` (15→15 arity, leaf-grad routing) and forward/backward-vs-chain (~1e-14) verified before handoff.
