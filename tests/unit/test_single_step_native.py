@@ -99,3 +99,28 @@ def test_native_forward_identity_perm_is_bit_identical():
         pl.perm_out_inv.copy_(torch.arange(8, dtype=torch.int32))
     x = torch.randn(3, 12)
     assert (_native(pl, x) - x @ pl.weight.t()).abs().max().item() == 0.0
+
+
+def test_layer_forward_matches_chain():
+    torch.manual_seed(1)
+    torch.set_default_dtype(torch.float64)
+    from poet_torch import SingleStepPOETLinear
+
+    base = POETLinear(in_features=12, out_features=8, block_count=2, bias=True)
+    with torch.no_grad():
+        base.weight.normal_()
+        base.bias.normal_()
+    # Build a SingleStepPOETLinear sharing the same weights/perms as `base`.
+    layer = SingleStepPOETLinear(in_features=12, out_features=8, block_count=2, bias=True)
+    with torch.no_grad():
+        layer.weight.copy_(base.weight)
+        layer.bias.copy_(base.bias)
+        for b in ("perm_in", "perm_in_inv", "perm_out", "perm_out_inv"):
+            getattr(layer, b).copy_(getattr(base, b))
+
+    x = torch.randn(3, 12, requires_grad=True)
+    gy = torch.randn(3, 8)
+    y = layer(x)  # native forward
+    assert torch.allclose(y, _chain_ref(base, x), atol=1e-9)
+    (y * gy).sum().backward()
+    assert layer.oft_R_in.grad is not None and layer.oft_R_out.grad is not None
