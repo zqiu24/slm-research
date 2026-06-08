@@ -255,3 +255,52 @@ def test_alternating_subclass_sets_flag_and_inherits_fold():
     assert layer.alternate_every == 2
     # _fold_active_side now lives on POETXLinear; the subclass inherits it.
     assert layer._fold_active_side.__qualname__.startswith("POETXLinear.")
+
+
+@pytest.mark.parametrize("active", ["in", "out"])
+def test_fold_active_side_matches_both_sides_when_frozen_is_identity(active):
+    """POETXLinear._fold_active_side(active) == the both-sides fold when the frozen
+    side's oft_R is 0 (identity). Closes the Task-7 'out'-side gap. fp64."""
+    import torch
+    from poet_torch import POETXLinear
+    from poet_torch.poet_layer import cayley_batch, pytorch_skew_symmetric
+
+    torch.set_default_dtype(torch.float64)
+    try:
+
+        def _make():
+            # Seed INSIDE so ref and act are bit-identical clones (same perms,
+            # weight, and the active side's oft_R). The frozen side stays 0.
+            torch.manual_seed(5)
+            layer = POETXLinear(
+                in_features=12, out_features=8, block_count=1, bias=False, alternating=True
+            )
+            with torch.no_grad():
+                layer.weight.normal_()
+                if active == "in":
+                    layer.oft_R_in.normal_(std=1e-2)  # oft_R_out left at 0 (identity)
+                else:
+                    layer.oft_R_out.normal_(std=1e-2)  # oft_R_in left at 0 (identity)
+            return layer
+
+        def _cayley(layer):
+            qi = pytorch_skew_symmetric(
+                layer.oft_R_in, layer.block_size_in, layer.rows_in, layer.cols_in
+            )
+            qo = pytorch_skew_symmetric(
+                layer.oft_R_out, layer.block_size_out, layer.rows_out, layer.cols_out
+            )
+            return cayley_batch(qo), cayley_batch(qi)  # (R_out, R_in)
+
+        ref, act = _make(), _make()
+        R_out, R_in = _cayley(ref)
+        ref._fold_with_R(R_out, R_in, reinit_perm=False)  # full both-sides fold
+        act._fold_active_side(active, reinit_perm=False, cayley_fn=cayley_batch)
+        assert torch.allclose(act.weight, ref.weight, atol=1e-9), (
+            (act.weight - ref.weight).abs().max()
+        )
+        # the active side's oft_R is zeroed by the fold; the frozen side was already 0
+        assert torch.count_nonzero(act.oft_R_in) == 0
+        assert torch.count_nonzero(act.oft_R_out) == 0
+    finally:
+        torch.set_default_dtype(torch.float32)
