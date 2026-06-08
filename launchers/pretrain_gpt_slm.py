@@ -104,6 +104,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # structured side per head (block_size=head_dim, identity Psi, no perm);
     # the residual side stays a normal POET rotation. Requires --unfuse-qkv.
     group.add_argument("--poet-head-aligned-attn", action="store_true")
+    # Residual-side block count for the head-aligned POETX layer (>1 = permuted
+    # multi-block residual; requires --poet-head-aligned-attn + --poet-single-step-x).
+    group.add_argument("--poet-head-resid-block-count", type=int, default=1)
     # Disable the residual side's permutation (off-switch ablation).
     group.add_argument("--poet-no-head-resid-perm", action="store_true")
     # Single-step (R=I) fast path: collapse the identity-rotation chain to a

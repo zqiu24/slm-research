@@ -292,6 +292,17 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 )
             if poet.get("parameterization", "cayley") != "cayley":
                 raise ValueError("optim.poet.single_step_x requires parameterization=cayley.")
+        if int(poet.get("head_resid_block_count", 1)) != 1:
+            if not poet.get("head_aligned_attn", False):
+                raise ValueError(
+                    "optim.poet.head_resid_block_count > 1 requires head_aligned_attn=true "
+                    "(it controls the residual side of the head-aligned POETX layer)."
+                )
+            if not poet.get("single_step_x", False):
+                raise ValueError(
+                    "optim.poet.head_resid_block_count requires single_step_x=true "
+                    "(the permuted-residual head layer is a POETX subclass)."
+                )
         if poet.get("single_step_x_alternating", False):
             if not poet.get("single_step_x", False):
                 raise ValueError(
@@ -404,6 +415,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: head-aligned attention rotation (requires unfused q/k/v).
         if poet.get("head_aligned_attn", False):
             poet_args.append("--poet-head-aligned-attn")
+        if int(poet.get("head_resid_block_count", 1)) != 1:
+            poet_args.append("--poet-head-resid-block-count")
+            poet_args.append(str(int(poet.get("head_resid_block_count", 1))))
         if not poet.get("head_resid_perm", True):
             poet_args.append("--poet-no-head-resid-perm")
         # store_true: single-step (R=I) fast path (closed-form backward).

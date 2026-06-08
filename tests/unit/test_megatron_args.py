@@ -958,3 +958,47 @@ def test_poet_lie_orth_alt_experiment_yaml():
     assert cfg.optim.poet.single_step_x_alternating is False
     assert cfg.optim.poet.head_aligned_attn is False
     assert cfg.optim.poet.reinit_period == -1
+
+
+def test_head_resid_block_count_emits_flag():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = _poet_cfg(
+        {
+            "block_count": 1,
+            "merge_period": 1,
+            "parameterization": "cayley",
+            "q_optimizer": "lie_ortho",
+            "single_step_x": True,
+            "head_aligned_attn": True,
+            "head_resid_block_count": 4,
+        }
+    )
+    # head_aligned_attn requires base.model.unfuse_qkv=true (an earlier guard).
+    cfg = OmegaConf.merge(cfg, OmegaConf.create({"base": {"model": {"unfuse_qkv": True}}}))
+    args = _optimizer_args(cfg)
+    assert "--poet-head-resid-block-count" in args
+    assert args[args.index("--poet-head-resid-block-count") + 1] == "4"
+
+
+def test_head_resid_block_count_requires_head_aligned():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    with pytest.raises(ValueError, match="head_resid_block_count"):
+        _optimizer_args(
+            _poet_cfg(
+                {
+                    "block_count": 1,
+                    "merge_period": 1,
+                    "parameterization": "cayley",
+                    "q_optimizer": "lie_ortho",
+                    "single_step_x": True,
+                    "head_aligned_attn": False,
+                    "head_resid_block_count": 4,
+                }
+            )
+        )
