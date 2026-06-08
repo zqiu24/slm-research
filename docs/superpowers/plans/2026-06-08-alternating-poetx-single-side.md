@@ -47,6 +47,8 @@
 
 **Scope note (refines spec §9):** require `q_optimizer=lie_ortho` only (drop `lie_algebra` — champion is lie_ortho, keeps `LieAlgebraMomentum` untouched). **Refines spec §6:** the frozen-side backward returns a shape-correct **zeros** tensor, not `None`, so Megatron's grad buffer never stalls; the expensive d³ `M` GEMM is still skipped. (A future GPU-validated optimization may switch to `None` to also skip the frozen oft_R grad all-reduce.)
 
+**Where the speedup lives (set expectations):** because the frozen-side grad is **zeros, not `None`**, Task 2 saves the frozen `M` *compute* but NOT its grad all-reduce (which at `block_count=1`/Kimi is a large `~d²/2` tensor). So the dominant Kimi win is **Task 7** (skip the frozen Cayley build — the biggest d³ chunk); Tasks 2/4 add the backward-`M` and optimizer savings. Task 7 v1 skips the frozen **Cayley** but still pays the identity fold-matmul; a genuine one-sided matmul (skipping that too) is a flagged follow-up.
+
 ---
 
 ## Task 1: Shared active-side state module
@@ -166,9 +168,21 @@ Create `tests/unit/test_alternating_poetx.py`:
 ```python
 """AlternatingPOETXLinear: single-side backward (active side matches both-sides
 closed form; frozen side returns shape-correct zeros, never None)."""
+import pytest
 import torch
 from poet_torch import POETLinear, POETXSingleStepFunction
 from poet_torch.poetx_ops import AlternatingPOETXSingleStepFunction
+
+
+@pytest.fixture(autouse=True)
+def _reset_alt_state():
+    # The active-side signal is a module global; reset it around every test so
+    # active-side assertions can't leak across tests.
+    from poet_torch import alt_state
+
+    alt_state.set_iteration(0)
+    yield
+    alt_state.set_iteration(0)
 
 
 def _forward_frame(pl):
@@ -612,16 +626,25 @@ def test_single_step_x_alternating_uses_alternating_poetx_class():
 
     from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
 
-    model = nn.Sequential(nn.Linear(8, 8, bias=False))
+    # Mirror test_single_step_x_uses_poetx_class: a plain nn.Linear is NOT in the
+    # default linear_types, so pass extra_linear_types=(nn.Linear,) + init_type="none".
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8, bias=False)
+
+    m = M()
     replace_linears_with_poet(
-        model,
+        m,
         block_count=1,
-        parameterization="cayley",
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
         single_step_x=True,
         single_step_x_alternating=True,
         alternate_every=2,
     )
-    pl = model[0].poet_linear if isinstance(model[0], POETMegatronLinear) else None
+    assert isinstance(m.fc1, POETMegatronLinear)
+    pl = m.fc1.poet_linear
     assert isinstance(pl, AlternatingPOETXLinear)
     assert pl.alternate_every == 2
 ```
@@ -749,6 +772,16 @@ In `src/utils/megatron_args.py`, after the `single_step_x` validation block (aft
                     "optim.poet.single_step_x_alternating is incompatible with "
                     "head_aligned_attn=true (head-aligned uses a different layer)."
                 )
+            if not poet.get("train_output_rotation", True):
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating requires train_output_rotation=true "
+                    "(both rotation sides must be trainable to alternate)."
+                )
+            if poet.get("lie_alternating", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating is mutually exclusive with "
+                    "lie_alternating (pick one alternating path, not both)."
+                )
 ```
 
 and emit it next to the other `single_step_x` emit (after line 386 `poet_args.append("--poet-single-step-x")`), inside the same `if`-block region add a new block:
@@ -761,26 +794,47 @@ and emit it next to the other `single_step_x` emit (after line 386 `poet_args.ap
 
 - [ ] **Step 9: Write the args round-trip + validation test**
 
-Append to `tests/unit/test_megatron_args.py` (mirror the existing single_step_x test style in that file — find an existing `single_step` test to copy the harness; the test below assumes a `build_megatron_args(cfg)`-style helper exists in that file, named `_args_for` or similar — reuse whatever the file already uses):
+Append to `tests/unit/test_megatron_args.py`, using the file's real harness
+`_optimizer_args(_poet_cfg({...}))` (the same pair used by
+`test_single_step_x_emits_flag_when_merge_period_one` and
+`test_single_step_native_requires_merge_period_one`):
 
 ```python
-def test_single_step_x_alternating_emits_flag_and_validates():
-    # Reuse this file's existing config-building helper (same one the single_step_x
-    # tests use). Build a minimal lie_ortho POETX config with the alternating flag.
-    cfg = _poet_lie_ortho_cfg()  # <- existing helper in this test module
-    cfg.optim.poet.single_step_x = True
-    cfg.optim.poet.single_step_x_alternating = True
-    cfg.optim.poet.head_aligned_attn = False
-    args = _emit_poet_args(cfg)  # <- existing helper
+def test_single_step_x_alternating_emits_flag_when_valid():
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_count": 1,
+                "merge_period": 1,
+                "parameterization": "cayley",
+                "q_optimizer": "lie_ortho",
+                "single_step_x": True,
+                "single_step_x_alternating": True,
+                "head_aligned_attn": False,
+                "train_output_rotation": True,
+            }
+        )
+    )
     assert "--poet-single-step-x-alternating" in args
 
-    # validation: head-aligned on must raise
-    cfg.optim.poet.head_aligned_attn = True
-    with pytest.raises(ValueError, match="head_aligned_attn"):
-        _emit_poet_args(cfg)
-```
 
-> If `tests/unit/test_megatron_args.py` does not expose helpers named `_poet_lie_ortho_cfg`/`_emit_poet_args`, copy the exact construction the file's nearest `single_step_x` / `single_step_native` test uses (search the file for `single_step` and clone that fixture verbatim — do not invent a new harness).
+def test_single_step_x_alternating_requires_head_aligned_off():
+    with pytest.raises(ValueError, match="head_aligned_attn"):
+        _optimizer_args(
+            _poet_cfg(
+                {
+                    "block_count": 1,
+                    "merge_period": 1,
+                    "parameterization": "cayley",
+                    "q_optimizer": "lie_ortho",
+                    "single_step_x": True,
+                    "single_step_x_alternating": True,
+                    "head_aligned_attn": True,
+                    "train_output_rotation": True,
+                }
+            )
+        )
+```
 
 - [ ] **Step 10: Run the wiring tests**
 
@@ -966,13 +1020,13 @@ In `third_party/poet_torch/poetx_layer.py`, add to `AlternatingPOETXLinear` (use
                 pytorch_skew_symmetric(self.oft_R_in, self.block_size_in, self.rows_in, self.cols_in)
             )
             R_out = _torch.eye(self.block_size_out, dtype=self.weight.dtype, device=self.weight.device)
-            R_out = R_out.unsqueeze(0).expand(self.r_out, -1, -1)
+            R_out = R_out.unsqueeze(0).expand(self.r_out, -1, -1).contiguous()  # bmm needs real strides
         else:  # "out"
             R_out = cayley_fn(
                 pytorch_skew_symmetric(self.oft_R_out, self.block_size_out, self.rows_out, self.cols_out)
             )
             R_in = _torch.eye(self.block_size_in, dtype=self.weight.dtype, device=self.weight.device)
-            R_in = R_in.unsqueeze(0).expand(self.r_in, -1, -1)
+            R_in = R_in.unsqueeze(0).expand(self.r_in, -1, -1).contiguous()  # bmm needs real strides
         self._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
 ```
 
@@ -990,19 +1044,18 @@ In `src/patches/poet_merge_step.py`, in `_merge_layers` (lines 376-391), route `
 ```python
 def _merge_layers(pls, reinit_perm: bool, disable_batch: bool) -> None:
     """Fold every layer. AlternatingPOETXLinear layers fold ONLY the active side
-    (frozen side is identity); the rest use the batched both-sides fold."""
+    (frozen side is identity); the rest use the batched both-sides fold. The active
+    side comes from each layer's OWN alternate_every via alt_state — no megatron
+    get_args, so _merge_layers stays importable/callable on CPU (megatron is not
+    importable in the unit-test venv)."""
     from poet_torch import AlternatingPOETXLinear
     from poet_torch.alt_state import active_side
-    from megatron.training import get_args
 
     alt_pls = [pl for pl in pls if isinstance(pl, AlternatingPOETXLinear)]
     rest = [pl for pl in pls if not isinstance(pl, AlternatingPOETXLinear)]
 
-    if alt_pls:
-        every = getattr(get_args(), "poet_lie_alternate_every", 1)
-        side = active_side(every)
-        for pl in alt_pls:
-            pl._fold_active_side(side, reinit_perm=reinit_perm)
+    for pl in alt_pls:
+        pl._fold_active_side(active_side(pl.alternate_every), reinit_perm=reinit_perm)
 
     if disable_batch:
         for pl in rest:
@@ -1019,47 +1072,28 @@ def _merge_layers(pls, reinit_perm: bool, disable_batch: bool) -> None:
             pl._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
 ```
 
-- [ ] **Step 6: Write the driver-level parity test**
+- [ ] **Step 6: Write the driver-level ROUTING test**
+
+(Numerical parity is already covered by `test_active_only_fold_matches_both_sides_when_frozen_is_identity` in Step 1. Here we only verify `_merge_layers` *routes* alternating layers to `_fold_active_side` with the current active side — using a spy so we touch neither the Triton Cayley op nor megatron, both of which are unavailable on CPU.)
 
 Append to `tests/unit/test_alternating_poetx.py`:
 
 ```python
-def test_merge_layers_active_only_matches_both_sides(monkeypatch):
-    """Through the real _merge_layers driver, an AlternatingPOETXLinear with only
-    the active side stepped folds identically to a both-sides POETX fold."""
-    from poet_torch import AlternatingPOETXLinear, POETXLinear, alt_state
-    from poet_torch.poet_layer import cayley_batch
+def test_merge_layers_routes_alternating_to_active_only_fold(monkeypatch):
+    from poet_torch import AlternatingPOETXLinear, alt_state
 
     import src.patches.poet_merge_step as ms
 
-    torch.set_default_dtype(torch.float64)
-    torch.manual_seed(11)
-
-    # Stub get_args() so _merge_layers can read poet_lie_alternate_every.
-    class _A:
-        poet_lie_alternate_every = 1
-
-    monkeypatch.setattr("megatron.training.get_args", lambda: _A(), raising=False)
-    alt_state.set_iteration(1)  # active "in"
-
-    ref = POETXLinear(in_features=12, out_features=8, block_count=1, bias=False)
-    act = AlternatingPOETXLinear(in_features=12, out_features=8, block_count=1, bias=False)
-    with torch.no_grad():
-        ref.weight.normal_()
-        act.weight.copy_(ref.weight)
-        for b in ("perm_in", "perm_in_inv", "perm_out", "perm_out_inv"):
-            getattr(act, b).copy_(getattr(ref, b))
-        ref.oft_R_in.normal_(std=1e-2)        # only IN side stepped
-        act.oft_R_in.copy_(ref.oft_R_in)
-
-    # both-sides reference fold (frozen out = identity)
-    from src.patches.poet_merge_step import _build_R_batched
-    R_out, R_in = _build_R_batched([ref], cayley_fn=cayley_batch)[id(ref)]
-    ref._fold_with_R(R_out, R_in, reinit_perm=False)
-    # active-only via the driver
-    ms._merge_layers([act], reinit_perm=False, disable_batch=False)
-
-    assert torch.allclose(act.weight, ref.weight, atol=1e-9), (act.weight - ref.weight).abs().max()
+    alt_state.set_iteration(1)  # active "in" at alternate_every=1
+    layer = AlternatingPOETXLinear(in_features=8, out_features=8, block_count=1, bias=False)
+    calls = []
+    monkeypatch.setattr(
+        AlternatingPOETXLinear,
+        "_fold_active_side",
+        lambda self, side, reinit_perm=False: calls.append(side),
+    )
+    ms._merge_layers([layer], reinit_perm=False, disable_batch=False)
+    assert calls == ["in"]
 ```
 
 - [ ] **Step 7: Run the merge tests (new + existing POETX merge)**
@@ -1325,4 +1359,13 @@ drop vs both-sides at large d. (User-run; provide a `base/scale=<large>` overrid
 
 **Type/name consistency:** `AlternatingPOETXSingleStepFunction` (Task 2) used by `AlternatingPOETXLinear.forward` (Task 3); `active_side(alternate_every)`/`set_iteration(it)` (Task 1) used by layer (Task 3), optimizer `_active_side` (Task 4), and `_seed_active_side` (Task 6); `single_step_x_alternating` + `alternate_every` walk params (Task 5) match the apply-patch call (Task 5) and the YAML keys (Task 8); `true_single_side` ctor arg (Task 4) matches the builder call (Task 5). Consistent.
 
-**Placeholder scan:** one deliberate "reuse the existing fixture" instruction in Task 5 Step 9 (the `test_megatron_args.py` helper names differ by repo state) — flagged explicitly with a fallback (clone the nearest `single_step` test verbatim), not a silent TODO.
+**Placeholder scan:** none. (The earlier "reuse the existing fixture" hand-wave in Task 5 Step 9 was replaced with the verified real harness `_optimizer_args(_poet_cfg({...}))`.)
+
+**Review pass (2026-06-08) — fixes folded in after verifying against the code:**
+- **C1:** `_merge_layers` no longer imports `megatron.training` (verified not importable in the CPU venv); active side comes from `pl.alternate_every` via `alt_state`.
+- **C2:** Task 7 driver test is now a routing spy (no Triton Cayley / megatron on CPU); numerical parity stays in the direct `_fold_active_side` test.
+- **C3:** Task 5 walk test mirrors `test_single_step_x_uses_poetx_class` (`extra_linear_types=(nn.Linear,)`, `init_type="none"`).
+- **C4:** Task 5 args test uses the real `_optimizer_args(_poet_cfg(...))` harness.
+- **M1:** identity blocks in `_fold_active_side` are `.contiguous()` before `bmm`; honesty note that v1 skips the frozen Cayley but not the identity fold-matmul.
+- **M2/M3:** validation now also requires `train_output_rotation=true` and forbids combining with `lie_alternating`.
+- **Minor:** autouse fixture resets the `alt_state` global around every test.
