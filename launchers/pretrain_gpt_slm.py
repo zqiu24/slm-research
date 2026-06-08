@@ -113,6 +113,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # Gather-free native-frame single-step path (standard POETLinear). Implies the
     # single-step fast path; requires merge_period=1 + cayley.
     group.add_argument("--poet-single-step-native", action="store_true")
+    # Forward-frame perm-free-forward path (standalone POETXLinear). Implies the
+    # single-step fast path; requires merge_period=1 + cayley.
+    group.add_argument("--poet-single-step-x", action="store_true")
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")
