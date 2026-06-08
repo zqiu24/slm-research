@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added — integrated alternating POETX (both-momenta) on the forward-frame layer
+
+- **Phase 1 — champion config `poet_lie_orth_alt`** (`single_step_x` +
+  `lie_alternating`, head-OFF, lr 3e-3, c=8, distributed; `single_step_x_alternating`
+  OFF). Runs the POET champion behavior — the optimizer writes ONE rotation side per
+  step while BOTH Lie momenta stay fresh (`POETXSingleStepFunction` feeds both grads)
+  — on the plain forward-frame `POETXLinear`. The merge folds both sides (the frozen
+  side's `oft_R=0` → identity → no-op), reproducing the `lie_ortho`+`lie_alternating`
+  champion (val/loss ≈3.5332) at POETX forward speed with zero new layer code. Adds
+  `configs/experiments/optim/poet_lie_orth_alt.yaml`, `docs/experiments/poet_lie_orth_alt.md`,
+  `scripts/train_poet_lie_orth_alt.sh`. This is the integrated both-momenta path, NOT
+  the regressed true-single-side `poet_lie_orth_alt_x`.
+- **Phase 2 — active-only merge fold on `POETXLinear(alternating=True)`.** `POETXLinear`
+  gains an `alternating`/`alternate_every` flag and hosts `_fold_active_side` (the
+  research `AlternatingPOETXLinear` is now a thin subclass). The merge driver
+  (`_merge_layers`) routes by the `alternating` flag (not `isinstance`), folding ONLY
+  the active side — one Cayley + one block-fold per layer instead of two, skipping the
+  frozen identity side. Forward/backward stay both-sides so both momenta stay fed. The
+  optimizer's `_active_side` (write) and the merge's fold both read the shared
+  `alt_state` iteration, so write side == fold side every step. Bit-identical to the
+  both-sides fold at fp64 for both `"in"` and `"out"` active sides.
+
 ### Added — standalone Muon-like orthogonalizing optimizer (q_optimizer=lie_ortho)
 
 - DP-sharded orthogonalization for `LieOrthMomentum`
