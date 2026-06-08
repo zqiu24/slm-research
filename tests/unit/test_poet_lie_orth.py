@@ -11,6 +11,17 @@ from src.optim.poet_lie_orth import LieOrthMomentum
 from src.optim.poet_skew_muon import orthogonalize_skew_direction
 
 
+@pytest.fixture(autouse=True)
+def _isolate_default_dtype():
+    # These tests assume the canonical float32 default. Other test files
+    # (e.g. test_poetx_layer.py) set float64 globally and never restore it; when
+    # they run earlier in the same process the leaked default breaks the
+    # precision-tuned spectral asserts. Force float32 per test and don't leak.
+    torch.set_default_dtype(torch.float32)
+    yield
+    torch.set_default_dtype(torch.float32)
+
+
 def _benign_skew(num_blocks, b, seed):
     torch.manual_seed(seed)
     return vec_to_skew(torch.randn(num_blocks, b * (b - 1) // 2), b)

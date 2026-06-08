@@ -10,12 +10,15 @@ from poet_torch.poetx_ops import AlternatingPOETXSingleStepFunction
 @pytest.fixture(autouse=True)
 def _reset_alt_state():
     # The active-side signal is a module global; reset it around every test so
-    # active-side assertions can't leak across tests.
+    # active-side assertions can't leak across tests. Several tests below set the
+    # float64 default dtype — restore float32 after each so we don't leak it into
+    # later test files (e.g. the precision-tuned test_poet_lie_orth spectral asserts).
     from poet_torch import alt_state
 
     alt_state.set_iteration(0)
     yield
     alt_state.set_iteration(0)
+    torch.set_default_dtype(torch.float32)
 
 
 def _forward_frame(pl):
