@@ -16,6 +16,7 @@ import torch.nn as nn
 
 from .poet_layer import POETLinear
 from .poetx_ops import POETXSingleStepFunction
+from .poetx_ops import AlternatingPOETXSingleStepFunction
 
 
 class POETXLinear(nn.Module):
@@ -142,3 +143,28 @@ class POETXLinear(nn.Module):
     def merge_then_reinitialize(self, reinit_perm: bool = True) -> None:
         R_out, R_in = self._merge_R()
         self._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
+
+
+class AlternatingPOETXLinear(POETXLinear):
+    """POETX layer that trains ONE rotation side per step (true single-side).
+
+    The active side comes from the shared `alt_state` iteration (seeded once per
+    training step), so layer forward, optimizer, and merge all agree. Forward is
+    the unchanged bare GEMM; the backward (AlternatingPOETXSingleStepFunction)
+    computes only the active side's rotation-gradient and zeros the frozen side.
+    """
+
+    def __init__(self, *args, alternate_every: int = 1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.alternate_every = max(1, int(alternate_every))
+
+    def forward(self, x):
+        from .alt_state import active_side
+
+        active = active_side(self.alternate_every)
+        return AlternatingPOETXSingleStepFunction.apply(
+            x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
+            self.perm_in_inv, self.perm_out_inv,
+            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+            self.block_size_in, self.block_size_out, active,
+        )

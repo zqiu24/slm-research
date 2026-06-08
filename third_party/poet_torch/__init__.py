@@ -24,4 +24,5 @@ from .single_step_native import SingleStepPOETLinear as SingleStepPOETLinear
 from .poetx_ops import POETXSingleStepFunction as POETXSingleStepFunction
 from .poetx_ops import AlternatingPOETXSingleStepFunction as AlternatingPOETXSingleStepFunction
 from .poetx_layer import POETXLinear as POETXLinear
+from .poetx_layer import AlternatingPOETXLinear as AlternatingPOETXLinear
 from . import alt_state as alt_state

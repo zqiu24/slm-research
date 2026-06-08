@@ -115,3 +115,43 @@ def test_grad_x_is_independent_of_active_side():
     xo = xi.detach().clone().requires_grad_(True)
     (_alt(pl, Wx, bias_eff, xo, "out") * gy).sum().backward()
     assert torch.allclose(xi.grad, xo.grad, atol=1e-9)
+
+
+def test_layer_forward_is_bare_gemm_and_backward_is_single_side():
+    from poet_torch import AlternatingPOETXLinear, alt_state
+
+    torch.set_default_dtype(torch.float64)
+    torch.manual_seed(1)
+    layer = AlternatingPOETXLinear(
+        in_features=12, out_features=8, block_count=1, bias=True, alternate_every=1
+    )
+    with torch.no_grad():
+        layer.weight.normal_()
+        layer.bias.normal_()
+    x = torch.randn(4, 12)
+    # forward = bare GEMM on the stored forward-frame weight (R=I at merge_period=1)
+    y = layer(x)
+    assert (y - (x @ layer.weight.t() + layer.bias)).abs().max().item() == 0.0
+
+    # iteration 1 -> active "in": only oft_R_in gets a nonzero grad, oft_R_out zeros
+    alt_state.set_iteration(1)
+    layer.oft_R_in.grad = layer.oft_R_out.grad = None
+    gy = torch.randn(4, 8)
+    (layer(x) * gy).sum().backward()
+    assert torch.count_nonzero(layer.oft_R_in.grad) > 0
+    assert torch.count_nonzero(layer.oft_R_out.grad) == 0
+
+    # iteration 2 -> active "out": flips
+    alt_state.set_iteration(2)
+    layer.oft_R_in.grad = layer.oft_R_out.grad = None
+    (layer(x) * gy).sum().backward()
+    assert torch.count_nonzero(layer.oft_R_out.grad) > 0
+    assert torch.count_nonzero(layer.oft_R_in.grad) == 0
+
+
+def test_layer_is_poetx_subclass():
+    from poet_torch import AlternatingPOETXLinear, POETXLinear
+
+    layer = AlternatingPOETXLinear(in_features=8, out_features=16, block_count=1)
+    assert isinstance(layer, POETXLinear)  # merge driver isinstance tuple includes it
+    assert layer.alternate_every == 1
