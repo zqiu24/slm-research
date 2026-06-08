@@ -71,6 +71,8 @@ def apply() -> None:
         single_step_fast = getattr(args, "poet_single_step_fast", False)
         single_step_native = getattr(args, "poet_single_step_native", False)
         single_step_x = getattr(args, "poet_single_step_x", False)
+        single_step_x_alternating = getattr(args, "poet_single_step_x_alternating", False)
+        alternate_every = getattr(args, "poet_lie_alternate_every", 1)
         head_dim = getattr(args, "kv_channels", None)
         if head_dim is None:
             head_dim = args.hidden_size // args.num_attention_heads
@@ -89,6 +91,8 @@ def apply() -> None:
             single_step_fast=single_step_fast,
             single_step_native=single_step_native,
             single_step_x=single_step_x,
+            single_step_x_alternating=single_step_x_alternating,
+            alternate_every=alternate_every,
         )
 
     def _wrapped(*a, **kw):

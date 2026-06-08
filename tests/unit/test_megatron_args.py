@@ -874,3 +874,48 @@ def test_single_step_x_emits_flag_when_merge_period_one():
 
     args = _optimizer_args(_poet_cfg({"block_count": 1, "merge_period": 1, "single_step_x": True}))
     assert "--poet-single-step-x" in args
+
+
+def test_single_step_x_alternating_emits_flag_when_valid():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_count": 1,
+                "merge_period": 1,
+                "parameterization": "cayley",
+                "q_optimizer": "lie_ortho",
+                "single_step_x": True,
+                "single_step_x_alternating": True,
+                "head_aligned_attn": False,
+                "train_output_rotation": True,
+            }
+        )
+    )
+    assert "--poet-single-step-x-alternating" in args
+
+
+def test_single_step_x_alternating_requires_head_aligned_off():
+    import pytest
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    # unfuse_qkv=true so the earlier head_aligned/unfuse guard passes and we reach
+    # the single_step_x_alternating-specific head_aligned check.
+    cfg = _poet_cfg(
+        {
+            "block_count": 1,
+            "merge_period": 1,
+            "parameterization": "cayley",
+            "q_optimizer": "lie_ortho",
+            "single_step_x": True,
+            "single_step_x_alternating": True,
+            "head_aligned_attn": True,
+            "train_output_rotation": True,
+        }
+    )
+    cfg = OmegaConf.merge(cfg, OmegaConf.create({"base": {"model": {"unfuse_qkv": True}}}))
+    with pytest.raises(ValueError, match="head_aligned_attn"):
+        _optimizer_args(cfg)

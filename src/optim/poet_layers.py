@@ -194,6 +194,8 @@ def replace_linears_with_poet(
     single_step_fast: bool = False,
     single_step_native: bool = False,
     single_step_x: bool = False,
+    single_step_x_alternating: bool = False,
+    alternate_every: int = 1,
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -310,21 +312,35 @@ def replace_linears_with_poet(
 
                 has_bias = child.bias is not None and child.bias.numel() > 0
                 if cache_mode == "none":
-                    if single_step_x:
-                        from poet_torch import POETXLinear as _PoetCls
-                    elif single_step_native:
-                        from poet_torch import SingleStepPOETLinear as _PoetCls
+                    if single_step_x and single_step_x_alternating:
+                        from poet_torch import AlternatingPOETXLinear as _PoetCls
+
+                        pl = _PoetCls(
+                            in_features=in_f,
+                            out_features=out_f,
+                            bias=has_bias,
+                            device=child.weight.device,
+                            dtype=child.weight.dtype,
+                            parameterization=parameterization,
+                            alternate_every=alternate_every,
+                            **block_kwargs,
+                        )
                     else:
-                        _PoetCls = POETLinear  # noqa: N806
-                    pl = _PoetCls(
-                        in_features=in_f,
-                        out_features=out_f,
-                        bias=has_bias,
-                        device=child.weight.device,
-                        dtype=child.weight.dtype,
-                        parameterization=parameterization,
-                        **block_kwargs,
-                    )
+                        if single_step_x:
+                            from poet_torch import POETXLinear as _PoetCls
+                        elif single_step_native:
+                            from poet_torch import SingleStepPOETLinear as _PoetCls
+                        else:
+                            _PoetCls = POETLinear  # noqa: N806
+                        pl = _PoetCls(
+                            in_features=in_f,
+                            out_features=out_f,
+                            bias=has_bias,
+                            device=child.weight.device,
+                            dtype=child.weight.dtype,
+                            parameterization=parameterization,
+                            **block_kwargs,
+                        )
                 else:
                     pl = _poet_cache.CachedPOETLinear(
                         in_features=in_f,

@@ -481,3 +481,32 @@ def test_single_step_x_uses_poetx_class():
     import torch
 
     assert torch.allclose(pl.weight, eff.to(pl.weight.dtype), atol=1e-6)
+
+
+def test_single_step_x_alternating_uses_alternating_poetx_class():
+    import torch.nn as nn
+    from poet_torch import AlternatingPOETXLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    # Mirror test_single_step_x_uses_poetx_class: a plain nn.Linear is NOT in the
+    # default linear_types, so pass extra_linear_types=(nn.Linear,) + init_type="none".
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8, bias=False)
+
+    m = M()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_x=True,
+        single_step_x_alternating=True,
+        alternate_every=2,
+    )
+    assert isinstance(m.fc1, POETMegatronLinear)
+    pl = m.fc1.poet_linear
+    assert isinstance(pl, AlternatingPOETXLinear)
+    assert pl.alternate_every == 2

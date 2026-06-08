@@ -49,6 +49,9 @@ def apply() -> None:
         config.poet_lie_v_mode = getattr(args, "poet_lie_v_mode", "elementwise")
         config.poet_lie_alternating = getattr(args, "poet_lie_alternating", False)
         config.poet_lie_alternate_every = getattr(args, "poet_lie_alternate_every", 1)
+        config.poet_single_step_x_alternating = getattr(
+            args, "poet_single_step_x_alternating", False
+        )
         config.poet_lie_rms = getattr(args, "poet_lie_rms", False)
         config.poet_lie_rms_c = getattr(args, "poet_lie_rms_c", 0.2)
         config.poet_lie_ortho_c = getattr(args, "poet_lie_ortho_c", 0.01)

@@ -292,6 +292,37 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 )
             if poet.get("parameterization", "cayley") != "cayley":
                 raise ValueError("optim.poet.single_step_x requires parameterization=cayley.")
+        if poet.get("single_step_x_alternating", False):
+            if not poet.get("single_step_x", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating requires single_step_x=true "
+                    "(the alternating layer is a POETX subclass)."
+                )
+            if merge_period != 1:
+                raise ValueError("optim.poet.single_step_x_alternating requires merge_period=1.")
+            if poet.get("parameterization", "cayley") != "cayley":
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating requires parameterization=cayley."
+                )
+            if poet.get("q_optimizer", "adam") != "lie_ortho":
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating requires q_optimizer=lie_ortho."
+                )
+            if poet.get("head_aligned_attn", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating is incompatible with "
+                    "head_aligned_attn=true (head-aligned uses a different layer)."
+                )
+            if not poet.get("train_output_rotation", True):
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating requires train_output_rotation=true "
+                    "(both rotation sides must be trainable to alternate)."
+                )
+            if poet.get("lie_alternating", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_alternating is mutually exclusive with "
+                    "lie_alternating (pick one alternating path, not both)."
+                )
         # block_count (decoupled block sizes) takes precedence over block_size.
         block_count = poet.get("block_count", None)
         if block_count is not None:
@@ -384,6 +415,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: forward-frame perm-free-forward path.
         if poet.get("single_step_x", False):
             poet_args.append("--poet-single-step-x")
+        # store_true: dedicated true-single-side alternating POETX layer.
+        if poet.get("single_step_x_alternating", False):
+            poet_args.append("--poet-single-step-x-alternating")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":

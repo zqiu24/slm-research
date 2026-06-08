@@ -620,6 +620,7 @@ def get_megatron_poet_lie_momentum_optimizer(
             ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
             ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
             distributed=_lie_ortho_distributed,
+            true_single_side=getattr(config, "poet_single_step_x_alternating", False),
             dp_world_size=_dp_world,
             dp_rank=_dp_rank,
             dp_group=_dp_group,
