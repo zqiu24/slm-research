@@ -344,3 +344,55 @@ def test_sharded_owns_each_param_exactly_once():
             if buf[off : off + n].abs().sum() > 0:
                 nonzero_owners[i] += 1
     assert all(c == 1 for c in nonzero_owners), nonzero_owners
+
+
+def test_true_single_side_freezes_inactive_momentum(monkeypatch):
+    # true_single_side: inactive side's momentum must NOT advance/decay, even with
+    # a (zeros) grad present; active side updates as usual. Active comes from alt_state.
+    from poet_torch import alt_state
+
+    torch.manual_seed(7)
+    b = 8
+    ne = b * (b - 1) // 2
+    p_in = nn.Parameter(torch.zeros(1, ne))
+    p_out = nn.Parameter(torch.zeros(1, ne))
+    p_in.grad = torch.randn(1, ne)
+    p_out.grad = torch.zeros(1, ne)  # frozen side gets zeros from the layer backward
+    opt = LieOrthMomentum(
+        [
+            dict(params=[p_in], use_skew=True, side="in", lr=0.1),
+            dict(params=[p_out], use_skew=True, side="out", lr=0.1),
+        ],
+        ortho_c=0.05,
+        true_single_side=True,
+    )
+    alt_state.set_iteration(1)  # active "in"
+    opt.step()
+    assert p_in.data.abs().sum() > 0  # active side written
+    assert torch.allclose(p_out.data, torch.zeros_like(p_out))  # inactive not written
+    assert "lie_m" in opt.state[p_in]
+    # inactive side's momentum buffer must be absent OR all-zero (never advanced)
+    assert "lie_m" not in opt.state[p_out] or opt.state[p_out]["lie_m"].abs().sum() == 0
+
+
+def test_true_single_side_active_flips_with_iteration():
+    from poet_torch import alt_state
+
+    torch.manual_seed(8)
+    ne = 8 * 7 // 2
+    p_in = nn.Parameter(torch.zeros(1, ne))
+    p_out = nn.Parameter(torch.zeros(1, ne))
+    p_in.grad = torch.zeros(1, ne)
+    p_out.grad = torch.randn(1, ne)
+    opt = LieOrthMomentum(
+        [
+            dict(params=[p_in], use_skew=True, side="in", lr=0.1),
+            dict(params=[p_out], use_skew=True, side="out", lr=0.1),
+        ],
+        ortho_c=0.05,
+        true_single_side=True,
+    )
+    alt_state.set_iteration(2)  # active "out"
+    opt.step()
+    assert p_out.data.abs().sum() > 0
+    assert torch.allclose(p_in.data, torch.zeros_like(p_in))

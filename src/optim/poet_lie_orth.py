@@ -34,6 +34,7 @@ class LieOrthMomentum(torch.optim.Optimizer):
         v_mode: str = "elementwise",
         alternating: bool = False,
         alternate_every: int = 1,
+        true_single_side: bool = False,
         ortho_c: float = 0.01,
         ortho_method: str = "muon",
         ortho_ns_steps: int = 5,
@@ -55,6 +56,10 @@ class LieOrthMomentum(torch.optim.Optimizer):
         self.alternating = bool(alternating)
         self.alternate_every = max(1, int(alternate_every))
         self._alt_step = 0
+        # true_single_side: the dedicated AlternatingPOETXLinear path. Active side
+        # comes from poet_torch.alt_state (shared with the layer + merge), and the
+        # frozen side's momentum does NOT advance (its grad is zeros from the layer).
+        self.true_single_side = bool(true_single_side)
         # Orthogonalizing transform (docs/muon_orthogonalizing_optimizer_poet.md):
         # realized per-plane angle = lr * ortho_c (a band under 'muon', exact under
         # 'spectral'). First-moment-only unless ortho_use_second_moment.
@@ -83,12 +88,23 @@ class LieOrthMomentum(torch.optim.Optimizer):
         )
         super().__init__(params, defaults)
 
+    def _active_side(self):
+        if self.true_single_side:
+            from poet_torch.alt_state import active_side
+
+            return active_side(self.alternate_every)
+        if self.alternating:
+            return "out" if (self._alt_step // self.alternate_every) % 2 == 0 else "in"
+        return None
+
     def _lie_m_update(self, active):
         """Phase (a): update lie_m (+ lie_v if used) for ALL skew params. Cheap; run on
         every rank so the momentum buffers stay in sync (grads are DP-identical)."""
         for group in self.param_groups:
             if not group["use_skew"]:
                 continue
+            if self.true_single_side and active is not None and group["side"] != active:
+                continue  # true single-side: frozen side's momentum must not advance
             b1, b2, v_mode = group["b1"], group["b2"], group["v_mode"]
             for p in group["params"]:
                 g = p.grad
@@ -141,7 +157,7 @@ class LieOrthMomentum(torch.optim.Optimizer):
         for i, (p, group) in enumerate(items):
             if (i % dp_world) != dp_rank:
                 continue  # not this rank's block -> leave zeros (exact under all_reduce SUM)
-            if self.alternating and group["side"] != active:
+            if active is not None and group["side"] != active:
                 continue  # inactive side -> no rotation written this step
             st = self.state[p]
             m = st["lie_m"]
@@ -179,9 +195,7 @@ class LieOrthMomentum(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        active = None
-        if self.alternating:
-            active = "out" if (self._alt_step // self.alternate_every) % 2 == 0 else "in"
+        active = self._active_side()
 
         # --- skew branch: momentum (all ranks) -> owned-update buffer -> apply ---
         self._lie_m_update(active)
