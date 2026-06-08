@@ -520,30 +520,19 @@ def test_batched_merge_folds_poetx():
 
 
 def test_run_merge_gate_collects_poetx():
-    """The collection filter _run_merge uses must accept POETX (it would skip it
-    pre-widen). Mirrors _run_merge's filter on a real walked model."""
-    import torch.nn as nn
+    """The collection filter _run_merge uses must accept a POETX wrapped in
+    POETMegatronLinear (it would skip it pre-widen). Built directly (no walk) so
+    this task does not depend on the single_step_x walk param added in a later task."""
     from poet_torch import POETLinear, POETXLinear
-    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+    from src.optim.poet_layers import POETMegatronLinear
 
-    class M(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.fc1 = nn.Linear(8, 16, bias=False)
-
-    m = M()
-    replace_linears_with_poet(
-        m, block_count=1, init_type="none",
-        extra_linear_types=(nn.Linear,), single_step_x=True,
-    )
-    collected = [
-        mod.poet_linear
-        for _, mod in m.named_modules()
-        if isinstance(mod, POETMegatronLinear)
-        and isinstance(mod.poet_linear, (POETLinear, POETXLinear))
-        and mod.poet_linear.block_size > 0
-    ]
-    assert len(collected) == 1 and isinstance(collected[0], POETXLinear)
+    pl = POETXLinear(in_features=8, out_features=16, block_count=1, bias=False)
+    wrapper = POETMegatronLinear(pl)
+    # mirror _run_merge's per-module filter (isinstance(mod, POETMegatronLinear) then
+    # isinstance(mod.poet_linear, (POETLinear, POETXLinear)) and block_size > 0)
+    assert isinstance(wrapper, POETMegatronLinear)
+    assert isinstance(wrapper.poet_linear, (POETLinear, POETXLinear))
+    assert wrapper.poet_linear.block_size > 0
 ```
 
 - [ ] **Step 2: Run to verify the batched-merge test passes (it validates POETX's fold works through the real primitives; the gate-collection test mirrors the filter we widen next)**
