@@ -384,16 +384,16 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
 
 
 def _merge_layers(pls, reinit_perm: bool, disable_batch: bool) -> None:
-    """Fold every layer. AlternatingPOETXLinear layers fold ONLY the active side
-    (frozen side is identity); the rest use the batched both-sides fold. The active
-    side comes from each layer's OWN alternate_every via alt_state — no megatron
-    get_args, so _merge_layers stays importable/callable on CPU (megatron is not
-    importable in the unit-test venv)."""
-    from poet_torch import AlternatingPOETXLinear
+    """Fold every layer. Layers with ``alternating=True`` (the integrated
+    POETXLinear both-momenta path AND the research AlternatingPOETXLinear subclass)
+    fold ONLY the active side -- the frozen side's oft_R is 0 (identity), so its
+    Cayley + fold are skipped. The active side comes from each layer's OWN
+    alternate_every via alt_state (no megatron get_args, so this stays
+    importable/callable on CPU). The rest use the batched both-sides fold."""
     from poet_torch.alt_state import active_side
 
-    alt_pls = [pl for pl in pls if isinstance(pl, AlternatingPOETXLinear)]
-    rest = [pl for pl in pls if not isinstance(pl, AlternatingPOETXLinear)]
+    alt_pls = [pl for pl in pls if getattr(pl, "alternating", False)]
+    rest = [pl for pl in pls if not getattr(pl, "alternating", False)]
 
     for pl in alt_pls:
         pl._fold_active_side(active_side(pl.alternate_every), reinit_perm=reinit_perm)

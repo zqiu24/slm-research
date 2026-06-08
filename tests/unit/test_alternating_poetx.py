@@ -214,3 +214,119 @@ def test_merge_layers_routes_alternating_to_active_only_fold(monkeypatch):
     )
     ms._merge_layers([layer], reinit_perm=False, disable_batch=False)
     assert calls == ["in"]
+
+
+def test_merge_layers_routes_integrated_poetx_to_active_only_fold(monkeypatch):
+    from poet_torch import POETXLinear, alt_state
+
+    import src.patches.poet_merge_step as ms
+
+    alt_state.set_iteration(1)  # active "in" at alternate_every=1
+    layer = POETXLinear(in_features=8, out_features=8, block_count=1, bias=False, alternating=True)
+    calls = []
+    monkeypatch.setattr(
+        POETXLinear,
+        "_fold_active_side",
+        lambda self, side, reinit_perm=False: calls.append(side),
+    )
+    ms._merge_layers([layer], reinit_perm=False, disable_batch=False)
+    assert calls == ["in"]
+    alt_state.set_iteration(0)
+
+
+def test_merge_layers_keeps_plain_poetx_on_both_sides_fold(monkeypatch):
+    # alternating=False must NOT route to _fold_active_side; it goes through the
+    # batched both-sides fold instead. _build_R_batched + _fold_with_R use the
+    # GPU-only Triton cayley, so stub them to keep this routing assertion runnable
+    # on a CPU node (the point under test is the partition, not the fold math).
+    from poet_torch import POETXLinear, alt_state
+
+    import src.patches.poet_merge_step as ms
+
+    alt_state.set_iteration(1)
+    layer = POETXLinear(in_features=8, out_features=8, block_count=1, bias=False)
+    with torch.no_grad():
+        layer.weight.normal_()
+    active_calls = []
+    batched = []
+
+    def _stub_build(pls, **kw):
+        batched.extend(pls)
+        return {id(pl): (None, None) for pl in pls}
+
+    monkeypatch.setattr(
+        POETXLinear,
+        "_fold_active_side",
+        lambda self, side, reinit_perm=False: active_calls.append(side),
+    )
+    monkeypatch.setattr(ms, "_build_R_batched", _stub_build)
+    monkeypatch.setattr(
+        POETXLinear, "_fold_with_R", lambda self, R_out, R_in, reinit_perm=False: None
+    )
+    ms._merge_layers([layer], reinit_perm=False, disable_batch=False)
+    assert active_calls == []  # plain POETX did NOT go to the active-only fold
+    assert batched == [layer]  # it went through the batched both-sides fold
+    alt_state.set_iteration(0)
+
+
+def test_integrated_alternating_write_side_matches_fold_side():
+    """End-to-end consistency: the side the optimizer WRITES each step (driven by
+    alt_state) equals the side the merge driver FOLDS (same alt_state)."""
+    from poet_torch import POETXLinear, alt_state
+    from poet_torch.alt_state import active_side
+
+    import src.patches.poet_merge_step as ms
+    from src.optim.poet_lie_orth import LieOrthMomentum
+
+    torch.manual_seed(0)
+    layer = POETXLinear(
+        in_features=8,
+        out_features=8,
+        block_count=1,
+        bias=False,
+        alternating=True,
+        alternate_every=1,
+    )
+    with torch.no_grad():
+        layer.weight.normal_()
+    opt = LieOrthMomentum(
+        [
+            dict(params=[layer.oft_R_in], use_skew=True, side="in", lr=0.1),
+            dict(params=[layer.oft_R_out], use_skew=True, side="out", lr=0.1),
+        ],
+        ortho_c=0.05,
+        alternating=True,  # integrated both-momenta path (true_single_side stays False)
+    )
+    # The real fold defaults its cayley to the Triton op (GPU-only); inject the
+    # pure-torch cayley_batch so the REAL fold math runs end-to-end on a CPU node.
+    from poet_torch.poet_layer import cayley_batch
+
+    folded = []
+    _real_fold = POETXLinear._fold_active_side
+
+    def _spy_fold(self, side, reinit_perm=False):
+        folded.append(side)
+        return _real_fold(self, side, reinit_perm=reinit_perm, cayley_fn=cayley_batch)
+
+    POETXLinear._fold_active_side = _spy_fold
+    try:
+        for it in range(1, 5):
+            alt_state.set_iteration(it)
+            layer.oft_R_in.grad = torch.randn_like(layer.oft_R_in)
+            layer.oft_R_out.grad = torch.randn_like(layer.oft_R_out)
+            opt.step()  # writes the active side only; BOTH momenta advanced
+            # Read the side EXACTLY as the optimizer + merge do: active_side takes
+            # alternate_every (here 1), reading the iteration set above -- NOT `it`
+            # as the cadence (active_side(it) would always be "in" for it>=1).
+            active = active_side(layer.alternate_every)
+            wrote_in = layer.oft_R_in.abs().sum().item() > 0
+            wrote_out = layer.oft_R_out.abs().sum().item() > 0
+            assert (wrote_in, wrote_out) == ((active == "in"), (active == "out")), (it, active)
+            ms._merge_layers([layer], reinit_perm=False, disable_batch=False)
+            assert folded[-1] == active, (it, active, folded[-1])
+            # the fold zeroed both sides -> next step starts clean
+            assert layer.oft_R_in.abs().sum().item() == 0
+            assert layer.oft_R_out.abs().sum().item() == 0
+    finally:
+        POETXLinear._fold_active_side = _real_fold
+        alt_state.set_iteration(0)
