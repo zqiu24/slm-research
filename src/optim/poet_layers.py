@@ -193,6 +193,7 @@ def replace_linears_with_poet(
     resid_permute: bool = True,
     single_step_fast: bool = False,
     single_step_native: bool = False,
+    single_step_x: bool = False,
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -269,7 +270,7 @@ def replace_linears_with_poet(
                         **resid_kwargs,
                     )
                     _copy_and_init_weight(pl, child, init_type, mup_alpha)
-                    pl.single_step_fast = single_step_fast or single_step_native
+                    pl.single_step_fast = single_step_fast or single_step_native or single_step_x
                     wrapper = POETMegatronLinear(
                         pl, skip_bias_add=getattr(child, "skip_bias_add", False)
                     )
@@ -309,7 +310,9 @@ def replace_linears_with_poet(
 
                 has_bias = child.bias is not None and child.bias.numel() > 0
                 if cache_mode == "none":
-                    if single_step_native:
+                    if single_step_x:
+                        from poet_torch import POETXLinear as _PoetCls
+                    elif single_step_native:
                         from poet_torch import SingleStepPOETLinear as _PoetCls
                     else:
                         _PoetCls = POETLinear  # noqa: N806
@@ -340,6 +343,10 @@ def replace_linears_with_poet(
                     pl.oft_R_out.requires_grad_(False)
                 _copy_and_init_weight(pl, child, init_type, mup_alpha)
                 pl.single_step_fast = single_step_fast
+                if single_step_x:
+                    # POETX stores the forward-frame weight; convert the just-copied
+                    # natural weight Wx = W[perm_out][:,perm_in] (one-time, at build).
+                    pl.bake_perms_into_weight()
 
                 wrapper = POETMegatronLinear(
                     pl, skip_bias_add=getattr(child, "skip_bias_add", False)

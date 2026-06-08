@@ -451,3 +451,33 @@ def test_single_step_native_uses_new_class():
     )
     assert isinstance(m.fc1, POETMegatronLinear)
     assert isinstance(m.fc1.poet_linear, SingleStepPOETLinear)
+
+
+def test_single_step_x_uses_poetx_class():
+    import torch.nn as nn
+    from poet_torch import POETXLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 16, bias=False)
+
+    m = M()
+    orig = m.fc1.weight.detach().clone()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_x=True,
+    )
+    assert isinstance(m.fc1, POETMegatronLinear)
+    pl = m.fc1.poet_linear
+    assert isinstance(pl, POETXLinear)
+    # The stored weight is the FORWARD frame: Wx = orig[perm_out][:,perm_in].
+    eff = orig.index_select(0, pl.perm_out.long()).index_select(1, pl.perm_in.long())
+    import torch
+
+    assert torch.allclose(pl.weight, eff.to(pl.weight.dtype), atol=1e-6)
