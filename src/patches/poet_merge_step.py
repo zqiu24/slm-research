@@ -287,7 +287,7 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
     import os
 
     import torch
-    from poet_torch import POETLinear
+    from poet_torch import POETLinear, POETXLinear
 
     from src.optim.poet_layers import POETMegatronLinear
 
@@ -304,7 +304,7 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
             if not isinstance(mod, POETMegatronLinear):
                 continue
             pl = mod.poet_linear
-            if not isinstance(pl, POETLinear) or pl.block_size <= 0:
+            if not isinstance(pl, POETLinear | POETXLinear) or pl.block_size <= 0:
                 continue
             pls.append(pl)
 

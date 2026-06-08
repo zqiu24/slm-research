@@ -189,3 +189,44 @@ def test_merge_reinit_folds_and_resamples_perm():
     )
     assert not torch.equal(xl.perm_in, perm_in_before)  # perms resampled
     assert torch.count_nonzero(xl.oft_R_in) == 0
+
+
+def test_batched_merge_folds_poetx():
+    """POETX folds correctly through the real batched merge primitives
+    (_build_R_batched + _fold_with_R), on CPU with the pure-torch cayley_fn."""
+    import torch
+    from poet_torch import POETXLinear
+    from poet_torch.poet_layer import cayley_batch
+
+    from src.patches.poet_merge_step import _build_R_batched
+
+    torch.set_default_dtype(torch.float64)
+    torch.manual_seed(5)
+    xl = POETXLinear(in_features=12, out_features=8, block_count=2, bias=False)
+    with torch.no_grad():
+        xl.weight.normal_()
+        xl.oft_R_in.normal_(std=1e-2)
+        xl.oft_R_out.normal_(std=1e-2)
+    w_before = xl.weight.clone()
+    built = _build_R_batched([xl], cayley_fn=cayley_batch)  # pure-torch R-build
+    R_out, R_in = built[id(xl)]
+    xl._fold_with_R(R_out, R_in, reinit_perm=False)
+    assert torch.count_nonzero(xl.oft_R_in) == 0 and torch.count_nonzero(xl.oft_R_out) == 0
+    assert not torch.allclose(xl.weight, w_before)  # rotation absorbed
+
+
+def test_run_merge_gate_collects_poetx():
+    """The collection filter _run_merge uses must accept a POETX wrapped in
+    POETMegatronLinear (it would skip it pre-widen). Built directly (no walk) so
+    this task does not depend on the single_step_x walk param added in a later task."""
+    from poet_torch import POETLinear, POETXLinear
+
+    from src.optim.poet_layers import POETMegatronLinear
+
+    pl = POETXLinear(in_features=8, out_features=16, block_count=1, bias=False)
+    wrapper = POETMegatronLinear(pl)
+    # mirror _run_merge's per-module filter (isinstance(mod, POETMegatronLinear) then
+    # isinstance(mod.poet_linear, (POETLinear, POETXLinear)) and block_size > 0)
+    assert isinstance(wrapper, POETMegatronLinear)
+    assert isinstance(wrapper.poet_linear, POETLinear | POETXLinear)
+    assert wrapper.poet_linear.block_size > 0
