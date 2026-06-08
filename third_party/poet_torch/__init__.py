@@ -25,4 +25,5 @@ from .poetx_ops import POETXSingleStepFunction as POETXSingleStepFunction
 from .poetx_ops import AlternatingPOETXSingleStepFunction as AlternatingPOETXSingleStepFunction
 from .poetx_layer import POETXLinear as POETXLinear
 from .poetx_layer import AlternatingPOETXLinear as AlternatingPOETXLinear
+from .head_aligned_poetx_layer import HeadAlignedPOETXLinear as HeadAlignedPOETXLinear
 from . import alt_state as alt_state
