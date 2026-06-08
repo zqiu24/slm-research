@@ -1060,12 +1060,12 @@ Expected: no errors. (If `ruff` is not on PATH, use `$PY -m ruff check ...`.)
 Run: `$PY -m pytest tests/unit/test_megatron_args.py -k "single_step_x_alternating" -v`
 Expected: PASS — `single_step_x_alternating` still emits its flag and stays mutually exclusive with `lie_alternating` ([megatron_args.py:321-325](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L321-L325)).
 
-- [ ] **Step 4: Update the CHANGELOG** (per the repo's logging convention) — append a dated entry to `NeckariumAI/zqiu/CHANGELOG.md` summarizing: integrated alternating POETX (both-momenta) — Phase-1 champion config `poet_lie_orth_alt`, Phase-2 active-only merge fold on `POETXLinear(alternating=True)`.
+- [ ] **Step 4: Update the CHANGELOG** (the repo's real changelog is `CHANGELOG.md` at the repo root — NOT a nested `NeckariumAI/...` path). Append a bullet under the existing `## Unreleased` → `### Added` section summarizing: integrated alternating POETX (both-momenta) — Phase-1 champion config `poet_lie_orth_alt`, Phase-2 active-only merge fold on `POETXLinear(alternating=True)`. (POET_dev.md is updated separately as the POET results tracker.)
 
 - [ ] **Step 5: Commit the CHANGELOG**
 
 ```bash
-git add NeckariumAI/zqiu/CHANGELOG.md
+git add CHANGELOG.md
 git commit -m "docs: changelog for integrated alternating POETX"
 ```
 

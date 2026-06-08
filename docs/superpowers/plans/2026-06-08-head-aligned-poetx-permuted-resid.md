@@ -448,7 +448,7 @@ In `src/optim/poet_layers.py`:
                             device=child.weight.device,
                             dtype=child.weight.dtype,
                             parameterization=parameterization,
-                            alternating=(single_step_x and lie_alternating_for_layer),
+                            alternating=(single_step_x and lie_alternating),
                             alternate_every=alternate_every,
                         )
                     else:
@@ -457,7 +457,7 @@ In `src/optim/poet_layers.py`:
                         # ... existing legacy HeadAlignedPOETLinear construction ...
 ```
 
-> `lie_alternating_for_layer` and `alternate_every` are the same walk params the prerequisite plan added for `POETXLinear(alternating=…)`. If the prerequisite named them differently, reuse those exact names. After construction, the existing `_copy_and_init_weight` + (for `single_step_x`) `bake_perms_into_weight()` must run for `HeadAlignedPOETXLinear` exactly as for `POETXLinear` — verify the `single_step_x` post-build `bake_perms_into_weight()` guard ([poet_layers.py:346-349](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L346-L349)) covers the head-aligned POETX branch (it should, since `HeadAlignedPOETXLinear` inherits `bake_perms_into_weight`).
+> `lie_alternating` and `alternate_every` are the walk params the prerequisite plan adds/uses for `POETXLinear(alternating=…)` (confirmed: the integrated plan names the new walk param `lie_alternating` and reuses the existing `alternate_every`). After construction, the existing `_copy_and_init_weight` + (for `single_step_x`) `bake_perms_into_weight()` must run for `HeadAlignedPOETXLinear` exactly as for `POETXLinear` — verify the `single_step_x` post-build `bake_perms_into_weight()` guard ([poet_layers.py:346-349](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L346-L349)) covers the head-aligned POETX branch (it should, since `HeadAlignedPOETXLinear` inherits `bake_perms_into_weight`).
 
 - [ ] **Step 4: Thread the flag through the apply patch**
 
@@ -763,4 +763,4 @@ If the verdict is ambiguous, run `head_resid_block_count=1` (single dense residu
 
 **Type/name consistency:** `HeadAlignedPOETXLinear(in_features, out_features, *, head_side, head_dim, head_resid_block_count, bias, device, dtype, parameterization, alternating, alternate_every)` is used identically in Task 1 (def), Task 4 (walk call), and Task 6 (config keys → CLI → args). `head_resid_block_count` is the single name across layer, walk, apply-patch, CLI (`--poet-head-resid-block-count`), and YAML. `alternating`/`alternate_every` reuse the prerequisite plan's POETXLinear params.
 
-**Open dependency:** Task 4 Step 3 reuses the prerequisite plan's walk params (`lie_alternating_for_layer`/`alternate_every`) and POETXLinear's `alternating` attribute — if that plan named them differently, align to its names. Flagged inline.
+**Open dependency:** Task 4 Step 3 reuses the prerequisite plan's walk params — confirmed names are `lie_alternating` (added by the integrated plan's Task 5) and `alternate_every` (already on the walk), plus POETXLinear's `alternating` attribute. The integrated plan must be implemented first.
