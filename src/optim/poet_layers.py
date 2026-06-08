@@ -195,6 +195,7 @@ def replace_linears_with_poet(
     single_step_native: bool = False,
     single_step_x: bool = False,
     single_step_x_alternating: bool = False,
+    lie_alternating: bool = False,
     alternate_every: int = 1,
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
@@ -325,10 +326,26 @@ def replace_linears_with_poet(
                             alternate_every=alternate_every,
                             **block_kwargs,
                         )
+                    elif single_step_x:
+                        # Integrated path: a plain POETXLinear that carries the
+                        # alternating flag (both-momenta forward/backward; the merge
+                        # driver folds only the active side). lie_alternating=False
+                        # builds the ordinary both-sides POETXLinear.
+                        from poet_torch import POETXLinear as _PoetCls
+
+                        pl = _PoetCls(
+                            in_features=in_f,
+                            out_features=out_f,
+                            bias=has_bias,
+                            device=child.weight.device,
+                            dtype=child.weight.dtype,
+                            parameterization=parameterization,
+                            alternating=lie_alternating,
+                            alternate_every=alternate_every,
+                            **block_kwargs,
+                        )
                     else:
-                        if single_step_x:
-                            from poet_torch import POETXLinear as _PoetCls
-                        elif single_step_native:
+                        if single_step_native:
                             from poet_torch import SingleStepPOETLinear as _PoetCls
                         else:
                             _PoetCls = POETLinear  # noqa: N806

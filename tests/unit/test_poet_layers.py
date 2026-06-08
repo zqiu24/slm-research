@@ -510,3 +510,58 @@ def test_single_step_x_alternating_uses_alternating_poetx_class():
     pl = m.fc1.poet_linear
     assert isinstance(pl, AlternatingPOETXLinear)
     assert pl.alternate_every == 2
+
+
+def test_single_step_x_with_lie_alternating_builds_alternating_poetx():
+    import torch.nn as nn
+    from poet_torch import AlternatingPOETXLinear, POETXLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8, bias=False)
+
+    m = M()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_x=True,
+        lie_alternating=True,
+        alternate_every=2,
+    )
+    assert isinstance(m.fc1, POETMegatronLinear)
+    pl = m.fc1.poet_linear
+    # Integrated path: a PLAIN POETXLinear with the alternating flag set -- NOT the
+    # true-single-side AlternatingPOETXLinear subclass (both momenta stay fed).
+    assert isinstance(pl, POETXLinear)
+    assert not isinstance(pl, AlternatingPOETXLinear)
+    assert pl.alternating is True
+    assert pl.alternate_every == 2
+
+
+def test_single_step_x_without_lie_alternating_builds_plain_poetx():
+    import torch.nn as nn
+    from poet_torch import POETXLinear
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8, bias=False)
+
+    m = M()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_x=True,
+    )
+    pl = m.fc1.poet_linear
+    assert isinstance(pl, POETXLinear)
+    assert pl.alternating is False
