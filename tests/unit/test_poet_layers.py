@@ -565,3 +565,62 @@ def test_single_step_x_without_lie_alternating_builds_plain_poetx():
     pl = m.fc1.poet_linear
     assert isinstance(pl, POETXLinear)
     assert pl.alternating is False
+
+
+def test_apply_patch_threads_lie_alternating_into_walk():
+    import types
+
+    import torch.nn as nn
+    from poet_torch import AlternatingPOETXLinear, POETXLinear
+
+    import src.patches.poet_apply_to_model as ap
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8, bias=False)
+
+    # Minimal args carrying just the POET knobs _apply_poet_to_chunk reads.
+    args = types.SimpleNamespace(
+        poet_block_size=256,
+        poet_block_count=1,
+        poet_init_type="none",
+        poet_mup_alpha=1.0,
+        poet_cache_mode="none",
+        poet_parameterization="cayley",
+        poet_freeze_output_rotation=False,
+        poet_head_aligned_attn=False,
+        poet_no_head_resid_perm=False,
+        poet_single_step_fast=True,
+        poet_single_step_native=False,
+        poet_single_step_x=True,
+        poet_single_step_x_alternating=False,
+        poet_lie_alternating=True,
+        poet_lie_alternate_every=3,
+        kv_channels=None,
+        hidden_size=8,
+        num_attention_heads=1,
+    )
+    # _apply_poet_to_chunk discovers Megatron linear types lazily; on a CPU node that
+    # returns () and the walk falls back to extra_linear_types. We can't pass
+    # extra_linear_types through the patch, so monkeypatch the walk to assert the
+    # flag is forwarded, then build for real.
+    seen = {}
+    orig = ap.replace_linears_with_poet
+
+    def _spy(model, **kw):
+        seen.update(kw)
+        return orig(model, extra_linear_types=(nn.Linear,), **kw)
+
+    ap.replace_linears_with_poet = _spy
+    try:
+        m = M()
+        ap._apply_poet_to_chunk(m, args)
+    finally:
+        ap.replace_linears_with_poet = orig
+
+    assert seen["lie_alternating"] is True
+    assert seen["alternate_every"] == 3
+    pl = m.fc1.poet_linear
+    assert isinstance(pl, POETXLinear) and not isinstance(pl, AlternatingPOETXLinear)
+    assert pl.alternating is True

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 
+from src.optim.poet_layers import replace_linears_with_poet
 from src.patches._registry import register_patch
 
 _TARGET = ("megatron.training.training.get_model",)
@@ -49,51 +50,56 @@ logger = logging.getLogger(__name__)
 _DUMP_POET_PARAMS = True
 
 
+# Module-level (NOT nested in apply()) so it is unit-testable on a CPU node without
+# Megatron, and so tests can monkeypatch the walk via ap.replace_linears_with_poet.
+# replace_linears_with_poet is src.optim (CPU-safe, no Megatron at import); the walk
+# itself imports Megatron lazily. _apply_poet_to_chunk uses no apply() closure state.
+def _apply_poet_to_chunk(m, args) -> int:
+    block = getattr(args, "poet_block_size", 256)
+    block_count = getattr(args, "poet_block_count", None)
+    init = getattr(args, "poet_init_type", "normalized")
+    mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
+    cache_mode = getattr(args, "poet_cache_mode", "none")
+    parameterization = getattr(args, "poet_parameterization", "cayley")
+    freeze_output_rotation = getattr(args, "poet_freeze_output_rotation", False)
+    head_aligned_attn = getattr(args, "poet_head_aligned_attn", False)
+    resid_permute = not getattr(args, "poet_no_head_resid_perm", False)
+    single_step_fast = getattr(args, "poet_single_step_fast", False)
+    single_step_native = getattr(args, "poet_single_step_native", False)
+    single_step_x = getattr(args, "poet_single_step_x", False)
+    single_step_x_alternating = getattr(args, "poet_single_step_x_alternating", False)
+    lie_alternating = getattr(args, "poet_lie_alternating", False)
+    alternate_every = getattr(args, "poet_lie_alternate_every", 1)
+    head_dim = getattr(args, "kv_channels", None)
+    if head_dim is None:
+        head_dim = args.hidden_size // args.num_attention_heads
+    return replace_linears_with_poet(
+        m,
+        block_size=block,
+        block_count=block_count,
+        init_type=init,
+        mup_alpha=mup_alpha,
+        cache_mode=cache_mode,
+        parameterization=parameterization,
+        freeze_output_rotation=freeze_output_rotation,
+        head_aligned_attn=head_aligned_attn,
+        head_dim=head_dim,
+        resid_permute=resid_permute,
+        single_step_fast=single_step_fast,
+        single_step_native=single_step_native,
+        single_step_x=single_step_x,
+        single_step_x_alternating=single_step_x_alternating,
+        lie_alternating=lie_alternating,
+        alternate_every=alternate_every,
+    )
+
+
 @register_patch(name="poet_apply_to_model", targets=_TARGET)
 def apply() -> None:
     from megatron.training import get_args
     from megatron.training import training as _mt
 
-    from src.optim.poet_layers import replace_linears_with_poet
-
     _orig = _mt.get_model
-
-    def _apply_poet_to_chunk(m, args) -> int:
-        block = getattr(args, "poet_block_size", 256)
-        block_count = getattr(args, "poet_block_count", None)
-        init = getattr(args, "poet_init_type", "normalized")
-        mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
-        cache_mode = getattr(args, "poet_cache_mode", "none")
-        parameterization = getattr(args, "poet_parameterization", "cayley")
-        freeze_output_rotation = getattr(args, "poet_freeze_output_rotation", False)
-        head_aligned_attn = getattr(args, "poet_head_aligned_attn", False)
-        resid_permute = not getattr(args, "poet_no_head_resid_perm", False)
-        single_step_fast = getattr(args, "poet_single_step_fast", False)
-        single_step_native = getattr(args, "poet_single_step_native", False)
-        single_step_x = getattr(args, "poet_single_step_x", False)
-        single_step_x_alternating = getattr(args, "poet_single_step_x_alternating", False)
-        alternate_every = getattr(args, "poet_lie_alternate_every", 1)
-        head_dim = getattr(args, "kv_channels", None)
-        if head_dim is None:
-            head_dim = args.hidden_size // args.num_attention_heads
-        return replace_linears_with_poet(
-            m,
-            block_size=block,
-            block_count=block_count,
-            init_type=init,
-            mup_alpha=mup_alpha,
-            cache_mode=cache_mode,
-            parameterization=parameterization,
-            freeze_output_rotation=freeze_output_rotation,
-            head_aligned_attn=head_aligned_attn,
-            head_dim=head_dim,
-            resid_permute=resid_permute,
-            single_step_fast=single_step_fast,
-            single_step_native=single_step_native,
-            single_step_x=single_step_x,
-            single_step_x_alternating=single_step_x_alternating,
-            alternate_every=alternate_every,
-        )
 
     def _wrapped(*a, **kw):
         args = get_args()
