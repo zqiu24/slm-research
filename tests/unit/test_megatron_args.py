@@ -858,3 +858,19 @@ def test_single_step_native_emits_flag_when_merge_period_one():
         _poet_cfg({"block_count": 1, "merge_period": 1, "single_step_native": True})
     )
     assert "--poet-single-step-native" in args
+
+
+def test_single_step_x_requires_merge_period_one():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    with pytest.raises(ValueError, match="single_step_x"):
+        _optimizer_args(_poet_cfg({"block_count": 1, "single_step_x": True}))
+
+
+def test_single_step_x_emits_flag_when_merge_period_one():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_count": 1, "merge_period": 1, "single_step_x": True}))
+    assert "--poet-single-step-x" in args

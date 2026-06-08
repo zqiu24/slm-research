@@ -284,6 +284,14 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 )
             if poet.get("parameterization", "cayley") != "cayley":
                 raise ValueError("optim.poet.single_step_native requires parameterization=cayley.")
+        if poet.get("single_step_x", False):
+            if merge_period != 1:
+                raise ValueError(
+                    "optim.poet.single_step_x requires merge_period=1 "
+                    f"(R=Identity at forward); got merge_period={merge_period}."
+                )
+            if poet.get("parameterization", "cayley") != "cayley":
+                raise ValueError("optim.poet.single_step_x requires parameterization=cayley.")
         # block_count (decoupled block sizes) takes precedence over block_size.
         block_count = poet.get("block_count", None)
         if block_count is not None:
@@ -373,6 +381,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: gather-free native-frame single-step path.
         if poet.get("single_step_native", False):
             poet_args.append("--poet-single-step-native")
+        # store_true: forward-frame perm-free-forward path.
+        if poet.get("single_step_x", False):
+            poet_args.append("--poet-single-step-x")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":
