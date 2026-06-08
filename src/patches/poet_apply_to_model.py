@@ -70,6 +70,7 @@ def _apply_poet_to_chunk(m, args) -> int:
     single_step_x_alternating = getattr(args, "poet_single_step_x_alternating", False)
     lie_alternating = getattr(args, "poet_lie_alternating", False)
     alternate_every = getattr(args, "poet_lie_alternate_every", 1)
+    head_resid_block_count = getattr(args, "poet_head_resid_block_count", 1)
     head_dim = getattr(args, "kv_channels", None)
     if head_dim is None:
         head_dim = args.hidden_size // args.num_attention_heads
@@ -84,6 +85,7 @@ def _apply_poet_to_chunk(m, args) -> int:
         freeze_output_rotation=freeze_output_rotation,
         head_aligned_attn=head_aligned_attn,
         head_dim=head_dim,
+        head_resid_block_count=head_resid_block_count,
         resid_permute=resid_permute,
         single_step_fast=single_step_fast,
         single_step_native=single_step_native,

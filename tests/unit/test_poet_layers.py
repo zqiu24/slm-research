@@ -624,3 +624,58 @@ def test_apply_patch_threads_lie_alternating_into_walk():
     pl = m.fc1.poet_linear
     assert isinstance(pl, POETXLinear) and not isinstance(pl, AlternatingPOETXLinear)
     assert pl.alternating is True
+
+
+def test_head_aligned_poetx_built_for_attention_under_single_step_x():
+    import torch.nn as nn
+    from poet_torch import HeadAlignedPOETLinear, HeadAlignedPOETXLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    # linear_q is in _HEAD_ALIGNED_SIDES (head_side="out"). hidden=16 -> heads*head_dim=32.
+    class Attn(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_q = nn.Linear(16, 32, bias=False)
+
+    m = Attn()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_x=True,
+        head_aligned_attn=True,
+        head_dim=8,
+        head_resid_block_count=2,
+    )
+    assert isinstance(m.linear_q, POETMegatronLinear)
+    pl = m.linear_q.poet_linear
+    assert isinstance(pl, HeadAlignedPOETXLinear)
+    assert not isinstance(pl, HeadAlignedPOETLinear)  # the POETX port, not legacy
+    assert pl.head_side == "out"
+    assert pl.block_size_out == 8 and pl.r_out == 4  # per-head blocks
+    assert pl.block_size_in == 8 and pl.r_in == 2  # permuted multi-block residual
+
+
+def test_head_aligned_legacy_built_without_single_step_x():
+    import torch.nn as nn
+    from poet_torch import HeadAlignedPOETLinear
+
+    from src.optim.poet_layers import replace_linears_with_poet
+
+    class Attn(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_q = nn.Linear(16, 32, bias=False)
+
+    m = Attn()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        head_aligned_attn=True,
+        head_dim=8,
+    )
+    assert isinstance(m.linear_q.poet_linear, HeadAlignedPOETLinear)

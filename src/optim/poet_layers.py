@@ -190,6 +190,7 @@ def replace_linears_with_poet(
     freeze_output_rotation: bool = False,
     head_aligned_attn: bool = False,
     head_dim: int | None = None,
+    head_resid_block_count: int = 1,
     resid_permute: bool = True,
     single_step_fast: bool = False,
     single_step_native: bool = False,
@@ -249,30 +250,52 @@ def replace_linears_with_poet(
                         f"(set base.model.unfuse_qkv=true); found fused {full}"
                     )
                 if head_aligned_attn and name in _HEAD_ALIGNED_SIDES:
-                    from poet_torch import HeadAlignedPOETLinear
-
                     if head_dim is None:
                         raise ValueError("[POET] head_aligned_attn requires head_dim")
                     out_f, in_f = child.weight.shape
                     has_bias = child.bias is not None and child.bias.numel() > 0
-                    resid_kwargs = (
-                        {"resid_block_count": block_count}
-                        if block_count is not None
-                        else {"resid_block_size": block_size}
-                    )
-                    pl = HeadAlignedPOETLinear(
-                        in_features=in_f,
-                        out_features=out_f,
-                        head_side=_HEAD_ALIGNED_SIDES[name],
-                        head_dim=head_dim,
-                        resid_permute=resid_permute,
-                        bias=has_bias,
-                        device=child.weight.device,
-                        dtype=child.weight.dtype,
-                        parameterization=parameterization,
-                        **resid_kwargs,
-                    )
-                    _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                    head_side = _HEAD_ALIGNED_SIDES[name]
+                    if single_step_x:
+                        # POETX-native head-aligned: forward-frame, identity perm on the
+                        # head side + a real permuted multi-block residual side.
+                        from poet_torch import HeadAlignedPOETXLinear
+
+                        pl = HeadAlignedPOETXLinear(
+                            in_features=in_f,
+                            out_features=out_f,
+                            head_side=head_side,
+                            head_dim=head_dim,
+                            head_resid_block_count=head_resid_block_count,
+                            bias=has_bias,
+                            device=child.weight.device,
+                            dtype=child.weight.dtype,
+                            parameterization=parameterization,
+                            alternating=(single_step_x and lie_alternating),
+                            alternate_every=alternate_every,
+                        )
+                        _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                        pl.bake_perms_into_weight()  # POETX stores the forward frame
+                    else:
+                        from poet_torch import HeadAlignedPOETLinear
+
+                        resid_kwargs = (
+                            {"resid_block_count": block_count}
+                            if block_count is not None
+                            else {"resid_block_size": block_size}
+                        )
+                        pl = HeadAlignedPOETLinear(
+                            in_features=in_f,
+                            out_features=out_f,
+                            head_side=head_side,
+                            head_dim=head_dim,
+                            resid_permute=resid_permute,
+                            bias=has_bias,
+                            device=child.weight.device,
+                            dtype=child.weight.dtype,
+                            parameterization=parameterization,
+                            **resid_kwargs,
+                        )
+                        _copy_and_init_weight(pl, child, init_type, mup_alpha)
                     pl.single_step_fast = single_step_fast or single_step_native or single_step_x
                     wrapper = POETMegatronLinear(
                         pl, skip_bias_add=getattr(child, "skip_bias_add", False)
