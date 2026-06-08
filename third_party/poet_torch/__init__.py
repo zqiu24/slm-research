@@ -20,3 +20,5 @@ from .single_step import HeadAlignedSingleStepFunction as HeadAlignedSingleStepF
 
 from .single_step_native import NativeSingleStepFunction as NativeSingleStepFunction
 from .single_step_native import SingleStepPOETLinear as SingleStepPOETLinear
+
+from .poetx_ops import POETXSingleStepFunction as POETXSingleStepFunction
