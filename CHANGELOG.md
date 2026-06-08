@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added — POET HP-tuning grid sweeps (lr × scale × c) + WSD-POET scheduler
+
+- **`configs/scheduler/wsd_poet.yaml`** — WSD sibling of `cosine_poet` (POET 1% floor:
+  `min_lr_ratio=0.01`, `wsd_decay_fraction=0.2`, cosine tail). Starting point taken from
+  the first poet_lie_orth WSD run (`runs/poet_lie_orth-…-20260608T222621Z`). Motivation:
+  under cosine the oft_R rotation angle sits at its safe max only just after warmup and
+  decays thereafter, so POET under-rotates through the whole middle (convex/late-diving
+  loss curve vs adam/muon's straight power law); WSD holds the ceiling angle through the
+  stable phase and captures the basin in a short deep anneal.
+- **`scripts/sweep_lie_orth_grid_cosine.sh` / `scripts/sweep_lie_orth_grid_wsd.sh`** — two
+  paired 16-run grid sweeps over the best-POET base (head-OFF + alternating + muon +
+  distributed): `optim.lr ∈ {1,2,3,4}e-3 × optim.poet.scale ∈ {0.25,0.5} ×
+  lie_ortho_c ∈ {8,12}`, identical except the scheduler (`cosine_poet` vs `wsd_poet`).
+  Same eff∠ (`lr·scale·c`) at different `optim.lr` = the dense-LR decoupling probe; 3
+  cells per grid (eff∠ ≥ 0.016) are kept as divergence-boundary probes.
+
 ### Added — integrated alternating POETX (both-momenta) on the forward-frame layer
 
 - **Phase 1 — champion config `poet_lie_orth_alt`** (`single_step_x` +

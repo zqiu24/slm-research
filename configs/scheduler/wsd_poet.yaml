@@ -1,0 +1,20 @@
+# @package _global_
+# Warmup-Stable-Decay, POET variant — the WSD sibling of cosine_poet.yaml.
+#
+# Identical decay floor to cosine_poet (min_lr_ratio 0.01, the POET 1% floor) but a
+# WSD shape: warm up, hold at peak through the stable phase, then a short cosine
+# anneal over the final wsd_decay_fraction of the run. Starting point taken from the
+# first poet_lie_orth WSD run
+# (runs/poet_lie_orth-llama3-60m-s42-20260608T222621Z): df=0.2, cosine tail, 1% floor.
+#
+# Motivation: under cosine the oft_R rotation angle sits at its safe max only for an
+# instant after warmup and decays thereafter, so POET under-rotates for the whole
+# middle of training; WSD holds the (ceiling) angle through the stable phase and
+# captures the basin in a short deep anneal. Override per-run with scheduler=... or
+# scheduler.wsd_decay_fraction=... / scheduler.min_lr_ratio=...
+scheduler:
+  type: wsd
+  warmup_fraction: 0.01      # 1% of total tokens; auto-scales with the budget
+  min_lr_ratio: 0.01         # POET 1% floor (matches cosine_poet, vs stock wsd's 0.1)
+  wsd_decay_fraction: 0.2    # final 20% is the anneal tail
+  wsd_decay_style: cosine    # exponential | linear | cosine | minus_sqrt
