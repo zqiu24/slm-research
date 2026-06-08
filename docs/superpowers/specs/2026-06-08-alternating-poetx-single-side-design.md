@@ -103,17 +103,20 @@ taking `active_side` as a static (non-tensor) arg:
 
 - `grad_x = grad_y·Wx` — always (upstream gradient).
 - `active == "in"`  → `G = xᵀ·grad_y`; `M_in = conj(G·Wx, perm_in_inv)` →
-  `grad_oft_R_in`; return `None` for `grad_oft_R_out`.
+  `grad_oft_R_in`; the frozen side returns a shape-correct **zeros** tensor.
 - `active == "out"` → `G = xᵀ·grad_y`; `M_out = conj(Wx·G, perm_out_inv)` →
-  `grad_oft_R_out`; return `None` for `grad_oft_R_in`.
+  `grad_oft_R_out`; the frozen side returns a shape-correct **zeros** tensor.
 
 `G` stays (the active `M` needs it). The single skipped d³ GEMM is the frozen
-side's `M`. The frozen `oft_R`'s `main_grad` therefore stays exactly 0 for the
-step.
+side's `M`. The frozen side returns **zeros, not `None`** — shape-correct, so
+Megatron's bucketed grad reduction never stalls; the optimizer (§7) skips that
+side anyway, so the zero contributes nothing. (A future GPU-validated optimization
+may switch to `None` to also skip the frozen `oft_R` grad all-reduce.)
 
 ## 7. Optimizer: true single-side momentum
 
-In the `lie_ortho` / `lie_algebra` alternating path, move the existing `continue`
+In the `lie_ortho` alternating path (scope: `lie_ortho` only — `lie_algebra` is out
+of scope, leaving `LieAlgebraMomentum` untouched), move the existing `continue`
 so the frozen side skips **both** its momentum update and its write (today momentum
 updates first, then only the write is skipped —
 [poet_lie_momentum.py:150-160](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_momentum.py#L150-L160),
@@ -143,7 +146,7 @@ resample, keeping the active-only fold simple.
 | File | Change |
 |---|---|
 | [pretrain_gpt_slm.py](/lustre/fast/fast/zqiu/slm-research/launchers/pretrain_gpt_slm.py) | `--poet-single-step-x-alternating` (store_true) |
-| [megatron_args.py](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py) | emit the flag when `single_step_x_alternating` true; **validate**: requires `merge_period=1`, `parameterization=cayley`, `q_optimizer∈{lie_ortho,lie_algebra}`, `single_step_x` selected, `head_aligned_attn=false` |
+| [megatron_args.py](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py) | emit the flag when `single_step_x_alternating` true; **validate**: requires `merge_period=1`, `parameterization=cayley`, `q_optimizer=lie_ortho`, `single_step_x` selected, `head_aligned_attn=false` |
 | [poet_apply_to_model.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_apply_to_model.py) / [poet_layers.py](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py) | select `AlternatingPOETXLinear` in the walk when the flag is set |
 | [poet_optimizer_setup.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_optimizer_setup.py) | thread `single_step_x_alternating` to config |
 | [poet_merge_step.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_merge_step.py) | active-only fold for the new layer |
@@ -162,8 +165,8 @@ reusing `single_step_x` and `lie_alternate_every`.
    the new layer driven with both sides active), the new layer is bit-identical to
    `POETXLinear` forward+backward.
 2. **Active-side gradient matches.** For each active side, the new backward's `M`
-   equals the both-sides closed form for that side; the frozen side's grad is
-   `None`.
+   equals the both-sides closed form for that side; the frozen side's grad is a
+   shape-correct **zeros** tensor (not `None`).
 3. **Grad-accumulation consistency.** Over K microbatches in a step, active side is
    constant and the frozen `main_grad` is exactly 0.
 4. **Merge active-only == full merge.** Folding only the active side equals the
