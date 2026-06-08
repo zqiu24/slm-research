@@ -104,3 +104,88 @@ def test_op_forward_is_bare_gemm():
     Wx, bias_eff = _forward_frame(pl)
     x = torch.randn(3, 12)
     assert (_op(pl, Wx, bias_eff, x) - (x @ Wx.t() + bias_eff)).abs().max().item() == 0.0
+
+
+def _build_R(pl):
+    """Pure-torch (CPU) R-build from the current oft_R (cayley)."""
+    qi = pytorch_skew_symmetric(pl.oft_R_in, pl.block_size_in, pl.rows_in, pl.cols_in)
+    qo = pytorch_skew_symmetric(pl.oft_R_out, pl.block_size_out, pl.rows_out, pl.cols_out)
+    return cayley_batch(qo), cayley_batch(qi)  # (R_out, R_in)
+
+
+def _make_pair(in_f=12, out_f=8, bc=2, bias=True, seed=3):
+    """A POETLinear and a POETXLinear sharing identical weights + perms."""
+    from poet_torch import POETXLinear
+
+    torch.manual_seed(seed)
+    base = POETLinear(in_features=in_f, out_features=out_f, block_count=bc, bias=bias)
+    with torch.no_grad():
+        base.weight.normal_()
+        if bias:
+            base.bias.normal_()
+    xl = POETXLinear(in_features=in_f, out_features=out_f, block_count=bc, bias=bias)
+    with torch.no_grad():
+        for b in ("perm_in", "perm_in_inv", "perm_out", "perm_out_inv"):
+            getattr(xl, b).copy_(getattr(base, b))
+        # POETX stores the FORWARD-FRAME weight: Wx = W_perm[perm_out][:,perm_in].
+        xl.weight.copy_(base.weight.index_select(0, base.perm_out).index_select(1, base.perm_in))
+        if bias:
+            xl.bias.copy_(base.bias.index_select(0, base.perm_out))
+    return base, xl
+
+
+def test_layer_forward_matches_chain():
+    torch.set_default_dtype(torch.float64)
+    base, xl = _make_pair()
+    x = torch.randn(3, 12, requires_grad=True)
+    gy = torch.randn(3, 8)
+    y = xl(x)  # bare-GEMM forward
+    assert torch.allclose(y, _chain_ref(base, x), atol=1e-9), (y - _chain_ref(base, x)).abs().max()
+    (y * gy).sum().backward()
+    assert xl.oft_R_in.grad is not None and xl.oft_R_out.grad is not None
+
+
+def test_merge_fold_matches_poetlinear():
+    """After folding the SAME stepped R, POETX's stored forward-frame weight equals
+    POETLinear's effective weight W_perm[perm_out][:,perm_in] (fp64)."""
+    torch.set_default_dtype(torch.float64)
+    base, xl = _make_pair()
+    with torch.no_grad():  # a real (small) stepped rotation on both
+        base.oft_R_in.normal_(std=1e-2)
+        base.oft_R_out.normal_(std=1e-2)
+        xl.oft_R_in.copy_(base.oft_R_in)
+        xl.oft_R_out.copy_(base.oft_R_out)
+    R_out, R_in = _build_R(base)
+    base._fold_with_R(R_out, R_in, reinit_perm=False)
+    xl._fold_with_R(R_out, R_in, reinit_perm=False)
+    eff = base.weight.index_select(0, base.perm_out).index_select(1, base.perm_in)
+    assert torch.allclose(xl.weight, eff, atol=1e-9), (xl.weight - eff).abs().max()
+    assert torch.count_nonzero(xl.oft_R_in) == 0 and torch.count_nonzero(xl.oft_R_out) == 0
+
+
+def test_merge_reinit_folds_and_resamples_perm():
+    """Fold-with-reinit stores the correct (perm-invariant) effective weight AND
+    resamples the perms. The effective weight after folding R is built independently
+    from the OLD perms; reinit re-permutes storage but the effective weight is the same."""
+    from poet_torch.poet_layer import block_diag_lr_matmul_decoupled
+
+    torch.set_default_dtype(torch.float64)
+    _, xl = _make_pair()
+    with torch.no_grad():
+        xl.oft_R_in.normal_(std=1e-2)
+        xl.oft_R_out.normal_(std=1e-2)
+    R_out, R_in = _build_R(xl)
+    perm_in_before = xl.perm_in.clone()
+    # Effective (forward-frame) weight the fold must produce, built with the OLD perms:
+    W_perm = xl.weight.index_select(0, xl.perm_out_inv).index_select(1, xl.perm_in_inv)
+    tmp = block_diag_lr_matmul_decoupled(R_in, W_perm.t(), R_out)
+    tmp = tmp.index_select(0, xl.perm_in).index_select(1, xl.perm_out)
+    eff_expected = tmp.t()
+
+    xl._fold_with_R(R_out, R_in, reinit_perm=True)
+
+    assert torch.allclose(xl.weight, eff_expected, atol=1e-9), (
+        (xl.weight - eff_expected).abs().max()
+    )
+    assert not torch.equal(xl.perm_in, perm_in_before)  # perms resampled
+    assert torch.count_nonzero(xl.oft_R_in) == 0
