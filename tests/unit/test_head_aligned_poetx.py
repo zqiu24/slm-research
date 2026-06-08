@@ -154,3 +154,45 @@ def test_forward_matches_poet_chain_at_zero_head_side_in():
     assert torch.allclose(layer(x), _chain_ref(layer, x), atol=1e-9), (
         (layer(x) - _chain_ref(layer, x)).abs().max()
     )
+
+
+def _fold_check(head_side, in_f, out_f, seed):
+    """Set oft_R, compute the chain output WITH that rotation, fold R into W, and
+    assert the post-fold bare forward reproduces it. CPU-safe (pytorch cayley_batch
+    + _fold_with_R, not merge_then_reinitialize which hits the Triton op)."""
+    from poet_torch import HeadAlignedPOETXLinear
+    from poet_torch.poet_layer import cayley_batch, pytorch_skew_symmetric
+
+    torch.set_default_dtype(torch.float64)
+    torch.manual_seed(seed)
+    layer = HeadAlignedPOETXLinear(
+        in_features=in_f,
+        out_features=out_f,
+        head_side=head_side,
+        head_dim=8,
+        head_resid_block_count=2,
+        bias=False,
+    )
+    with torch.no_grad():
+        layer.weight.normal_()
+        layer.bake_perms_into_weight()
+        layer.oft_R_in.normal_(std=1e-2)
+        layer.oft_R_out.normal_(std=1e-2)
+    x = torch.randn(4, in_f)
+    ref = _chain_ref(layer, x).detach().clone()  # chain WITH R(oft_R), pre-fold
+    qi = pytorch_skew_symmetric(layer.oft_R_in, layer.block_size_in, layer.rows_in, layer.cols_in)
+    qo = pytorch_skew_symmetric(
+        layer.oft_R_out, layer.block_size_out, layer.rows_out, layer.cols_out
+    )
+    layer._fold_with_R(cayley_batch(qo), cayley_batch(qi), reinit_perm=False)
+    assert torch.count_nonzero(layer.oft_R_in) == 0
+    assert torch.count_nonzero(layer.oft_R_out) == 0
+    assert torch.allclose(layer(x), ref, atol=1e-9), (layer(x) - ref).abs().max()
+
+
+def test_merge_fold_applies_rotation_head_side_out():
+    _fold_check("out", in_f=16, out_f=32, seed=2)
+
+
+def test_merge_fold_applies_rotation_head_side_in():
+    _fold_check("in", in_f=32, out_f=16, seed=3)
