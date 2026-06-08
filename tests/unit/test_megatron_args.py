@@ -919,3 +919,42 @@ def test_single_step_x_alternating_requires_head_aligned_off():
     cfg = OmegaConf.merge(cfg, OmegaConf.create({"base": {"model": {"unfuse_qkv": True}}}))
     with pytest.raises(ValueError, match="head_aligned_attn"):
         _optimizer_args(cfg)
+
+
+def test_single_step_x_with_lie_alternating_emits_both_flags():
+    # Integrated path: single_step_x + lie_alternating is ALLOWED (only
+    # single_step_x_alternating is mutually exclusive with lie_alternating).
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_count": 1,
+                "merge_period": 1,
+                "parameterization": "cayley",
+                "q_optimizer": "lie_ortho",
+                "single_step_x": True,
+                "lie_alternating": True,
+                "single_step_x_alternating": False,
+            }
+        )
+    )
+    assert "--poet-single-step-x" in args
+    assert "--poet-lie-alternating" in args
+    assert "--poet-single-step-x-alternating" not in args
+
+
+def test_poet_lie_orth_alt_experiment_yaml():
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    root = Path(__file__).resolve().parents[2]
+    cfg = OmegaConf.load(root / "configs/experiments/optim/poet_lie_orth_alt.yaml")
+    assert cfg.experiment.name == "poet_lie_orth_alt"
+    assert cfg.optim.poet.q_optimizer == "lie_ortho"
+    assert cfg.optim.poet.single_step_x is True
+    assert cfg.optim.poet.lie_alternating is True
+    assert cfg.optim.poet.single_step_x_alternating is False
+    assert cfg.optim.poet.head_aligned_attn is False
+    assert cfg.optim.poet.reinit_period == -1
