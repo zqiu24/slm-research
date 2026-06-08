@@ -71,6 +71,14 @@ def _merge_decision(iteration: int, merge_period: int, reinit_period: int) -> tu
     return (True, iteration % gap == 0)
 
 
+def _seed_active_side(iteration: int) -> None:
+    """Seed the shared active-side signal so the layer forward, optimizer step, and
+    merge all read the same side within this training step."""
+    from poet_torch.alt_state import set_iteration
+
+    set_iteration(int(iteration) if iteration is not None else 0)
+
+
 @register_patch(name="poet_merge_step", targets=_TARGET)
 def apply() -> None:
     import torch.distributed as dist
@@ -80,17 +88,19 @@ def apply() -> None:
     _orig_train_step = _mt.train_step
 
     def _wrapped(*args, **kwargs):
-        ret = _orig_train_step(*args, **kwargs)
         opts = get_args()
         if not getattr(opts, "poet", False):
-            return ret
-        merge_period = getattr(opts, "poet_merge_period", 0)
-        reinit_period = getattr(opts, "poet_reinit_period", 0)
+            return _orig_train_step(*args, **kwargs)
         iteration = kwargs.get("iteration")
         if iteration is None and len(args) >= 8:
             iteration = args[7]
         if iteration is None:
             iteration = getattr(opts, "iteration", 0)
+        # Seed the active-side signal BEFORE forward so the layer reads this step's side.
+        _seed_active_side(iteration)
+        ret = _orig_train_step(*args, **kwargs)
+        merge_period = getattr(opts, "poet_merge_period", 0)
+        reinit_period = getattr(opts, "poet_reinit_period", 0)
         folding, do_reinit = _merge_decision(iteration, merge_period, reinit_period)
         if not folding:
             return ret
