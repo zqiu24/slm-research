@@ -168,3 +168,34 @@ class AlternatingPOETXLinear(POETXLinear):
             self.rows_in, self.cols_in, self.rows_out, self.cols_out,
             self.block_size_in, self.block_size_out, active,
         )
+
+    @torch.no_grad()
+    def _fold_active_side(self, active, reinit_perm: bool = False, cayley_fn=None) -> None:
+        """Fold ONLY the active side into W (skip the frozen side's Cayley build).
+
+        The frozen side's oft_R is exactly 0 => R = I, so its fold is a no-op; we
+        build identity blocks for it (no Cayley) and reuse the verified round-trip
+        fold. Bit-identical to the both-sides fold whenever the frozen side is
+        identity, but pays one Cayley + one block-fold instead of two.
+        """
+        import torch as _torch
+        from .poet_layer import pytorch_skew_symmetric
+
+        if cayley_fn is None:
+
+            def cayley_fn(Q):
+                return _torch.ops.poet.cayley(Q)[0]
+
+        if active == "in":
+            R_in = cayley_fn(
+                pytorch_skew_symmetric(self.oft_R_in, self.block_size_in, self.rows_in, self.cols_in)
+            )
+            R_out = _torch.eye(self.block_size_out, dtype=self.weight.dtype, device=self.weight.device)
+            R_out = R_out.unsqueeze(0).expand(self.r_out, -1, -1).contiguous()  # bmm needs real strides
+        else:  # "out"
+            R_out = cayley_fn(
+                pytorch_skew_symmetric(self.oft_R_out, self.block_size_out, self.rows_out, self.cols_out)
+            )
+            R_in = _torch.eye(self.block_size_in, dtype=self.weight.dtype, device=self.weight.device)
+            R_in = R_in.unsqueeze(0).expand(self.r_in, -1, -1).contiguous()  # bmm needs real strides
+        self._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)

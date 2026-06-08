@@ -384,14 +384,26 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
 
 
 def _merge_layers(pls, reinit_perm: bool, disable_batch: bool) -> None:
-    """Fold every layer. With batching on, split layers into cayley (batched
-    R-build) and non-cayley (per-layer merge_then_reinitialize, e.g. exp)."""
+    """Fold every layer. AlternatingPOETXLinear layers fold ONLY the active side
+    (frozen side is identity); the rest use the batched both-sides fold. The active
+    side comes from each layer's OWN alternate_every via alt_state — no megatron
+    get_args, so _merge_layers stays importable/callable on CPU (megatron is not
+    importable in the unit-test venv)."""
+    from poet_torch import AlternatingPOETXLinear
+    from poet_torch.alt_state import active_side
+
+    alt_pls = [pl for pl in pls if isinstance(pl, AlternatingPOETXLinear)]
+    rest = [pl for pl in pls if not isinstance(pl, AlternatingPOETXLinear)]
+
+    for pl in alt_pls:
+        pl._fold_active_side(active_side(pl.alternate_every), reinit_perm=reinit_perm)
+
     if disable_batch:
-        for pl in pls:
+        for pl in rest:
             pl.merge_then_reinitialize(reinit_perm=reinit_perm)
         return
-    cayley_pls = [pl for pl in pls if getattr(pl, "parameterization", "cayley") == "cayley"]
-    other_pls = [pl for pl in pls if getattr(pl, "parameterization", "cayley") != "cayley"]
+    cayley_pls = [pl for pl in rest if getattr(pl, "parameterization", "cayley") == "cayley"]
+    other_pls = [pl for pl in rest if getattr(pl, "parameterization", "cayley") != "cayley"]
     for pl in other_pls:
         pl.merge_then_reinitialize(reinit_perm=reinit_perm)
     if cayley_pls:

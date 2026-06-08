@@ -155,3 +155,59 @@ def test_layer_is_poetx_subclass():
     layer = AlternatingPOETXLinear(in_features=8, out_features=16, block_count=1)
     assert isinstance(layer, POETXLinear)  # merge driver isinstance tuple includes it
     assert layer.alternate_every == 1
+
+
+def test_active_only_fold_matches_both_sides_when_frozen_is_identity():
+    """Folding only the active side == folding both sides when the frozen side's
+    oft_R is 0 (identity). fp64 parity."""
+    from poet_torch import AlternatingPOETXLinear
+    from poet_torch.poet_layer import cayley_batch, pytorch_skew_symmetric
+
+    torch.set_default_dtype(torch.float64)
+
+    def _make():
+        # Seed INSIDE so ref and act are bit-identical clones (same perms, weight,
+        # and oft_R_in); otherwise the two _make() calls draw divergent RNG state
+        # and the both-sides-vs-active-only parity comparison is meaningless.
+        torch.manual_seed(5)
+        layer = AlternatingPOETXLinear(in_features=12, out_features=8, block_count=1, bias=False)
+        with torch.no_grad():
+            layer.weight.normal_()
+            layer.oft_R_in.normal_(std=1e-2)  # oft_R_out left at 0 (frozen = identity)
+        return layer
+
+    def _cayley(layer):
+        qi = pytorch_skew_symmetric(
+            layer.oft_R_in, layer.block_size_in, layer.rows_in, layer.cols_in
+        )
+        qo = pytorch_skew_symmetric(
+            layer.oft_R_out, layer.block_size_out, layer.rows_out, layer.cols_out
+        )
+        return cayley_batch(qo), cayley_batch(qi)  # (R_out, R_in)
+
+    # active "in": only oft_R_in nonzero, oft_R_out stays identity
+    ref, act = _make(), _make()
+    # reference: full both-sides fold
+    R_out, R_in = _cayley(ref)
+    ref._fold_with_R(R_out, R_in, reinit_perm=False)
+    # active-only fold
+    act._fold_active_side("in", reinit_perm=False, cayley_fn=cayley_batch)
+    assert torch.allclose(act.weight, ref.weight, atol=1e-9), (act.weight - ref.weight).abs().max()
+    assert torch.count_nonzero(act.oft_R_in) == 0
+
+
+def test_merge_layers_routes_alternating_to_active_only_fold(monkeypatch):
+    from poet_torch import AlternatingPOETXLinear, alt_state
+
+    import src.patches.poet_merge_step as ms
+
+    alt_state.set_iteration(1)  # active "in" at alternate_every=1
+    layer = AlternatingPOETXLinear(in_features=8, out_features=8, block_count=1, bias=False)
+    calls = []
+    monkeypatch.setattr(
+        AlternatingPOETXLinear,
+        "_fold_active_side",
+        lambda self, side, reinit_perm=False: calls.append(side),
+    )
+    ms._merge_layers([layer], reinit_perm=False, disable_batch=False)
+    assert calls == ["in"]
