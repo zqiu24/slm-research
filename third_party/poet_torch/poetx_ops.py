@@ -65,3 +65,54 @@ class POETXSingleStepFunction(torch.autograd.Function):
         return (grad_x, grad_oft_R_in, grad_oft_R_out,
                 None, None, None, None, None,
                 None, None, None, None, None)
+
+
+class AlternatingPOETXSingleStepFunction(torch.autograd.Function):
+    """Single-side POETX backward. Identical bare-GEMM forward as
+    POETXSingleStepFunction, but the backward computes ONLY the active side's
+    rotation-gradient (skipping the frozen side's d^3 M GEMM) and returns a
+    shape-correct ZEROS gradient for the frozen side (so Megatron's grad buffer
+    never stalls). `active` is "in" or "out"."""
+
+    @staticmethod
+    def forward(ctx, x, oft_R_in, oft_R_out, Wx, bias_eff,
+                perm_in_inv, perm_out_inv,
+                rows_in, cols_in, rows_out, cols_out,
+                block_size_in, block_size_out, active):
+        y = x @ Wx.t()
+        if bias_eff is not None:
+            y = y + bias_eff
+        ctx.save_for_backward(x, Wx, bias_eff, perm_in_inv, perm_out_inv,
+                              rows_in, cols_in, rows_out, cols_out)
+        ctx.block_size_in = block_size_in
+        ctx.block_size_out = block_size_out
+        ctx.active = active
+        ctx.oft_R_in_shape = tuple(oft_R_in.shape)
+        ctx.oft_R_out_shape = tuple(oft_R_out.shape)
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_y):
+        (x, Wx, bias_eff, perm_in_inv, perm_out_inv,
+         rows_in, cols_in, rows_out, cols_out) = ctx.saved_tensors
+        bs_in, bs_out = ctx.block_size_in, ctx.block_size_out
+        out_f, in_f = Wx.shape
+        active = ctx.active
+
+        grad_x = grad_y @ Wx  # PLAIN — always needed (upstream gradient)
+        G = x.reshape(-1, in_f).t() @ grad_y.reshape(-1, out_f)  # [in, out]
+        if active == "in":
+            M_in = _conj(G @ Wx, perm_in_inv)
+            grad_oft_R_in = _blockdiag_skew_vec(M_in, bs_in, rows_in, cols_in).to(Wx.dtype)
+            grad_oft_R_out = torch.zeros(ctx.oft_R_out_shape, dtype=Wx.dtype, device=Wx.device)
+        else:  # "out"
+            M_out_nat = Wx @ G
+            if bias_eff is not None:
+                M_out_nat = M_out_nat + torch.outer(bias_eff, grad_y.reshape(-1, out_f).sum(0))
+            M_out = _conj(M_out_nat, perm_out_inv)
+            grad_oft_R_out = _blockdiag_skew_vec(M_out, bs_out, rows_out, cols_out).to(Wx.dtype)
+            grad_oft_R_in = torch.zeros(ctx.oft_R_in_shape, dtype=Wx.dtype, device=Wx.device)
+        # 14 inputs -> 14 returns: grads for x/oft_R_in/oft_R_out, then 11 None.
+        return (grad_x, grad_oft_R_in, grad_oft_R_out,
+                None, None, None, None, None,
+                None, None, None, None, None, None)
