@@ -2,21 +2,25 @@
 
 ## Unreleased
 
-### Added — POET HP-tuning grid sweeps (lr × scale × c) + WSD-POET scheduler
+### Added — POET HP-tuning sweeps (cosine grid + dense-LR decoupling)
 
-- **`configs/scheduler/wsd_poet.yaml`** — WSD sibling of `cosine_poet` (POET 1% floor:
-  `min_lr_ratio=0.01`, `wsd_decay_fraction=0.2`, cosine tail). Starting point taken from
-  the first poet_lie_orth WSD run (`runs/poet_lie_orth-…-20260608T222621Z`). Motivation:
-  under cosine the oft_R rotation angle sits at its safe max only just after warmup and
-  decays thereafter, so POET under-rotates through the whole middle (convex/late-diving
-  loss curve vs adam/muon's straight power law); WSD holds the ceiling angle through the
-  stable phase and captures the basin in a short deep anneal.
-- **`scripts/sweep_lie_orth_grid_cosine.sh` / `scripts/sweep_lie_orth_grid_wsd.sh`** — two
-  paired 16-run grid sweeps over the best-POET base (head-OFF + alternating + muon +
-  distributed): `optim.lr ∈ {1,2,3,4}e-3 × optim.poet.scale ∈ {0.25,0.5} ×
-  lie_ortho_c ∈ {8,12}`, identical except the scheduler (`cosine_poet` vs `wsd_poet`).
-  Same eff∠ (`lr·scale·c`) at different `optim.lr` = the dense-LR decoupling probe; 3
-  cells per grid (eff∠ ≥ 0.016) are kept as divergence-boundary probes.
+- **`scripts/sweep_lie_orth_grid_cosine.sh`** — 16-run grid over the best-POET base
+  (head-OFF + alternating + muon + distributed, cosine_poet): `optim.lr ∈ {1,2,3,4}e-3 ×
+  optim.poet.scale ∈ {0.25,0.5} × lie_ortho_c ∈ {8,12}`. Same eff∠ (`lr·scale·c`) at
+  different `optim.lr` = a dense-LR decoupling probe; 3 cells (eff∠ ≥ 0.016) are kept as
+  divergence-boundary probes.
+- **`scripts/sweep_lie_orth_decouple.sh`** — 16-run dense-LR DECOUPLING sweep (cosine).
+  Holds `lie_ortho_c=8` and the rotation-group LR (`optim.lr·scale` → fixed angle) while
+  pushing the AdamW DENSE LR down to 1e-3 (raising `scale` to compensate), crossed with
+  `scheduler.min_lr_ratio ∈ {0.01, 0.001}`. Tests whether the champion's 3e-3 dense LR
+  (3× the adam-optimal 1e-3) is too hot. 4 dense-LR × 2 angles {0.008,0.012} × 2 floors.
+- **`configs/scheduler/wsd_poet.yaml`** — WSD sibling of `cosine_poet` (1% floor,
+  `wsd_decay_fraction=0.2`, cosine tail). RETAINED as a usable scheduler, but the planned
+  WSD sweep was DROPPED: the completed champion-recipe WSD run (`lodwi7cw`, df 0.2) lost
+  to cosine by +0.037 (val 3.5699 vs 3.5332) — holding the angle at the ceiling through
+  the stable phase keeps loss high and the 20% tail can't recover; WSD→cosine as df→1, so
+  it can't beat cosine here. (`9mvs5hsg`: cosine min_lr 0.1 = 3.5413, so the deep 0.01
+  floor is worth +0.008 — hence the min_lr_ratio axis in the decoupling sweep.)
 
 ### Added — integrated alternating POETX (both-momenta) on the forward-frame layer
 
