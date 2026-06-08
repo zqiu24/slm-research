@@ -265,7 +265,14 @@ def test_batched_step_handles_mixed_block_sizes():
 
 
 def test_batched_step_alternating_writes_only_active_side():
-    # Alternating: step 0 writes 'out' only, step 1 writes 'in' only; momentum accrues both.
+    # Alternating now reads the SHARED alt_state iteration (not the internal
+    # _alt_step counter). The iterations are chosen so they do NOT coincide with the
+    # internal counter (which would start at 0): iteration 1 -> active 'in',
+    # iteration 2 -> active 'out'. Momentum accrues on BOTH sides; only the active
+    # side's oft_R is written. This sequence FAILS against the old _alt_step source
+    # (step 1 would pick 'out') and PASSES against the alt_state source.
+    from poet_torch import alt_state
+
     torch.manual_seed(2)
     b = 8
     ne = b * (b - 1) // 2
@@ -283,13 +290,16 @@ def test_batched_step_alternating_writes_only_active_side():
         ortho_ns_steps=5,
         alternating=True,
     )
-    opt.step()  # _alt_step 0 -> active "out"
-    assert p_out.data.abs().sum() > 0 and torch.allclose(p_in.data, torch.zeros_like(p_in))
+    alt_state.set_iteration(1)  # active 'in' (old _alt_step=0 would pick 'out')
+    opt.step()
+    assert p_in.data.abs().sum() > 0 and torch.allclose(p_out.data, torch.zeros_like(p_out))
     p_in.grad = torch.randn(1, ne)
     p_out.grad = torch.randn(1, ne)
-    p_out.data.zero_()  # simulate the per-step fold
-    opt.step()  # _alt_step 1 -> active "in"
-    assert p_in.data.abs().sum() > 0 and torch.allclose(p_out.data, torch.zeros_like(p_out))
+    p_in.data.zero_()  # simulate the per-step fold of the just-written side
+    alt_state.set_iteration(2)  # active 'out' (old _alt_step=1 would pick 'in')
+    opt.step()
+    assert p_out.data.abs().sum() > 0 and torch.allclose(p_in.data, torch.zeros_like(p_in))
+    alt_state.set_iteration(0)  # restore the module global for later tests
 
 
 def test_replicated_buffer_owns_all_params():

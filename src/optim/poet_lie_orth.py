@@ -89,12 +89,15 @@ class LieOrthMomentum(torch.optim.Optimizer):
         super().__init__(params, defaults)
 
     def _active_side(self):
-        if self.true_single_side:
+        # The dedicated true-single-side path AND the integrated both-momenta
+        # alternating path both read the SAME shared signal (alt_state, seeded
+        # once per training step by the poet_merge_step wrapper) so the optimizer's
+        # WRITE side equals the merge's FOLD side within a step. Quality-neutral
+        # for the both-sides-merge case; REQUIRED for active-only-merge correctness.
+        if self.true_single_side or self.alternating:
             from poet_torch.alt_state import active_side
 
             return active_side(self.alternate_every)
-        if self.alternating:
-            return "out" if (self._alt_step // self.alternate_every) % 2 == 0 else "in"
         return None
 
     def _lie_m_update(self, active):
