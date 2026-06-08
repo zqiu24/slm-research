@@ -21,7 +21,8 @@ from .poetx_ops import AlternatingPOETXSingleStepFunction
 
 class POETXLinear(nn.Module):
     def __init__(self, in_features, out_features, bsz=None, block_count=None,
-                 bias=False, device=None, dtype=None, parameterization="cayley"):
+                 bias=False, device=None, dtype=None, parameterization="cayley",
+                 alternating=False, alternate_every=1):
         super().__init__()
         if parameterization != "cayley":
             raise ValueError(
@@ -36,6 +37,13 @@ class POETXLinear(nn.Module):
         self.out_features = out_features
         self.parameterization = parameterization
         self.single_step_fast = False  # POETX ignores it (forward is always the X op)
+        # Alternating both-momenta merge: when set, the merge driver folds ONLY the
+        # active side (the frozen side's oft_R is 0 -> identity -> skip its Cayley).
+        # Forward/backward stay both-sides (POETXSingleStepFunction feeds BOTH grads),
+        # so both momenta stay fed -- the load-bearing ingredient. alternate_every
+        # matches the optimizer + alt_state cadence.
+        self.alternating = bool(alternating)
+        self.alternate_every = max(1, int(alternate_every))
 
         if (bsz is None) == (block_count is None):
             raise ValueError("exactly one of bsz or block_count must be set")
@@ -144,31 +152,6 @@ class POETXLinear(nn.Module):
         R_out, R_in = self._merge_R()
         self._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
 
-
-class AlternatingPOETXLinear(POETXLinear):
-    """POETX layer that trains ONE rotation side per step (true single-side).
-
-    The active side comes from the shared `alt_state` iteration (seeded once per
-    training step), so layer forward, optimizer, and merge all agree. Forward is
-    the unchanged bare GEMM; the backward (AlternatingPOETXSingleStepFunction)
-    computes only the active side's rotation-gradient and zeros the frozen side.
-    """
-
-    def __init__(self, *args, alternate_every: int = 1, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.alternate_every = max(1, int(alternate_every))
-
-    def forward(self, x):
-        from .alt_state import active_side
-
-        active = active_side(self.alternate_every)
-        return AlternatingPOETXSingleStepFunction.apply(
-            x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
-            self.perm_in_inv, self.perm_out_inv,
-            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
-            self.block_size_in, self.block_size_out, active,
-        )
-
     @torch.no_grad()
     def _fold_active_side(self, active, reinit_perm: bool = False, cayley_fn=None) -> None:
         """Fold ONLY the active side into W (skip the frozen side's Cayley build).
@@ -199,3 +182,31 @@ class AlternatingPOETXLinear(POETXLinear):
             R_in = _torch.eye(self.block_size_in, dtype=self.weight.dtype, device=self.weight.device)
             R_in = R_in.unsqueeze(0).expand(self.r_in, -1, -1).contiguous()  # bmm needs real strides
         self._fold_with_R(R_out, R_in, reinit_perm=reinit_perm)
+
+
+class AlternatingPOETXLinear(POETXLinear):
+    """POETX layer that trains ONE rotation side per step (true single-side).
+
+    The active side comes from the shared `alt_state` iteration (seeded once per
+    training step), so layer forward, optimizer, and merge all agree. Forward is
+    the unchanged bare GEMM; the backward (AlternatingPOETXSingleStepFunction)
+    computes only the active side's rotation-gradient and zeros the frozen side.
+    `alternating=True` routes the merge driver to the active-only fold (inherited
+    from POETXLinear). This is the gated research path — it freezes the inactive
+    side's MOMENTUM (true_single_side optimizer), which regressed quality; the
+    integrated both-momenta path uses a plain POETXLinear(alternating=True) instead.
+    """
+
+    def __init__(self, *args, alternate_every: int = 1, **kwargs):
+        super().__init__(*args, alternating=True, alternate_every=alternate_every, **kwargs)
+
+    def forward(self, x):
+        from .alt_state import active_side
+
+        active = active_side(self.alternate_every)
+        return AlternatingPOETXSingleStepFunction.apply(
+            x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
+            self.perm_in_inv, self.perm_out_inv,
+            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+            self.block_size_in, self.block_size_out, active,
+        )

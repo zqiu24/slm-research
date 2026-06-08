@@ -230,3 +230,28 @@ def test_run_merge_gate_collects_poetx():
     assert isinstance(wrapper, POETMegatronLinear)
     assert isinstance(wrapper.poet_linear, POETLinear | POETXLinear)
     assert wrapper.poet_linear.block_size > 0
+
+
+def test_poetx_alternating_flag_defaults_false_and_stores_cadence():
+    from poet_torch import POETXLinear
+
+    plain = POETXLinear(in_features=8, out_features=8, block_count=1)
+    assert plain.alternating is False
+    assert plain.alternate_every == 1
+
+    alt = POETXLinear(
+        in_features=8, out_features=8, block_count=1, alternating=True, alternate_every=3
+    )
+    assert alt.alternating is True
+    assert alt.alternate_every == 3
+
+
+def test_alternating_subclass_sets_flag_and_inherits_fold():
+    from poet_torch import AlternatingPOETXLinear, POETXLinear
+
+    layer = AlternatingPOETXLinear(in_features=8, out_features=16, block_count=1, alternate_every=2)
+    assert isinstance(layer, POETXLinear)
+    assert layer.alternating is True  # routes via the flag in the merge driver
+    assert layer.alternate_every == 2
+    # _fold_active_side now lives on POETXLinear; the subclass inherits it.
+    assert layer._fold_active_side.__qualname__.startswith("POETXLinear.")
