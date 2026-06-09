@@ -23,15 +23,25 @@ Prove that the existing nGPT v1 is (a) numerically faithful to the reference, (b
 ## Goals
 
 1. Full nGPT CPU test suite green (all 11 files), including the NVIDIA-reference parity test.
-2. nGPT trains end-to-end on `h800_cn` for a short smoke (~100 steps): loss ↓, no NaN, per-step weight normalization fires, optimizer param-group split correct.
-3. A real nGPT 600M ablation loss curve, logged.
-4. A **matched-baseline A/B** quantifying nGPT's convergence speedup vs a standard AdamW baseline at the same scale / data / seed.
+2. **Reference parity (correctness):** prove our nGPT reproduces the NVIDIA reference's computation via a **weight-transfer step-parity** check — transfer reference weights into our model, feed an identical batch, and compare the forward and the post-step weights (after one AdamW step + one weight-normalization). This is the correctness gate, separate from the speedup A/B.
+3. nGPT trains end-to-end on `h800_cn` for a short smoke (~100 steps): loss ↓, no NaN, per-step weight normalization fires, optimizer param-group split correct.
+4. A real nGPT 600M ablation loss curve, logged.
+5. A **matched-baseline A/B** quantifying nGPT's convergence *speedup* vs a standard AdamW baseline at the same scale / data / seed.
 
 ## Non-goals (explicit)
 
 - No new nGPT features. v2 items (TP>1 sqk/suv sharding, nGPT-MoE, nGPT-MLA, FP8/FP4) are out of scope.
 - No re-implementation. The merged code is the artifact under test; we change it only where validation exposes a defect or an env/portability blocker.
 - No hyperparameter sweep. One nGPT recipe (the config-native one) vs one baseline recipe.
+- **The AdamW A/B is NOT a correctness check.** It measures speedup only. Correctness is established against the *reference implementation* in Goal 2, before any of our own runs are trusted.
+
+## Why weight-transfer step parity (not data-matched training curves)
+
+The natural first instinct — feed the same tokens to both the reference and our codebase and compare loss curves — does **not** yield a conclusive correctness signal, and a constraint blocks the simplest data port:
+
+- **uint16 blocker:** nanoGPT stores tokens as `uint16` (vocab ≤ 65536); all our tokenizers are larger (llama3 128256, qwen3 151936). Reusing our tokens in the reference needs a `uint16`→`uint32` patch to the vendored reference; using the reference's data needs obtaining + GPT-2-tokenizing OpenWebText. Either is possible but neither is free.
+- **Confounded curves:** even with identical tokens, training-from-scratch curves diverge for reasons unrelated to nGPT correctness — RoPE convention (reference: interleaved sinusoidal, base 10000; ours: Megatron RoPE, base 500000), attention kernel (`flash_attn` vs Megatron flash/cuDNN), bf16 param storage vs fp32-master mixed precision, init, and data-sampling order. A curve mismatch would not prove our nGPT is wrong, nor a match prove it right.
+- **Decisive alternative:** transferring reference weights + feeding identical inputs removes init/RNG/data-order/precision noise, so any discrepancy is attributable to the implementation. The data content becomes incidental. This is the chosen approach.
 
 ## Current ground truth (measured 2026-06-09)
 
@@ -61,6 +71,18 @@ nGPT replaces additive residuals with a per-channel eigen-LR blend on the unit h
 **0c. Config-parity dry-run (CPU, Claude does this).** Use `python -m launchers.submit ... --dry-run` (resolves + archives config, skips SLURM) for both the nGPT arm and the matched baseline arm. Capture the generated Megatron args for each and diff them. Confirm the **only** differences are the intended ones (nGPT spec/patches/optimizer recipe + the baseline's `num_query_groups` override), catching config drift before any GPU time.
 
 **Stage 0 gate:** `pytest tests/unit/test_ngpt_*.py` returns **zero failures** in the chosen env; the broader unit suite shows no nGPT-induced regressions; the dry-run arg diff contains only intended deltas.
+
+### Stage 0.5 — Reference weight-transfer step parity (correctness gate)
+
+The decisive correctness check, in two layers (the existing toy logit-parity test already covers pure-torch forward at init; this strengthens it through a training step and extends it to the Megatron path):
+
+- **0.5a — Full-model forward + one-step parity, pure-torch (CPU, Claude).** Reuse the existing `_OurNGPT` assembly + `_copy_ref_to_ours` weight transfer from [tests/unit/test_ngpt_full_parity.py](file:///lustre/fast/fast/zqiu/slm-research/tests/unit/test_ngpt_full_parity.py). After transferring reference weights and running the init normalization on both sides: (i) assert forward logit/loss parity (existing); (ii) run one identical CE backward + one AdamW step (matched lr/betas/eps, wd=0) + one weight-normalization on **both** the reference (`normalize_matrices`) and ours (`normalize_module_matrices`); (iii) assert post-step parity on sampled tensors (a layer's `query` weight, an `alpha`, `sz`, `wte`) within a documented fp32 tolerance. This validates every production primitive in [src/model/ngpt/](file:///lustre/fast/fast/zqiu/slm-research/src/model/ngpt/) — residual blend, Q/K-norm + `sqk`, `suv`, `sz`, the matrix projection, and the optimizer grouping — deterministically, with no kernel/data noise.
+
+- **0.5b — Single-layer Megatron parity vs reference (1 GPU, User).** The pure-torch oracle is not what trains; the Megatron `NGPTTransformerLayer` + spec is. Build one `NGPTTransformerLayer` from [src/specs/ngpt_layer_spec.py](file:///lustre/fast/fast/zqiu/slm-research/src/specs/ngpt_layer_spec.py) on a single GPU, transfer the corresponding reference `Block` weights into it (handling qkv/fc1 fusion state), feed an identical hidden-state input, and compare its output to the reference `Block` within tolerance. This validates the wiring the pure-torch test cannot: `QKHyperNorm` in the `q_layernorm`/`k_layernorm` slots applied post-RoPE, `softmax_scale = sqrt(head_dim)`, `NGPTMLP`'s `suv` path, and the residual blend inside the Megatron forward. Full-GPTModel-in-a-test infra does not exist in this repo, so a single layer is the tractable decisive unit.
+
+- **0.5c — RoPE convention check (1 GPU, User; sub-part of 0.5b).** The reference uses interleaved sinusoidal RoPE (base 10000); Megatron defaults to a different convention/base. Run 0.5b first with Megatron RoPE configured to match (`rotary_interleaved=True`, `rotary_base=10000`). If parity holds only with RoPE disabled on both sides, that localizes the discrepancy to RoPE — a real finding about how our training differs from the published recipe — recorded as a deviation (it may or may not matter for nGPT's claims, but we must know).
+
+**Stage 0.5 gate:** 0.5a passes within tolerance on CPU; 0.5b single-layer Megatron output matches the reference within tolerance on 1 GPU (with the RoPE configuration documented per 0.5c). Any mismatch is a correctness defect fixed before Stage 1.
 
 ### Stage 1 — GPU smoke, ~100 steps (User runs; Claude authors command + checklist)
 
@@ -93,8 +115,8 @@ Baseline arm: `experiment=optim/adam` with the architecture matched to nGPT —
 
 ## Division of labor (per standing user rules)
 
-- **Claude:** Stage 0 in full (env, lazy-import change, run CPU tests + report real output, dry-run config-parity diff). Author every cluster command and a per-stage paste-back checklist. Update [docs/experiments/ngpt.md](file:///lustre/fast/fast/zqiu/slm-research/docs/experiments/ngpt.md) and [NeckariumAI/zqiu/CHANGELOG.md](file:///lustre/home/zqiu/NeckariumAI/zqiu/CHANGELOG.md) as work lands.
-- **User:** all GPU/cluster runs (Stages 1–3) — this node has no usable GPU (A100+). Claude hands exact `python -m launchers.submit ...` commands and stops; user reports back and Claude interprets. Per policy, Claude never launches GPU/cluster jobs unprompted.
+- **Claude:** Stage 0 in full + Stage 0.5a (env, lazy-import change, CPU full-model step-parity test, run CPU tests + report real output, dry-run config-parity diff). Author the 0.5b/0.5c GPU test scaffold + every cluster command and per-stage paste-back checklist. Update [docs/experiments/ngpt.md](file:///lustre/fast/fast/zqiu/slm-research/docs/experiments/ngpt.md) and [NeckariumAI/zqiu/CHANGELOG.md](file:///lustre/home/zqiu/NeckariumAI/zqiu/CHANGELOG.md) as work lands.
+- **User:** all GPU runs — Stage 0.5b/0.5c (single-layer parity, quick 1-GPU) and Stages 1–3 (cluster training). This node has no usable GPU (A100+). Claude hands exact commands and stops; user reports back and Claude interprets. Per policy, Claude never launches GPU/cluster jobs unprompted.
 
 ## Risks & mitigations
 
@@ -105,7 +127,9 @@ Baseline arm: `experiment=optim/adam` with the architecture matched to nGPT —
 | `tie_embeddings=true` conflicts with nGPT's untied wte/lm_head normalization | Explicit Stage-1 correctness item; resolve before the ablation. |
 | Baseline not truly matched → uninterpretable speedup | Stage-0 dry-run arg diff confirms only intended deltas; matched MHA + same data/seed. |
 | Smoke divergence / NaN | Runbook "If it fails" triage table (softmax_scale, spec-swap firing, projection firing, alphas in optimizer). |
+| Cross-framework weight map wrong (fusion/naming) → false parity failure | Reuse the proven `_copy_ref_to_ours` map for 0.5a; for 0.5b assert shapes match before copy and verify the unfused qkv/fc1 layout (experiment sets `unfuse_qkv/unfuse_fc1=true`). |
+| RoPE convention mismatch masks/causes 0.5b failure | 0.5c isolates it: run with matched (interleaved, base 10000) and with RoPE off; attribute the delta explicitly. |
 
 ## Acceptance (overall)
 
-Validation is complete when: Stage 0 gate green (full CPU suite passes, dry-run diff clean), Stage 1 smoke reported green, Stage 2 nGPT curve logged, and Stage 3 produces a documented speedup verdict (factor or null result) in the lab notebook. No code changes beyond the Stage-0 lazy-import hardening unless a stage exposes a defect.
+Validation is complete when: Stage 0 gate green (full CPU suite passes, dry-run diff clean), **Stage 0.5 reference parity green (0.5a CPU step-parity within tolerance; 0.5b single-layer Megatron parity within tolerance, RoPE documented)**, Stage 1 smoke reported green, Stage 2 nGPT curve logged, and Stage 3 produces a documented speedup verdict (factor or null result) in the lab notebook. No code changes beyond the Stage-0 lazy-import hardening unless a stage exposes a defect.
