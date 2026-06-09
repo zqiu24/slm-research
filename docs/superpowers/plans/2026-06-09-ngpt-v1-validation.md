@@ -210,9 +210,13 @@ EOF
 cd /lustre/fast/fast/zqiu/slm-research
 /var/tmp/zqiu/slmcpu312/bin/python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=arch/ngpt \
-  training_regime=ablation_20x cluster=h800_cn seed=0 --dry-run
+  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  base.model.tie_embeddings=false \
+  base.model.transformer_impl=local \
+  training.global_batch_size=1024 training.micro_batch_size=128 \
+  --dry-run
 ```
-Expected: JSON with `total_tokens` ≈ 12_000_000_000, `parallelism.tp=1`. Note the printed `archive` path (contains `resolved_config.yaml`).
+Expected: JSON with `total_tokens` ≈ 24_000_000_000, `parallelism.tp=1`. Note the printed `archive` path (contains `resolved_config.yaml`).
 
 - [ ] **Step 3.2: Dry-run the matched baseline arm**
 
@@ -220,9 +224,13 @@ Expected: JSON with `total_tokens` ≈ 12_000_000_000, `parallelism.tp=1`. Note 
 /var/tmp/zqiu/slmcpu312/bin/python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=optim/adam \
   base.model.num_query_groups=20 \
-  training_regime=ablation_20x cluster=h800_cn seed=0 --dry-run
+  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  base.model.tie_embeddings=false \
+  base.model.transformer_impl=local \
+  training.global_batch_size=1024 training.micro_batch_size=128 \
+  --dry-run
 ```
-Expected: same `total_tokens` and `parallelism.tp=1`. Note its `archive` path.
+Expected: same `total_tokens` (≈ 24B) and `parallelism.tp=1`. Note its `archive` path.
 
 - [ ] **Step 3.3: Write the parity script**
 
@@ -615,9 +623,15 @@ EOF
 
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research
+source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
 python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=arch/ngpt \
-  training_regime=ablation_20x cluster=h800_cn seed=0 \
+  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  base.model.tie_embeddings=false \
+  base.model.transformer_impl=local \
+  training.global_batch_size=1024 training.micro_batch_size=128 \
+  training.save_enabled=true \
+  wandb.project=slm-zeju-dev \
   training.tokens_per_param=1        # ~143 steps for the smoke (= 600M tokens / seq 4096 / gbs 1024)
 ```
 
@@ -636,14 +650,14 @@ python -m launchers.submit \
   Expected mean ≈ 1.0.
 - [ ] W&B shows separate `lr_groups/decay` vs `lr_groups/no_decay`; no-decay group contains sz/sqk/suv/attn_alpha/mlp_alpha.
 
-- [ ] **Step 7.3: Resolve the `tie_embeddings` correctness question (BLOCKER before Stage 2)**
+- [ ] **Step 7.3: Verify the untied-embeddings wiring (decision already made)**
 
-600M base sets `tie_embeddings: true`; the reference unties `wte`/`lm_head` and normalizes them separately. Determine which holds and that it is intended:
+`tie_embeddings=false` is now forced on **both** arms (matches the NVIDIA reference, which unties `wte`/`lm_head` and normalizes them separately, and the `train_*_dev.sh` convention). 600M base defaults to `tie_embeddings: true`, so the override is load-bearing — confirm it took effect and that the weight-norm roles cover `wte` and `lm_head` as two separate tensors (not one shared tensor normalized once):
 ```bash
 grep -nE "tie_embeddings|output_layer|word_embeddings|_NORM_ROLES|share_embeddings" \
   src/patches/ngpt_apply_spec.py src/model/ngpt/output_scaling.py
 ```
-Decide: tying is fine (single shared tensor normalized once) → record as intended; OR untie for parity → add `base.model.tie_embeddings=false` to **both** arms and re-run Task 3's config diff. Apply identically to Stages 2/3.
+Confirm in the rank-0 build log / resolved config that the model has a distinct `output_layer.weight` and both it and `word_embeddings.weight` are registered as norm roles. (The override is already in the Task 3 config-diff arms, so the diff stays clean — `tie_embeddings` matches at `false` on both sides.)
 
 - [ ] **Step 7.4: Claude evaluates the gate and records**
 
@@ -661,11 +675,17 @@ All items pass → mark Stage 1 green in the notebook, update CHANGELOG, commit.
 
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research
+source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
 python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=arch/ngpt \
-  training_regime=ablation_20x cluster=h800_cn seed=0
+  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  base.model.tie_embeddings=false \
+  base.model.transformer_impl=local \
+  training.global_batch_size=1024 training.micro_batch_size=128 \
+  training.save_enabled=true \
+  wandb.project=slm-zeju-dev
 ```
-(≈ 12B tokens = 20 tok/param × 600M; ≈ 2.9k steps at gbs 1024 / seq 4096.) Include any `tie_embeddings` override decided in Step 7.3.
+(≈ 24B tokens = 40 tok/param × 600M; ≈ 5.8k steps at gbs 1024 / seq 4096.) Knobs match the `train_*_dev.sh` convention (40×, untied embeddings, `transformer_impl=local`).
 
 - [ ] **Step 8.2: User runs; reports W&B URL + final/periodic val loss**
 
@@ -687,12 +707,18 @@ Record run URL, seed, token budget, val-loss-vs-tokens series in [docs/experimen
 
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research
+source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
 python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=optim/adam \
   base.model.num_query_groups=20 \
-  training_regime=ablation_20x cluster=h800_cn seed=0
+  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  base.model.tie_embeddings=false \
+  base.model.transformer_impl=local \
+  training.global_batch_size=1024 training.micro_batch_size=128 \
+  training.save_enabled=true \
+  wandb.project=slm-zeju-dev
 ```
-Same scale / regime / seed / data as Task 8; only the method differs. Apply the same `tie_embeddings` decision as the nGPT arm.
+Same scale / regime / seed / data / knobs as Task 8 (40×, untied embeddings, `transformer_impl=local`); only the method differs (`optim/adam` + `num_query_groups=20` for the matched MHA baseline).
 
 - [ ] **Step 9.2: User runs; reports baseline W&B URL + val-loss series**
 
