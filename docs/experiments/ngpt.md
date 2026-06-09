@@ -89,5 +89,37 @@ Stage 0 gate conditions all hold:
    `tie_embeddings false`, `seed 0`, and identical `data.{tokenizer_model,path,vocab_size,split}`.
    The only diffs are `optim.*`, `experiment.*`, and `_derived.*` (run name / hashes / timestamps).
 
-(Remaining: Stage 0.5a CPU step-parity → Task 5; Stage 0.5b/c 1-GPU Megatron-layer parity →
-Task 6; Stage 1 smoke → Task 7; Stages 2–3 600m A/B → Tasks 8–9.)
+### Stage 0.5a — CPU forward + one-step parity — GREEN (2026-06-09)
+
+[tests/unit/test_ngpt_step_parity.py](../../tests/unit/test_ngpt_step_parity.py): from identical
+transferred weights, run one CE-backward + one AdamW step + one weight-normalization on **both**
+our pure-torch nGPT and the NVIDIA reference, then assert post-step weights still match (≤5e-2,
+sampled query/wte/attn_alpha/sz) and a projected matrix is unit-norm. **1 passed** on CPU. This
+exercises the residual blend, sqk/suv/sz scaling, `normalize_module_matrices`, and the optimizer
+step together (verified non-vacuous: perturbing a post-step weight by 0.1 trips the assertion).
+
+### Stage 0.5b/c — 1-GPU single-layer Megatron parity — GREEN, w/ documented RoPE deviation (2026-06-10)
+
+[tests/numerics/test_ngpt_megatron_layer_parity.py](../../tests/numerics/test_ngpt_megatron_layer_parity.py)
+builds ONE production-spec `NGPTTransformerLayer` on a single GPU (B200), transfers a reference
+`Block`'s weights in (separate q/k/v → the fused `linear_qkv` interleaved per-head `[q,k,v]×heads`;
+`att_c_proj→linear_proj`; `c_fc→mlp.linear_fc1`; `mlp_c_proj→mlp.linear_fc2`; `sqk→q/k_layernorm`;
+`suv→mlp.suv`; `attn_alpha/mlp_alpha→layer`), feeds an identical hidden state, and compares outputs.
+
+- **(A) RoPE OFF — nGPT math validated.** max|diff| ≈ **5e-5** across seeds (fp32 Megatron
+  `DotProductAttention` vs the reference's bf16-cast `flash_attn`, damped by the lr≈0.05 residual
+  blend). Asserted at a **tight 1e-3** bound — chosen because a *wrong* fused-qkv interleaving
+  (contiguous `[q|k|v]`) measures ~2.5e-2, which the plan's original 5e-2 bound would have silently
+  accepted. **PASSED.** This is the decisive single-layer correctness signal: the fused-qkv
+  interleaving, `QKHyperNorm`/`sqk`, `suv`, residual blend, and `softmax_scale=sqrt(head_dim)` are
+  all wired correctly.
+- **(B) RoPE deviation (known, documented).** Megatron's interleaved RoPE (base 10000) does **not**
+  reproduce the reference's bespoke `get_sinusoidal_embeddings`/`apply_rotary_position_embeddings`
+  convention: single-layer residual ≈ **1.5e-2** (`rotary_interleaved=False` is no better, ≈1.2e-2),
+  vs ≈5e-5 with RoPE off. Recorded as a **`@pytest.mark.xfail(strict=True)`** asserting the same 1e-3
+  bound — an honest non-match, not a loose fake pass; strict so it flips to a failure if a future
+  change ever aligns the conventions. **Implication:** production nGPT uses Megatron's standard RoPE,
+  not the reference's; the nGPT *math* is unaffected (validated by (A)) — only the positional-encoding
+  convention differs from the NVIDIA recipe. This is an accepted v1 deviation.
+
+(Remaining: Stage 1 smoke → Task 7 [Claude, this node]; Stages 2–3 600m × 24B A/B → Tasks 8–9 [user].)
