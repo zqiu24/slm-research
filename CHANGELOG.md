@@ -14,15 +14,21 @@
   in sweep G); **min_lr_ratio 0.01 is the floor sweet spot** (0.1 and 0.001 both worse);
   **cosine beats WSD** (WSD df0.2 `lodwi7cw` 3.5699, +0.037). Single seed — pending confirm.
 
-### Added — muon_kimi HP grid sweep
+### Added — adam LR sweep
 
-- **`scripts/sweep_muon_kimi_grid.sh`** — 16-run grid tuning the muon_kimi baseline
-  (best non-POET, 3.5321 @ lr 1e-3) via `scripts/train_muon_dev.sh`:
-  `optim.lr ∈ {5e-4,1e-3,2e-3,3e-3} × optim.muon_momentum ∈ {0.95,0.98} ×
-  scheduler.min_lr_ratio ∈ {0.1,0.01}`. Checks whether the baseline LR is too cold
-  (as the POET grid found for POET) and carries the POET deep-floor finding to muon.
-  Held at muon_kimi defaults (nesterov, ns_steps=5, wd 0.1). Cell `mk_lr10_m95_f1`
-  reproduces the baseline.
+- **`scripts/sweep_adam_lr.sh`** — 3-run learning-rate sweep tuning the adam (AdamW)
+  baseline (3.5570 @ lr 1e-3) via `scripts/train_adam_dev.sh`: `optim.lr ∈
+  {2e-3, 3e-3, 4e-3}`, everything else at the adam defaults (betas [0.9,0.95], wd 0.1,
+  stock cosine min_lr 0.1). Probes hotter LRs (the POET grid found the baseline LR cold).
+
+### Added — muon_kimi LR sweep
+
+- **`scripts/sweep_muon_kimi_lr.sh`** — 5-run learning-rate sweep tuning the muon_kimi
+  baseline (best non-POET, 3.5321 @ lr 1e-3) via `scripts/train_muon_dev.sh`:
+  `optim.lr ∈ {5e-4, 1e-3, 1.5e-3, 2e-3, 3e-3}`, everything else at the muon_kimi
+  defaults (momentum 0.95, nesterov, ns_steps=5, wd 0.1, stock cosine min_lr 0.1).
+  Checks whether the baseline LR is too cold (as the POET grid found for POET). Cell
+  `mk_lr10` reproduces the baseline.
 
 ### Added — POET HP-tuning sweeps (cosine grid + dense-LR decoupling)
 
