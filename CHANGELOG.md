@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Result — POET is now the OUTRIGHT BEST at 60m/40tpp (2026-06-09 grid)
+
+- The lr×scale×c cosine grid found a hotter optimum: **`cos_lr4_s50_c8` (`ghsu7t8y`) =
+  val/loss 3.5231** (lr 4e-3, scale 0.5, c8 → eff∠ **0.016**, head-OFF + alternating),
+  **beating muon_kimi (3.5321) by −0.009** and the prior POET champion `1ynrrimu`
+  (3.5332 @ eff∠ 0.012) by −0.010. POET_dev.md leaderboard (§2.3/§2.5/§2.6) updated.
+- Findings: the angle sweet spot is **~0.016, not 0.012** (the old "0.012 ceiling / 0.018
+  diverges" was the both-sides head-on recipe; head-off+alternating is stable to 0.018,
+  only 0.024 diverged); **dense lr wants 4e-3 ≳ 3e-3** (decoupling-down falsified, monotone
+  in sweep G); **min_lr_ratio 0.01 is the floor sweet spot** (0.1 and 0.001 both worse);
+  **cosine beats WSD** (WSD df0.2 `lodwi7cw` 3.5699, +0.037). Single seed — pending confirm.
+
 ### Added — POET HP-tuning sweeps (cosine grid + dense-LR decoupling)
 
 - **`scripts/sweep_lie_orth_grid_cosine.sh`** — 16-run grid over the best-POET base
