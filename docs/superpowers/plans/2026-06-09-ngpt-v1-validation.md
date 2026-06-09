@@ -210,7 +210,7 @@ EOF
 cd /lustre/fast/fast/zqiu/slm-research
 /var/tmp/zqiu/slmcpu312/bin/python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=arch/ngpt \
-  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  training_regime=ablation_40x cluster=h100_de seed=0 \
   base.model.tie_embeddings=false \
   base.model.transformer_impl=local \
   training.global_batch_size=1024 training.micro_batch_size=128 \
@@ -224,7 +224,7 @@ Expected: JSON with `total_tokens` ≈ 24_000_000_000, `parallelism.tp=1`. Note 
 /var/tmp/zqiu/slmcpu312/bin/python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=optim/adam \
   base.model.num_query_groups=20 \
-  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  training_regime=ablation_40x cluster=h100_de seed=0 \
   base.model.tie_embeddings=false \
   base.model.transformer_impl=local \
   training.global_batch_size=1024 training.micro_batch_size=128 \
@@ -626,7 +626,7 @@ cd /lustre/fast/fast/zqiu/slm-research
 source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
 python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=arch/ngpt \
-  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  training_regime=ablation_40x cluster=h100_de seed=0 \
   base.model.tie_embeddings=false \
   base.model.transformer_impl=local \
   training.global_batch_size=1024 training.micro_batch_size=128 \
@@ -678,7 +678,7 @@ cd /lustre/fast/fast/zqiu/slm-research
 source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
 python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=arch/ngpt \
-  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  training_regime=ablation_40x cluster=h100_de seed=0 \
   base.model.tie_embeddings=false \
   base.model.transformer_impl=local \
   training.global_batch_size=1024 training.micro_batch_size=128 \
@@ -711,7 +711,7 @@ source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
 python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=optim/adam \
   base.model.num_query_groups=20 \
-  training_regime=ablation_40x cluster=h800_cn seed=0 \
+  training_regime=ablation_40x cluster=h100_de seed=0 \
   base.model.tie_embeddings=false \
   base.model.transformer_impl=local \
   training.global_batch_size=1024 training.micro_batch_size=128 \
