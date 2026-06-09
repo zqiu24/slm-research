@@ -33,5 +33,35 @@ python -m launchers.submit \
     seed=42
 ```
 
+## How to run the CPU / parity test suite
+
+Two tiers (measured 2026-06-09, `slm_env` venv `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python`):
+
+**1. Pure-PyTorch parity oracle — plain CPU, no env setup.** Since the pure-torch
+`NGPTBlock` lives in [src/model/ngpt/block.py](../../src/model/ngpt/block.py) (split out of
+`layer.py` so it pulls in no Megatron), the parity tests run on any CPU without
+transformer_engine:
+```bash
+/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest \
+  tests/unit/test_ngpt_layer_block_forward.py tests/unit/test_ngpt_full_parity.py -q
+```
+
+**2. Full nGPT suite (incl. the Megatron `ModuleSpec` tests) — needs the cuBLAS fix.**
+`test_ngpt_layer_spec.py` does `import megatron.core`, which transitively imports
+`transformer_engine`. On the login node TE needs the symbol
+`cublasLtGroupedMatrixLayoutInit_internal@libcublasLt.so.13`, exported **only** by the
+system `cuda-13.2` lib (the venv-bundled `nvidia-cublas==13.1.0.3` lib does not export it),
+and it must be `LD_PRELOAD`-ed to win the soname race against torch's RTLD_GLOBAL load.
+[load_cuda13_2_nccl_env.sh](../../load_cuda13_2_nccl_env.sh) encodes exactly this — source it
+first (CPU-only; no GPU required to *import*):
+```bash
+source load_cuda13_2_nccl_env.sh   # sets LD_PRELOAD=/is/software/nvidia/cuda-13.2/lib64/libcublasLt.so.13
+/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_ngpt_*.py -q
+```
+Verified result (2026-06-09): **32 passed** for the full `tests/unit/test_ngpt_*.py` suite
+(`test_ngpt_layer_spec.py` → 3 passed). The plan's original Step 2.1 attempt
+(`LD_LIBRARY_PATH` → venv-bundled cuBLAS) does **not** work: the venv lib lacks the symbol
+and `LD_LIBRARY_PATH` does not override torch's already-loaded soname.
+
 ## Result log
 (populate as runs land)
