@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # muon_kimi LEARNING-RATE sweep — everything else at the muon_kimi defaults.
-# Run on one node (5 sequential runs, each grabs the whole node and blocks):
+# Run on one node (2 sequential runs, each grabs the whole node and blocks):
 #   bash scripts/sweep_muon_kimi_lr.sh
 #
 # Baseline being tuned: muon_kimi (vendored Kimi/Moonlight Muon on 2D attn/MLP
@@ -16,12 +16,11 @@
 # optim.lr for BOTH the Muon side (internally scaled by 0.2*sqrt(max d_out,d_in)) and
 # the internal AdamW side.
 #
-#   name        lr      note
-#   mk_lr05     5e-4    colder than baseline
-#   mk_lr10     1e-3    = BASELINE (reproduces of4bakqd, val 3.5321)
-#   mk_lr15     1.5e-3
-#   mk_lr20     2e-3
-#   mk_lr30     3e-3    hottest probe
+#   lr      note
+#   3e-3    hotter probe (POET wanted ~3-4x the 1e-3 baseline)
+#   4e-3    hottest probe
+# All runs use experiment.name=muon_kimi (distinct run dirs by timestamp); the
+# 1e-3 baseline = of4bakqd (val 3.5321) is not re-run here.
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 LOGDIR=/lustre/home/zqiu/log
@@ -34,14 +33,13 @@ codexlog() {
   echo "<<< END   ${name}  (status ${PIPESTATUS[0]})  $(date '+%F %T')"
 }
 
-LRS=(0.0005 0.001 0.002 0.003 0.004 0.005); LTAGS=(05 10 15 20 30)
+LRS=(0.003 0.004)
 
-for i in "${!LRS[@]}"; do
-  lr="${LRS[$i]}"; lt="${LTAGS[$i]}"
-  name="mk_lr${lt}"
+for lr in "${LRS[@]}"; do
+  name="muon_kimi"
   echo "### ${name}: lr=${lr} (all else = muon_kimi defaults)"
   codexlog "$name" scripts/train_muon_dev.sh \
     optim.lr="$lr" experiment.name="$name"
 done
 
-echo "=== muon_kimi LR sweep complete (5 runs) ==="
+echo "=== muon_kimi LR sweep complete (2 runs) ==="
