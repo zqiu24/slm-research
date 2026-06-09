@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fixed — muon_kimi end-of-training checkpoint crash (skipped final eval)
+
+- muon_kimi runs crashed at the end of training in the (always-fired) end-of-training
+  `save_checkpoint` with `AttributeError: 'bool' object has no attribute 'shape'`:
+  Megatron's `sharded_state_dict` runs every per-param optimizer-state value through
+  `make_sharded_optimizer_tensor` (tensor-only) and only excludes `step`, but the
+  vendored Kimi Muon also stores a per-param `use_muon` bool. The crash (exit code 1)
+  aborted the post-training validation, so muon_kimi's val curve stopped at the last
+  eval-interval (step 9000) instead of the final step (9155) — making it look "shorter"
+  than adam/POET and slightly under-reporting its val (still descending at 9000).
+- Fix: `_StripUseMuonShardingMixin` in `src/optim/muon_kimi.py` drops `use_muon` from
+  the optimizer state while the sharded checkpoint is built, then restores it (it's
+  re-derived from param routing on load, so lossless). Applied to both the bf16
+  (`Float16OptimizerWithFloat16Params`) and fp32 (`FP32Optimizer`) wrappers. CPU test
+  in `tests/unit/test_muon_kimi.py`.
+
 ### Result — POET is now the OUTRIGHT BEST at 60m/40tpp (2026-06-09 grid)
 
 - The lr×scale×c cosine grid found a hotter optimum: **`cos_lr4_s50_c8` (`ghsu7t8y`) =

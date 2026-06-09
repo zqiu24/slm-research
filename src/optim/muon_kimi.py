@@ -16,6 +16,40 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+class _StripUseMuonShardingMixin:
+    """Make the Kimi Muon optimizer safe to dist-checkpoint with Megatron.
+
+    The vendored ``Muon`` stores a per-param boolean ``use_muon`` flag in
+    ``optimizer.state`` (set in ``Muon.__init__`` to route each param to the Muon
+    or internal-AdamW update). Megatron's ``sharded_state_dict`` runs *every*
+    per-param optimizer-state value through ``make_sharded_optimizer_tensor``
+    (which assumes tensors) and only excludes ``step`` — so the ``use_muon`` bool
+    raises ``AttributeError: 'bool' object has no attribute 'shape'`` during the
+    end-of-training ``save_checkpoint`` (fired at the last step because
+    ``save_interval`` is large but ``iteration % save_interval != 0``). That crash
+    also aborts the post-training validation, so the final-step eval is never
+    logged — the muon_kimi val curve stops one eval-interval short of the last
+    step while adam/POET reach it.
+
+    Fix: drop ``use_muon`` from the optimizer state while the sharded state dict is
+    built, then restore it. ``use_muon`` is re-derived from param routing in
+    ``Muon.__init__`` on load (see ``init_state_fn`` below), so omitting it from
+    the checkpoint is lossless.
+    """
+
+    def sharded_state_dict(self, *args, **kwargs):
+        stashed = [
+            (state, state.pop("use_muon"))
+            for state in self.optimizer.state.values()
+            if "use_muon" in state
+        ]
+        try:
+            return super().sharded_state_dict(*args, **kwargs)
+        finally:
+            for state, value in stashed:
+                state["use_muon"] = value
+
+
 def get_megatron_muon_kimi_optimizer(
     config: Any,
     model_chunks: list,
@@ -105,6 +139,19 @@ def get_megatron_muon_kimi_optimizer(
                         state["moment1"] = torch.zeros_like(p.data)
                         state["moment2"] = torch.zeros_like(p.data)
 
+    # Wrap with the mixin so the per-param `use_muon` bool is stripped while
+    # Megatron builds the sharded checkpoint (otherwise the end-of-training save
+    # crashes and the final-step validation is skipped — see the mixin docstring).
     if config.bf16:
-        return Float16OptimizerWithFloat16Params(optimizer, config, None, init_state_fn)
-    return FP32Optimizer(optimizer, config, init_state_fn)
+        cls = type(
+            "MuonKimiFloat16Optimizer",
+            (_StripUseMuonShardingMixin, Float16OptimizerWithFloat16Params),
+            {},
+        )
+        return cls(optimizer, config, None, init_state_fn)
+    cls = type(
+        "MuonKimiFP32Optimizer",
+        (_StripUseMuonShardingMixin, FP32Optimizer),
+        {},
+    )
+    return cls(optimizer, config, init_state_fn)
