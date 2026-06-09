@@ -12,7 +12,7 @@ import math
 import torch
 import torch.nn as nn
 
-from src.model.ngpt.layer import NGPTBlock
+from src.model.ngpt.block import NGPTBlock
 from src.model.ngpt.normalize import normalize_module_matrices
 from src.model.ngpt.scaling_params import LearnedScaling
 from tests._fixtures.ngpt_reference.model import GPT as RefGPT  # noqa: N811

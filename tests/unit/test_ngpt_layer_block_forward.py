@@ -2,7 +2,7 @@
 
 import torch
 
-from src.model.ngpt.layer import NGPTBlock
+from src.model.ngpt.block import NGPTBlock
 from tests._fixtures.ngpt_reference.model import Block as RefBlock
 from tests._fixtures.ngpt_reference.model import GPTConfig
 
