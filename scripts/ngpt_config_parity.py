@@ -13,15 +13,18 @@ import sys
 from omegaconf import OmegaConf
 
 EXPECTED_DELTA = (
-    "optim",
+    # Trailing dots anchor these to a config section so a structural field that
+    # merely *contains* the word (e.g. base.model.optimizer_*) can't be wrongly
+    # exempted as an intended delta.
+    "optim.",
     "experiment.name",
     "experiment.kind",
     "experiment.family",
     "experiment.patches",
     "experiment.description",
     "experiment.references",
-    "scheduler",  # nGPT zeroes warmup; baseline keeps it
-    "_derived",  # run_name / hashes / archive paths differ by construction
+    "scheduler.",  # nGPT zeroes warmup; baseline keeps it
+    "_derived.",  # run_name / hashes / archive paths differ by construction
     "wandb.name",
     "wandb.run",
 )
@@ -44,6 +47,9 @@ def flat(cfg):
 
 
 def main():
+    if len(sys.argv) != 3:
+        print("usage: python scripts/ngpt_config_parity.py <ngpt_run_dir> <baseline_run_dir>")
+        sys.exit(2)
     ngpt_dir, base_dir = sys.argv[1], sys.argv[2]
     a = flat(OmegaConf.load(f"{ngpt_dir}/resolved_config.yaml"))
     b = flat(OmegaConf.load(f"{base_dir}/resolved_config.yaml"))
