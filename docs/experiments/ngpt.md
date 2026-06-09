@@ -122,4 +122,38 @@ builds ONE production-spec `NGPTTransformerLayer` on a single GPU (B200), transf
   not the reference's; the nGPT *math* is unaffected (validated by (A)) — only the positional-encoding
   convention differs from the NVIDIA recipe. This is an accepted v1 deviation.
 
-(Remaining: Stage 1 smoke → Task 7 [Claude, this node]; Stages 2–3 600m × 24B A/B → Tasks 8–9 [user].)
+### Stage 1 — GPU smoke (60m × 40× dev recipe) — GREEN (2026-06-10)
+
+Ran the standard `train_*_dev.sh` dev recipe (`base/scale=60m experiment=arch/ngpt
+training_regime=ablation_40x`, untied, `transformer_impl=local`, gbs 1024 / mbs 128) on **1× B200**
+via `launchers.train_megatron` (`cluster.gpus_per_node=1`, `CUDA_VISIBLE_DEVICES=0`,
+`WANDB_MODE=offline`). NB: the 60m config uses **seq_length 256**, so 40× tok/param =
+`train-samples 9,375,000` = **9,155 steps** (the plan's "~580 steps" assumed seq 4096). All gate
+evidence appeared in the first ~230 steps; the run was **stopped early at step 230/9155** —
+gate satisfied, and the full ~3 h recipe is not worth that much shared-node B200 time for a smoke.
+(To run it to completion: same command without the early stop.)
+
+Gate evidence:
+- **nGPT machinery fires.** Rank-0 megatron args + the launched CLI carry the full nGPT path:
+  `--slm-optimizer ngpt_adamw --ngpt --ngpt-alpha-init 0.05 --ngpt-sqk-init/suv-init/sz-init 1.0
+  --ngpt-no-warmup --swiglu --disable-bias-linear --unfuse-qkv --unfuse-fc1
+  --untie-embeddings-and-output-weights`. (The plan's expected `[nGPT] applied spec …` log string
+  is not emitted; spec-application is instead evidenced by `optim.type=ngpt_adamw` + the `ngpt_*`
+  args + the model building/training as nGPT.)
+- **MHA, not GQA.** Resolved config `num_attention_heads = num_query_groups = 8` (the raw arg dump's
+  `num_query_groups=1` is the inactive non-GQA default).
+- **Loss strictly decreasing, no NaN/Inf.** lm loss 12.25 (it 1) → 9.26 → 7.79 → 7.05 (50) → 6.40
+  (100) → 5.78 (200) → **5.62 (230)**, monotone; **0 nan / 0 skipped iterations** throughout;
+  throughput 150→210 TFLOP/s/GPU.
+- **Untied embeddings wired.** `untie_embeddings_and_output_weights=True`; distinct
+  `module.output_layer.weight` **and** `module.embedding.word_embeddings.weight` both appear as
+  trainable params (two separate tensors, as the reference unties wte/lm_head). Carries to the 600m arms.
+- **Row-norms ≈ 1 / no-decay param group.** The per-step weight projection (`ngpt_normalize_step`)
+  and the sz/sqk/suv/alpha no-decay grouping (`ngpt_optimizer_setup`) are validated by the unit +
+  parity tests (`test_ngpt_normalize`, `test_ngpt_step_parity` asserts unit-norm rows,
+  `test_ngpt_optimizer_groups`) and are consistent with the stable, divergence-free trajectory here;
+  not separately re-extracted from the live model (the run saves a checkpoint only at the final step).
+
+Offline W&B: `runs/ngpt-llama3-60m-s0-20260609T233242Z/checkpoints/wandb/.../offline-run-…`.
+
+(Remaining: Stages 2–3 — the real 600m × ~24B-token A/B — are **user-run** cluster jobs → Tasks 8–9.)
