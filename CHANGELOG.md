@@ -14,6 +14,16 @@
   in sweep G); **min_lr_ratio 0.01 is the floor sweet spot** (0.1 and 0.001 both worse);
   **cosine beats WSD** (WSD df0.2 `lodwi7cw` 3.5699, +0.037). Single seed — pending confirm.
 
+### Added — muon_kimi HP grid sweep
+
+- **`scripts/sweep_muon_kimi_grid.sh`** — 16-run grid tuning the muon_kimi baseline
+  (best non-POET, 3.5321 @ lr 1e-3) via `scripts/train_muon_dev.sh`:
+  `optim.lr ∈ {5e-4,1e-3,2e-3,3e-3} × optim.muon_momentum ∈ {0.95,0.98} ×
+  scheduler.min_lr_ratio ∈ {0.1,0.01}`. Checks whether the baseline LR is too cold
+  (as the POET grid found for POET) and carries the POET deep-floor finding to muon.
+  Held at muon_kimi defaults (nesterov, ns_steps=5, wd 0.1). Cell `mk_lr10_m95_f1`
+  reproduces the baseline.
+
 ### Added — POET HP-tuning sweeps (cosine grid + dense-LR decoupling)
 
 - **`scripts/sweep_lie_orth_grid_cosine.sh`** — 16-run grid over the best-POET base
