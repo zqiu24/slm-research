@@ -14,8 +14,8 @@
 
 ## Division of labor (READ FIRST — non-negotiable)
 
-- **Claude runs:** Stage 0 (Tasks 1–4) and Stage 0.5a (Task 5) — CPU-only: a code split, CPU test runs, a dry-run config diff, a CPU full-model step-parity test. Claude reports the *actual* command output.
-- **User runs:** Stage 0.5b/c (Task 6, a quick 1-GPU single-layer parity) and Stages 1–3 (Tasks 7–9, cluster training). This login node has no usable GPU (driver too old). For each GPU task, Claude prints the exact command + a paste-back checklist, then **STOPS**. Claude never launches a cluster/GPU job. The user runs it and pastes results back; Claude then evaluates the gate.
+- **Claude runs:** Stage 0 (Tasks 1–4) and Stage 0.5a (Task 5) — CPU-only: a code split, CPU test runs, a dry-run config diff, a CPU full-model step-parity test. Claude reports the *actual* command output. **Also the *limited* GPU work — Task 6 (1-GPU single-layer parity, a `pytest`) and Task 7 (the GPU smoke = the 60m × 40× dev recipe, ~580 steps)** — which Claude runs **on a live GPU node the user hands it** (this login node has no usable GPU; the user `salloc`s a node and gives Claude its hostname/how to reach it). Claude runs these interactively via the dev launcher and reports the actual output.
+- **User runs:** Stages 2–3 (Tasks 8–9) — the real 600m × 40× ablation A/B (~24B tokens / ~5.8k steps per arm). These are the large cluster jobs: Claude prints the exact `launchers.submit` command + a paste-back checklist, then **STOPS**; Claude never launches a multi-node cluster job. The user runs it and pastes results back; Claude then evaluates the gate.
 - **Per landed task:** update [docs/experiments/ngpt.md](/lustre/fast/fast/zqiu/slm-research/docs/experiments/ngpt.md) (result log) and [NeckariumAI/zqiu/CHANGELOG.md](/lustre/home/zqiu/NeckariumAI/zqiu/CHANGELOG.md).
 
 ## Environment facts (measured 2026-06-09)
@@ -475,7 +475,7 @@ EOF
 
 ---
 
-## Task 6: 1-GPU single-layer Megatron parity vs reference (Stage 0.5b/c) — USER RUNS
+## Task 6: 1-GPU single-layer Megatron parity vs reference (Stage 0.5b/c) — CLAUDE RUNS (on a handed GPU node)
 
 **Why:** Task 5 validates the pure-torch math, but the *Megatron* `NGPTTransformerLayer` + spec is what actually trains. This builds **one** Megatron nGPT layer on a single GPU, transfers the reference `Block` weights into it, feeds an identical hidden state, and compares outputs — validating the wiring Task 5 cannot: `QKHyperNorm` in the `q_layernorm`/`k_layernorm` slots applied post-RoPE, `softmax_scale = sqrt(head_dim)`, `NGPTMLP`'s `suv` path, and the residual blend inside `NGPTTransformerLayer.forward`. There is no infra to build a full Megatron GPTModel in a test, so a single layer is the tractable decisive unit. **This test is developed against the GPU** — the exact `TransformerConfig` field set and module-tree attribute names are confirmed from the first run's errors.
 
@@ -585,16 +585,16 @@ def test_megatron_layer_matches_reference_block_no_rope():
     assert diff < 5e-2, f"single-layer (no-RoPE) parity diff = {diff}"
 ```
 
-- [ ] **Step 6.2: Claude prints the run command and STOPS**
+- [ ] **Step 6.2: Claude runs on the handed GPU node**
 
-Hand the user (1 GPU; the working env from Task 2):
+On the live node the user hands over (1 GPU; the working env from Task 2):
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research
-LD_LIBRARY_PATH="$CUBLAS_DIR:$LD_LIBRARY_PATH" \
-  /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest \
+source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
+/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest \
   tests/numerics/test_ngpt_megatron_layer_parity.py -v -s 2>&1 | tail -40
 ```
-The first run is expected to fail in `_transfer` / config construction. The user pastes back `print(layer)` (the module tree) and any `TransformerConfig` error so Claude can finalize `_transfer` and the missing config fields. Iterate until green.
+The first run is expected to fail in `_transfer` / config construction. Claude reads `print(layer)` (the module tree) and any `TransformerConfig` error off its own run output, finalizes `_transfer` and the missing config fields, and re-runs. Iterate until green.
 
 - [ ] **Step 6.3: Finalize `_transfer` + RoPE-matched variant**
 
@@ -602,7 +602,7 @@ Once the tree is known, Claude fills `_transfer` (mapping ref `query/key/value` 
 
 **Gate (0.5b/0.5c):** the no-RoPE variant matches within tolerance (nGPT math wired correctly); the RoPE-matched variant matches too — OR, if only the no-RoPE variant matches, the RoPE convention difference is documented in [docs/experiments/ngpt.md](/lustre/fast/fast/zqiu/slm-research/docs/experiments/ngpt.md) as a known deviation from the reference recipe.
 
-- [ ] **Step 6.4: Commit (after user confirms green)**
+- [ ] **Step 6.4: Commit (after green)**
 
 ```bash
 git add tests/numerics/test_ngpt_megatron_layer_parity.py docs/experiments/ngpt.md
@@ -613,31 +613,30 @@ EOF
 
 ---
 
-## Task 7: GPU smoke (~100–500 steps) — USER RUNS
+## Task 7: GPU smoke = 60m × 40× dev recipe — CLAUDE RUNS (on a handed GPU node)
 
-**Why:** Confirm nGPT trains end-to-end and its bespoke machinery (per-step weight projection, sqk/suv/alpha/sz, sqrt(head_dim) softmax scale) fires on real hardware. Driven by [docs/superpowers/runbooks/2026-05-25-ngpt-smoke.md](/lustre/fast/fast/zqiu/slm-research/docs/superpowers/runbooks/2026-05-25-ngpt-smoke.md).
+**Why:** Confirm nGPT trains end-to-end and its bespoke machinery (per-step weight projection, sqk/suv/alpha/sz, sqrt(head_dim) softmax scale) fires on real hardware. Rather than an artificially truncated 600m run, the smoke **is the standard `train_*_dev.sh` dev recipe — 60m scale × 40× tokens** — run to completion. It's a real (small) training run that exercises the full nGPT machinery at ~1% the cost of the 600m A/B, and it matches the rest of the dev flow exactly. Cross-reference: [docs/superpowers/runbooks/2026-05-25-ngpt-smoke.md](/lustre/fast/fast/zqiu/slm-research/docs/superpowers/runbooks/2026-05-25-ngpt-smoke.md).
 
 **Files:** `docs/experiments/ngpt.md`.
 
-- [ ] **Step 7.1: Claude prints the command and STOPS**
+- [ ] **Step 7.1: Claude runs the dev-recipe smoke on the handed GPU node**
 
+The 60m × 40× dev recipe (≈ 2.4B tokens = 40 tok/param × ~61M non-embedding params → **~580 steps** at gbs 1024 / seq 4096). Run interactively via the dev launcher (`train_megatron`), not `submit` — Claude is already on the allocated node:
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research
 source load_cuda13_2_nccl_env.sh    # TE/cublasLt fix, like the dev scripts
-python -m launchers.submit \
-  base/family=llama3 base/scale=600m experiment=arch/ngpt \
+python -m launchers.train_megatron \
+  base/family=llama3 base/scale=60m experiment=arch/ngpt \
   training_regime=ablation_40x cluster=h100_de seed=0 \
   base.model.tie_embeddings=false \
   base.model.transformer_impl=local \
   training.global_batch_size=1024 training.micro_batch_size=128 \
   training.save_enabled=true \
-  wandb.project=slm-zeju-dev \
-  training.tokens_per_param=1        # ~143 steps for the smoke (= 600M tokens / seq 4096 / gbs 1024)
+  wandb.project=slm-zeju-dev
 ```
+This is identical to `scripts/train_adam_dev.sh` (60m default, `ablation_40x`, untied, `transformer_impl=local`, gbs 1024 / mbs 128, save on, `slm-zeju-dev`) except `experiment=arch/ngpt`. If 60m at mbs 128 doesn't fit a single GPU on the handed node, drop `micro_batch_size` (grad-accum keeps gbs 1024 fixed) — the smoke verdict is unaffected.
 
-> **Cap the smoke via `tokens_per_param`, NOT `total_tokens`.** `launchers/submit.py:resolve_config` (submit.py:153) **unconditionally** recomputes `cfg.training.total_tokens = tokens_per_param * non_embedding_params` unless `resume_from_stable_stage` is set — so a `+training.total_tokens=...` override is silently clobbered. (The 2026-05-25 smoke runbook uses the stale `+training.total_tokens=2000000000` form and should be corrected.) `tokens_per_param=1` → 600M tokens → 146,484 samples → **143 steps**; use `0.7` for ~100 steps.
-
-- [ ] **Step 7.2: User runs; pastes back the evidence (the gate)**
+- [ ] **Step 7.2: Claude runs; collects the evidence (the gate)**
 
 - [ ] Rank-0 stdout shows `[nGPT] applied spec + attached sz + registered weight-norm roles` after build.
 - [ ] Loss strictly decreasing across the first ~50 steps; **no NaN/Inf**.
@@ -652,7 +651,7 @@ python -m launchers.submit \
 
 - [ ] **Step 7.3: Verify the untied-embeddings wiring (decision already made)**
 
-`tie_embeddings=false` is now forced on **both** arms (matches the NVIDIA reference, which unties `wte`/`lm_head` and normalizes them separately, and the `train_*_dev.sh` convention). 600M base defaults to `tie_embeddings: true`, so the override is load-bearing — confirm it took effect and that the weight-norm roles cover `wte` and `lm_head` as two separate tensors (not one shared tensor normalized once):
+`tie_embeddings=false` is now forced on the smoke and **both** A/B arms (matches the NVIDIA reference, which unties `wte`/`lm_head` and normalizes them separately, and the `train_*_dev.sh` convention). The base configs default to `tie_embeddings: true` at every scale, so the override is load-bearing — confirm it took effect in the 60m smoke and that the weight-norm roles cover `wte` and `lm_head` as two separate tensors (not one shared tensor normalized once); the same wiring then carries to the 600m arms:
 ```bash
 grep -nE "tie_embeddings|output_layer|word_embeddings|_NORM_ROLES|share_embeddings" \
   src/patches/ngpt_apply_spec.py src/model/ngpt/output_scaling.py
@@ -742,4 +741,4 @@ Write the final verdict (speedup factor, or a null/negative result stated plainl
 - **Spec coverage:** Stage 0 → Tasks 1–4; Stage 0.5a (CPU step parity) → Task 5; Stage 0.5b/c (Megatron single-layer + RoPE) → Task 6; Stage 1 smoke → Task 7; Stage 2 ablation → Task 8; Stage 3 speedup A/B → Task 9. `tie_embeddings` correctness item → Task 7.3. bf16 deviation → Task 9.3. uint16/RoPE rationale lives in the spec. All spec goals/non-goals mapped.
 - **No placeholders:** every CPU step shows the real command + expected output. Task 6 is explicitly a develop-on-GPU test: the scaffold is concrete, with the two genuinely hardware-dependent unknowns (exact `TransformerConfig` fields, qkv-fusion layout / module-tree paths) called out and resolved from the first GPU run — this is the honest shape of a cross-framework GPU parity test, not hand-waving.
 - **Type/name consistency:** `NGPTBlock` moves to `src.model.ngpt.block`, re-exported from `layer.py`; both existing parity tests + the new step-parity test import it from `block`. `_residual_blend` single implementation in `block.py`, reused by `layer.py`. Task 5 reuses `_OurNGPT`/`_copy_ref_to_ours`/`_build_role_map`/`_DEVICE` from `test_ngpt_full_parity` (verified to exist). `build_megatron_args(cfg)`, `--dry-run`/`resolved_config.yaml`, `build_ngpt_layer_spec(config)` match the verified code surface.
-- **Division of labor:** Tasks 1–5 are CPU/Claude; Tasks 6–9 are USER-run GPU jobs where Claude prints-and-stops, per standing rules.
+- **Division of labor:** Tasks 1–5 are CPU/Claude. Tasks 6–7 are the *limited* GPU work — Claude runs them on a live node the user hands over (Task 6: single-layer parity `pytest`; Task 7: the 60m × 40× dev-recipe smoke, ~580 steps) via the dev launcher, then gates on its own output. Tasks 8–9 are the large 600m × 40× cluster A/B (~24B tokens / ~5.8k steps per arm) — Claude prints the `launchers.submit` command and STOPS; the user launches, pastes results, Claude gates.
