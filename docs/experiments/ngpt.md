@@ -64,4 +64,30 @@ Verified result (2026-06-09): **32 passed** for the full `tests/unit/test_ngpt_*
 and `LD_LIBRARY_PATH` does not override torch's already-loaded soname.
 
 ## Result log
-(populate as runs land)
+
+### Stage 0 gate — GREEN (2026-06-09)
+
+Validation work lives on branch `ngpt-v1-validation` (Tasks 1–3 done CPU-only). The three
+Stage 0 gate conditions all hold:
+
+1. **Full nGPT suite green in the working env.** `source load_cuda13_2_nccl_env.sh` +
+   `pytest tests/unit/test_ngpt_*.py` → **32 passed, 0 failed** (incl. the 3 Megatron
+   `ModuleSpec` tests in `test_ngpt_layer_spec.py`).
+2. **Pure-torch parity oracle green on plain CPU (no transformer_engine).** After splitting
+   `NGPTBlock` into [src/model/ngpt/block.py](../../src/model/ngpt/block.py),
+   `pytest test_ngpt_layer_block_forward.py test_ngpt_full_parity.py` → **3 passed** with no
+   `LD_PRELOAD`/cuBLAS setup.
+3. **Config-parity: arms matched except by intent.**
+   [scripts/ngpt_config_parity.py](../../scripts/ngpt_config_parity.py) diffs the two
+   `--dry-run` resolved configs (nGPT `experiment=arch/ngpt` vs matched baseline
+   `experiment=optim/adam base.model.num_query_groups=20`, both 600m × `ablation_40x`,
+   `cluster=h100_de`, seed 0, untied, `transformer_impl=local`, gbs 1024 / mbs 128) and prints
+   **`OK: arms differ only by the intended method/recipe deltas.`** Both arms resolve to
+   `total_tokens = 24,000,000,000` and `parallelism.tp = 1`. All architecture keys match:
+   `num_attention_heads = num_query_groups = 20` (MHA override took on the baseline),
+   `hidden_size 1280`, `ffn_hidden_size 3200`, `num_layers 40`, `seq_length 4096`,
+   `tie_embeddings false`, `seed 0`, and identical `data.{tokenizer_model,path,vocab_size,split}`.
+   The only diffs are `optim.*`, `experiment.*`, and `_derived.*` (run name / hashes / timestamps).
+
+(Remaining: Stage 0.5a CPU step-parity → Task 5; Stage 0.5b/c 1-GPU Megatron-layer parity →
+Task 6; Stage 1 smoke → Task 7; Stages 2–3 600m A/B → Tasks 8–9.)
