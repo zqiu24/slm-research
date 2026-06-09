@@ -13,7 +13,7 @@ python -m launchers.submit \
     training_regime=ablation_20x \
     cluster=h800_cn \
     seed=0 \
-    +training.total_tokens=2000000000  # cap at ~100 steps for the smoke
+    training.tokens_per_param=1  # ~143-step smoke; NOTE: +training.total_tokens is clobbered by resolve_config (submit.py:153), so cap via tokens_per_param
 ```
 
 ## What to look for

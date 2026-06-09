@@ -618,8 +618,10 @@ cd /lustre/fast/fast/zqiu/slm-research
 python -m launchers.submit \
   base/family=llama3 base/scale=600m experiment=arch/ngpt \
   training_regime=ablation_20x cluster=h800_cn seed=0 \
-  +training.total_tokens=2000000000        # cap ~ a few hundred steps for the smoke
+  training.tokens_per_param=1        # ~143 steps for the smoke (= 600M tokens / seq 4096 / gbs 1024)
 ```
+
+> **Cap the smoke via `tokens_per_param`, NOT `total_tokens`.** `launchers/submit.py:resolve_config` (submit.py:153) **unconditionally** recomputes `cfg.training.total_tokens = tokens_per_param * non_embedding_params` unless `resume_from_stable_stage` is set — so a `+training.total_tokens=...` override is silently clobbered. (The 2026-05-25 smoke runbook uses the stale `+training.total_tokens=2000000000` form and should be corrected.) `tokens_per_param=1` → 600M tokens → 146,484 samples → **143 steps**; use `0.7` for ~100 steps.
 
 - [ ] **Step 7.2: User runs; pastes back the evidence (the gate)**
 
