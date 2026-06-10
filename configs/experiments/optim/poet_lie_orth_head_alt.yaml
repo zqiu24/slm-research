@@ -52,7 +52,7 @@ optim:
     lie_ortho_use_second_moment: false
     lie_ortho_distributed: true
     head_aligned_attn: true            # head ON, POETX-native (permuted residual)
-    head_resid_block_count: 4          # >1 -> real permuted multi-block residual
+    head_resid_block_count: 1          # >1 -> real permuted multi-block residual
     single_step_fast: true
     single_step_x: true                # POETX forward frame (required for the head POETX layer)
     lie_alternating: true              # the champion alternating optimizer
