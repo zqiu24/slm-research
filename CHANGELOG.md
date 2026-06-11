@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added — first-party DeepSeek-3Bv2 (MQA + sandwich-norm) port
+
+- Landed the Megatron-poet `DeepSeek-3Bv2-sandwich-mqa` architecture as a
+  first-party config/patch (de-vendored from `poet_torch_huawei/`): new
+  `deepseek_v3_mqa` family + `deepseek_3bv2` scale (12L, hidden 1280, dense ffn
+  7168, 16 heads, MQA head_dim 384, MoE ffn 896 / shared 1792, MTP, rotary 0.25),
+  the `sandwich_norm_apply` patch (`SandwichTransformerLayer` post-norm via
+  forward-hooks), config-driven `--rotary-percent`, MTP decoupled from MLA, and
+  `scripts/train_deepseek.sh`.
+- `sandwich_norm_apply` now composes with POET: it owns only
+  `gpt_builders.gpt_builder` and stamps the `TransformerConfig` via a temporary
+  wrapper inside the builder, so it no longer collides with `poet_unfuse_te_impl`
+  on `core_transformer_config_from_args`. It is enabled under `optim/adam`,
+  `optim/muon_hybrid`, and `optim/poet`.
+- CPU unit tests green (`test_sandwich_norm`, `test_patch_sandwich_norm` incl. the
+  POET-patchset compose test, `test_deepseek_v3_mqa_scale`). The 8-GPU
+  `cluster=h100_de` adam + POET GPU smoke is the remaining user-run acceptance gate.
+
 ### Fixed — muon_kimi end-of-training checkpoint crash (skipped final eval)
 
 - muon_kimi runs crashed at the end of training in the (always-fired) end-of-training
