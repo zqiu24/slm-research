@@ -30,6 +30,7 @@ experiment:
     - poet_unfuse_te_impl
     - poet_apply_to_model
     - poet_merge_step
+    - sandwich_norm_apply     # no-op unless --use-sandwich-norm; owns only gpt_builder
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
     - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
   required_capabilities: []

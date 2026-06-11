@@ -2,10 +2,19 @@
 
 Mirrors src/patches/ngpt_apply_spec.py. The CLI args (--use-sandwich-norm,
 --attn-post-norm-scale, --ffn-post-norm-scale) are registered in add_slm_args;
-this patch only (1) stamps them onto the TransformerConfig and (2) swaps the
-transformer-layer class to SandwichTransformerLayer across every spec path used
-by gpt_builder — the dense spec, the MoE decoder block spec (.layer_specs), and
-the MTP layer spec. All gated on args.use_sandwich_norm (no-op otherwise).
+this patch wraps gpt_builder so that, when sandwich-norm is on, it (1) stamps
+the flags onto the TransformerConfig and (2) swaps the transformer-layer class
+to SandwichTransformerLayer across every spec path (dense, MoE decoder block,
+MTP). Both are installed *temporarily* around the gpt_builder call and removed
+in a finally block, so the only owned target is gpt_builders.gpt_builder.
+
+Why wrap gpt_builders.core_transformer_config_from_args (not the
+megatron.training.arguments symbol): gpt_builders.py binds the name at import
+time (`from megatron.training.arguments import core_transformer_config_from_args`)
+and calls the bare local name, so the build-time config comes from THAT binding.
+Wrapping it here also avoids owning the arguments-module target, which
+poet_unfuse_te_impl owns — so this patch composes with optim/poet.
+
 Megatron imports happen inside apply() so importing this module is CPU-safe.
 """
 
@@ -15,31 +24,12 @@ import logging
 
 from src.patches._registry import register_patch
 
-_TARGET = (
-    "gpt_builders.gpt_builder",
-    "megatron.training.arguments.core_transformer_config_from_args",
-)
+_TARGET = ("gpt_builders.gpt_builder",)
 logger = logging.getLogger(__name__)
 
 
 @register_patch(name="sandwich_norm_apply", targets=_TARGET)
 def apply() -> None:
-    # ---- stamp config from args ----
-    from megatron.training import arguments as _ma
-
-    _orig_cfg = _ma.core_transformer_config_from_args
-
-    def _wrapped_cfg(args, *a, **kw):
-        config = _orig_cfg(args, *a, **kw)
-        if getattr(args, "use_sandwich_norm", False):
-            config.use_sandwich_norm = True
-            config.attn_post_norm_scale = float(getattr(args, "attn_post_norm_scale", 1.0))
-            config.ffn_post_norm_scale = float(getattr(args, "ffn_post_norm_scale", 1.0))
-        return config
-
-    _ma.core_transformer_config_from_args = _wrapped_cfg
-
-    # ---- swap the layer class across all spec paths ----
     import gpt_builders as _gb
     from megatron.core.transformer.transformer_layer import TransformerLayer
 
@@ -71,6 +61,20 @@ def apply() -> None:
     def _wrapped_builder(args, *a, **kw):
         if not getattr(args, "use_sandwich_norm", False):
             return _orig_builder(args, *a, **kw)
+
+        # (1) Temporarily stamp sandwich-norm onto the config gpt_builder builds.
+        _orig_cfg = _gb.core_transformer_config_from_args
+
+        def _wrapped_cfg(cfg_args, *ca, **ckw):
+            config = _orig_cfg(cfg_args, *ca, **ckw)
+            config.use_sandwich_norm = True
+            config.attn_post_norm_scale = float(getattr(cfg_args, "attn_post_norm_scale", 1.0))
+            config.ffn_post_norm_scale = float(getattr(cfg_args, "ffn_post_norm_scale", 1.0))
+            return config
+
+        _gb.core_transformer_config_from_args = _wrapped_cfg
+
+        # (2) Temporarily swap the layer class across all spec paths.
         originals = {}
         for name in _spec_fns:
             fn = getattr(_gb, name, None)
@@ -88,9 +92,10 @@ def apply() -> None:
         try:
             model = _orig_builder(args, *a, **kw)
         finally:
+            _gb.core_transformer_config_from_args = _orig_cfg
             for name, fn in originals.items():
                 setattr(_gb, name, fn)
-        logger.info("[sandwich] swapped layer class on all spec paths (dense/MoE/MTP)")
+        logger.info("[sandwich] swapped layer class + stamped config (dense/MoE/MTP)")
         return model
 
     _gb.gpt_builder = _wrapped_builder

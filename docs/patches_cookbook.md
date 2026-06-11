@@ -60,13 +60,12 @@ output *before* the residual add, with the norm weight scaled small at init
   Megatron `forward` is copied. No-op unless `config.use_sandwich_norm`.
 - `src/patches/sandwich_norm_apply.py` — stamps the config from args and swaps
   the layer class across every `gpt_builder` spec path (dense, MoE
-  `.layer_specs`, MTP). Targets `gpt_builders.gpt_builder` and
-  `megatron.training.arguments.core_transformer_config_from_args`.
+  `.layer_specs`, MTP). Targets **only** `gpt_builders.gpt_builder`; the
+  config-stamp is done via a temporary wrapper installed inside the builder
+  call, so the patch does not own `core_transformer_config_from_args`.
 
-The patch is wired into `optim/adam` and `optim/muon_hybrid` (no-op unless
-`base.model.use_sandwich_norm`). It is **deliberately not** in `optim/poet`:
-`poet_unfuse_te_impl` already owns the `core_transformer_config_from_args`
-target, so listing both would raise `PatchConflict` at registration (see
-"Conflict handling"). POET + sandwich-norm is deferred until that overlap is
-resolved (e.g. by scoping the config-stamp inside the `gpt_builder` wrapper so
-the patch declares only the `gpt_builder` target).
+The patch is wired into `optim/adam`, `optim/muon_hybrid`, and `optim/poet`
+(no-op unless `base.model.use_sandwich_norm`). It composes with POET because it
+owns only `gpt_builders.gpt_builder` and stamps the config via a temporary
+wrapper inside that builder — `poet_unfuse_te_impl` keeps sole ownership of the
+`core_transformer_config_from_args` target, so there is no `PatchConflict`.

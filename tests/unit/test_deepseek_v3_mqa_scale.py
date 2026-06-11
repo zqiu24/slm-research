@@ -39,10 +39,10 @@ def test_megatron_args_emit_mqa_sandwich_moe():
 
 
 def test_sandwich_patch_listed_in_experiments():
-    # poet is intentionally excluded: its poet_unfuse_te_impl patch already owns
-    # the core_transformer_config_from_args target, and the patch registry rejects
-    # two patches declaring the same target. POET+sandwich is deferred.
-    for exp in ("optim/adam", "optim/muon_hybrid"):
+    # poet is now included: sandwich_norm_apply owns only gpt_builders.gpt_builder
+    # and stamps the config via a temporary wrapper inside the builder, so it no
+    # longer collides with poet_unfuse_te_impl on core_transformer_config_from_args.
+    for exp in ("optim/adam", "optim/muon_hybrid", "optim/poet"):
         cfg = _parse_overrides([f"experiment={exp}"])
         patches = list(cfg.experiment.patches)
         assert "sandwich_norm_apply" in patches, exp
