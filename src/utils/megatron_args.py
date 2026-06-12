@@ -61,8 +61,9 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--seq-length", model.seq_length)
     _add(args, "--max-position-embeddings", model.get("max_position_embeddings", model.seq_length))
     _add(args, "--position-embedding-type", model.positional_encoding)
-    _add(args, "--rotary-base", model.rotary_base)
-    _add(args, "--rotary-percent", model.get("rotary_percent", 1.0))
+    if str(model.positional_encoding) == "rope":
+        _add(args, "--rotary-base", model.rotary_base)
+        _add(args, "--rotary-percent", model.get("rotary_percent", 1.0))
     _add(args, "--attention-dropout", model.attention_dropout)
     _add(args, "--hidden-dropout", model.hidden_dropout)
     _add(args, "--normalization", model.normalization)
@@ -75,7 +76,13 @@ def _model_args(cfg: DictConfig) -> list[str]:
     # installed and is O(seq) memory, so we force it as the default. Override
     # per-experiment with base.model.attention_backend=auto|fused|local.
     _add(args, "--attention-backend", model.get("attention_backend", "flash"))
-    _add(args, "--swiglu")
+    activation = str(model.get("activation", "SwiGLU"))
+    if activation == "SwiGLU":
+        _add(args, "--swiglu")
+    elif activation == "squared_relu":
+        _add(args, "--squared-relu")
+    else:
+        raise ValueError(f"Unsupported model.activation {activation!r}")
     _add(args, "--disable-bias-linear")
     # Sandwich-norm (post-attn / post-MLP norm before the residual add). The
     # architecture is applied by the ``sandwich_norm_apply`` patch; here we only
@@ -119,6 +126,42 @@ def _model_args(cfg: DictConfig) -> list[str]:
         or model.get("mtp_num_layers", None) is not None
     ):
         _add(args, "--enable-experimental")
+
+    # GatedDeltaNet linear attention (Qwen3-Next-style hybrids). All flags are
+    # native Megatron CLI args auto-generated from TransformerConfig fields
+    # (arguments.py:1655, pin core_v0.17.0); routed in gpt_builders.py via
+    # args.experimental_attention_variant.
+    gdn = model.get("gdn", {}) or {}
+    if bool(gdn.get("enabled", False)):
+        _add(args, "--experimental-attention-variant", "gated_delta_net")
+        _add(args, "--linear-attention-freq", model.linear_attention_freq)
+        _add(args, "--linear-num-key-heads", gdn.num_key_heads)
+        _add(args, "--linear-key-head-dim", gdn.key_head_dim)
+        _add(args, "--linear-num-value-heads", gdn.num_value_heads)
+        _add(args, "--linear-value-head-dim", gdn.value_head_dim)
+        _add(args, "--linear-conv-kernel-dim", gdn.get("conv_kernel_dim", 4))
+        if "--enable-experimental" not in args:
+            _add(args, "--enable-experimental")
+
+    # Hybrid Mamba2 layer stacks (Nemotron-H-style). Megatron derives
+    # num_layers and is_hybrid_model from the pattern; we validate coherence
+    # here so a bad config fails at dry-run, not at rank startup. The mamba
+    # path has no MTP support (pretrain_gpt.py docstring, pin core_v0.17.0).
+    pattern = model.get("hybrid_layer_pattern", None)
+    if pattern is not None:
+        pattern = str(pattern)
+        if len(pattern) != int(model.num_layers):
+            raise ValueError(
+                f"hybrid_layer_pattern length {len(pattern)} != num_layers "
+                f"{int(model.num_layers)}"
+            )
+        if model.get("mtp_num_layers", None):
+            raise ValueError("MTP is not supported on the mamba/hybrid path")
+        _add(args, "--hybrid-layer-pattern", pattern)
+        mamba = model.get("mamba", {}) or {}
+        _add(args, "--mamba-state-dim", mamba.get("state_dim", 128))
+        _add(args, "--mamba-head-dim", mamba.get("head_dim", 64))
+        _add(args, "--mamba-num-groups", mamba.get("num_groups", 8))
 
     moe = model.get("moe", {})
     if bool(moe.get("enabled", False)):
