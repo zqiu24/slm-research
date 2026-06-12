@@ -7,6 +7,7 @@ from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
+from src.utils.ladder_math import parse_token_count
 from src.utils.scheduler import scheduler_args
 from src.utils.wandb_naming import wandb_run_name
 
@@ -171,9 +172,13 @@ def _training_args(cfg: DictConfig) -> list[str]:
             )
         total_tokens = int(decay_tokens)
     else:
-        total_tokens = int(training.get("total_tokens", 0)) or (
-            int(training.get("tokens_per_param", 20)) * int(cfg.base.non_embedding_params)
-        )
+        explicit_tokens = training.get("total_tokens", None)
+        if explicit_tokens is not None:
+            total_tokens = parse_token_count(explicit_tokens)
+        else:
+            total_tokens = int(training.get("tokens_per_param", 20)) * int(
+                cfg.base.non_embedding_params
+            )
 
     peak_lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
     force_no_warmup = bool(cfg.optim.get("ngpt", {}).get("no_warmup", False))
