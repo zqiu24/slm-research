@@ -65,7 +65,7 @@
 - Create: `src/utils/arch_params.py`
 - Test: `tests/unit/test_arch_params.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """Unit tests for src/utils/arch_params.py (architecture param accounting).
@@ -221,12 +221,12 @@ def test_dispatch_hybrid_mamba():
     assert active_non_embedding_params(model) == 1212
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_arch_params.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'src.utils.arch_params'`
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 """Architecture-aware non-embedding parameter accounting.
@@ -486,17 +486,17 @@ def active_non_embedding_params(model: dict) -> int:
     return _gpt_total(dict(model), active=True)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_arch_params.py -v`
 Expected: 12 PASSED
 
-- [ ] **Step 5: Run ruff + the full unit suite for regressions**
+- [x] **Step 5: Run ruff + the full unit suite for regressions**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && ruff check src/utils/arch_params.py tests/unit/test_arch_params.py && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit -q`
 Expected: ruff clean (an S307/eval warning may need `# noqa: S307`, already in the code); unit suite green except the 2 known pre-existing failures (see memory: launchers.submit tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/utils/arch_params.py tests/unit/test_arch_params.py
@@ -513,7 +513,7 @@ EOF
 **Files:**
 - Create: `tools/size_check.py`
 
-- [ ] **Step 1: Write the tool**
+- [x] **Step 1: Write the tool**
 
 ```python
 """Print total/active non-embedding params for a family+scale pair.
@@ -559,12 +559,12 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 2: Verify it runs against an existing pair**
+- [x] **Step 2: Verify it runs against an existing pair**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python tools/size_check.py base/family=qwen3 base/scale=600m`
 Expected: prints `budget 600,000,000` and a `total` within a few percent (the existing dense 600m rung; small drift vs the declared budget is informative, not an error).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tools/size_check.py
@@ -582,7 +582,7 @@ EOF
 - Modify: `src/utils/megatron_args.py` (function `_model_args`, lines 33–150)
 - Test: `tests/unit/test_megatron_args_families.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """Arg-emission tests for the new family mechanisms (GDN, hybrid mamba,
@@ -704,12 +704,12 @@ def test_hybrid_rejects_mtp():
         _model_args(cfg)
 ```
 
-- [ ] **Step 2: Run tests to verify the new ones fail**
+- [x] **Step 2: Run tests to verify the new ones fail**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_megatron_args_families.py -v`
 Expected: `test_swiglu_default_unchanged` PASSES (current behavior); all others FAIL.
 
-- [ ] **Step 3: Implement in `_model_args`**
+- [x] **Step 3: Implement in `_model_args`**
 
 In `src/utils/megatron_args.py`, replace the three rotary lines (currently lines 62–64):
 
@@ -772,12 +772,12 @@ Insert after the MLA block (after the `--enable-experimental` emission, currentl
         _add(args, "--mamba-num-groups", mamba.get("num_groups", 8))
 ```
 
-- [ ] **Step 4: Run the new tests + full unit suite (regression check on existing emission tests)**
+- [x] **Step 4: Run the new tests + full unit suite (regression check on existing emission tests)**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_megatron_args_families.py tests/unit -q`
 Expected: new file 9 PASSED; rest of suite unchanged (only the 2 known pre-existing failures).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/utils/megatron_args.py tests/unit/test_megatron_args_families.py
@@ -795,7 +795,7 @@ EOF
 - Create: `configs/base/scale/600m_deepseek_v3.yaml`
 - Test: `tests/unit/test_scale_budget.py`
 
-- [ ] **Step 1: Write the failing budget-gate test**
+- [x] **Step 1: Write the failing budget-gate test**
 
 ```python
 """CI gate: every bake-off scale file realizes its declared
@@ -842,7 +842,7 @@ def test_active_not_above_total(family, scale):
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_scale_budget.py -v`
 Expected: FAIL with `FileNotFoundError` for `600m_deepseek_v3.yaml`.
 
-- [ ] **Step 2: Write the scale file**
+- [x] **Step 2: Write the scale file**
 
 `configs/base/scale/600m_deepseek_v3.yaml` — sized by arch_params: total 592.1M (−1.32% vs budget), active ≈252M. MLA + 1 dense + 23 MoE layers + 1 MTP block. Overrides the family's V3-proxy MLA ranks and MoE sizes down to this budget; `alltoall` dispatcher (single-node 600M runs; the family default `flex`+DeepEP is a multi-node optimization).
 
@@ -880,17 +880,17 @@ base:
       enable_deepep: false
 ```
 
-- [ ] **Step 3: Run the budget test + sizing tool**
+- [x] **Step 3: Run the budget test + sizing tool**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_scale_budget.py -v && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python tools/size_check.py base/family=deepseek_v3 base/scale=600m_deepseek_v3`
 Expected: 2 PASSED; tool prints total 592,091,136 (−1.32%), active 252,352,512. If outside ±2%, adjust `moe.ffn_hidden_size` (each ±32 moves total by ≈ ±2.3M × 24) and re-run — do NOT change `non_embedding_params`.
 
-- [ ] **Step 4: Dry-run the full launcher path (CPU)**
+- [x] **Step 4: Dry-run the full launcher path (CPU)**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m launchers.train_megatron base/family=deepseek_v3 base/scale=600m_deepseek_v3 experiment=optim/adam training_regime=ablation_40x scheduler=wsd cluster=dev --dry-run`
 Expected: JSON payload with a `command` containing `--multi-latent-attention`, `--num-experts 16`, `--mtp-num-layers 1`, `--train-samples 5859375` (= 24e9/4096). If the champion diff step fails on a missing key, fix the scale yaml, not the launcher.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add configs/base/scale/600m_deepseek_v3.yaml tests/unit/test_scale_budget.py
@@ -909,7 +909,7 @@ EOF
 - Create: `configs/base/scale/600m_qwen3_next.yaml`
 - Modify: `tests/unit/test_scale_budget.py` (add pair)
 
-- [ ] **Step 1: Add the pair to `BAKEOFF_PAIRS` and watch it fail**
+- [x] **Step 1: Add the pair to `BAKEOFF_PAIRS` and watch it fail**
 
 ```python
 BAKEOFF_PAIRS = [
@@ -921,7 +921,7 @@ BAKEOFF_PAIRS = [
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_scale_budget.py -v`
 Expected: deepseek pair PASSES, qwen3_next pair FAILS (`FileNotFoundError`).
 
-- [ ] **Step 2: Write the family file**
+- [x] **Step 2: Write the family file**
 
 `configs/base/family/qwen3_next.yaml`. Mechanisms from the published Qwen3-Next release (hybrid GatedDeltaNet : full attention at 3:1, MoE with shared expert, QK-norm, 1M rotary base, partial RoPE 25%). Deliberate deviations, documented here: the MoE *router recipe* mirrors the deepseek_v3 family (sigmoid + seq_aux_loss + expert bias) so the bake-off isolates the mixer stack — a Qwen-faithful router is a follow-up ablation; MTP is omitted (composition of MTP with the experimental-attention spec path is unvalidated in this pin); the full-attention layers use standard Megatron attention (no per-head output gate) and standard RMSNorm (not zero-centered) — both are Qwen3-Next refinements with no native Megatron flag, accepted as approximations and noted in the protocol doc.
 
@@ -975,7 +975,7 @@ base:
     nominal_vocab_size: 151936
 ```
 
-- [ ] **Step 3: Write the scale file**
+- [x] **Step 3: Write the scale file**
 
 Sized by arch_params: total 594.9M (−0.84%), active ≈241M. 24 layers, 18 GDN + 6 attention (3:1), MoE on every layer.
 
@@ -1005,7 +1005,7 @@ base:
       router_topk: 4
 ```
 
-- [ ] **Step 4: Run budget test, sizing tool, dry-run**
+- [x] **Step 4: Run budget test, sizing tool, dry-run**
 
 Run:
 ```bash
@@ -1016,7 +1016,7 @@ cd /lustre/fast/fast/zqiu/slm-research
 ```
 Expected: 4 PASSED; total ≈ 594,939,712; dry-run command contains `--experimental-attention-variant gated_delta_net`, `--linear-attention-freq ([1]*3+[0]*1)*6`, `--num-experts 16`, and the same `--train-samples 5859375` as Task 4.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add configs/base/family/qwen3_next.yaml configs/base/scale/600m_qwen3_next.yaml tests/unit/test_scale_budget.py
@@ -1035,7 +1035,7 @@ EOF
 - Modify: `launchers/train_megatron.py` (function `build_torchrun_command`, lines 31–50)
 - Test: `tests/unit/test_entrypoint_selection.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """Entrypoint routing: base.model.entrypoint selects the per-rank module."""
@@ -1087,7 +1087,7 @@ def test_mamba_launcher_module_imports_without_megatron():
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_entrypoint_selection.py -v`
 Expected: all 4 FAIL (no module / no routing).
 
-- [ ] **Step 2: Write `launchers/pretrain_mamba_slm.py`**
+- [x] **Step 2: Write `launchers/pretrain_mamba_slm.py`**
 
 ```python
 """Per-rank Megatron Mamba/hybrid entrypoint for slm-research.
@@ -1170,7 +1170,7 @@ if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Route the entrypoint in `build_torchrun_command`**
+- [x] **Step 3: Route the entrypoint in `build_torchrun_command`**
 
 In `launchers/train_megatron.py`, add above `build_torchrun_command`:
 
@@ -1212,14 +1212,14 @@ def build_torchrun_command(cfg) -> list[str]:
     return cmd
 ```
 
-- [ ] **Step 4: Cross-check the mirror against the pin, then run tests**
+- [x] **Step 4: Cross-check the mirror against the pin, then run tests**
 
 Open `third_party/Megatron-LM/pretrain_mamba.py` `__main__` block (lines ~346–366) and verify the mirror passes the same five positional/keyword args (datasets provider, `partial(model_provider, mamba_builder)`, `ModelType.encoder_or_decoder`, `forward_step`, `args_defaults`/`store`/`extra_args_provider`) — reconcile the mirror if the pin differs from the code above; the pin is the source of truth.
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_entrypoint_selection.py tests/unit/test_train_megatron_command.py -v`
 Expected: new 4 PASSED; existing command tests still green (default path unchanged).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add launchers/pretrain_mamba_slm.py launchers/train_megatron.py tests/unit/test_entrypoint_selection.py
@@ -1238,7 +1238,7 @@ EOF
 - Create: `configs/base/scale/600m_nemotron_h.yaml`
 - Modify: `tests/unit/test_scale_budget.py` (add pair + pattern-shape test)
 
-- [ ] **Step 1: Add the failing budget entry and a pattern-shape test**
+- [x] **Step 1: Add the failing budget entry and a pattern-shape test**
 
 In `tests/unit/test_scale_budget.py`:
 
@@ -1263,7 +1263,7 @@ def test_nemotron_pattern_shape():
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_scale_budget.py -v`
 Expected: nemotron entries FAIL (`FileNotFoundError`), others PASS.
 
-- [ ] **Step 2: Write the family file**
+- [x] **Step 2: Write the family file**
 
 ```yaml
 # @package _global_
@@ -1295,7 +1295,7 @@ base:
     nominal_vocab_size: 128256
 ```
 
-- [ ] **Step 3: Write the scale file**
+- [x] **Step 3: Write the scale file**
 
 Sized by arch_params: total 604.8M (+0.81%). 48 layers = 24 Mamba2 + 20 squared-ReLU MLP + 4 attention (≈8% attention, Nemotron-H ratio). The pattern string is `"M-M-M-M-M*M-" * 4`; the shape test in Step 1 guards the hand-expanded literal.
 
@@ -1320,7 +1320,7 @@ base:
     hybrid_layer_pattern: "M-M-M-M-M*M-M-M-M-M-M*M-M-M-M-M-M*M-M-M-M-M-M*M-"
 ```
 
-- [ ] **Step 4: Run budget + shape tests, sizing tool, dry-run**
+- [x] **Step 4: Run budget + shape tests, sizing tool, dry-run**
 
 Run:
 ```bash
@@ -1332,7 +1332,7 @@ cd /lustre/fast/fast/zqiu/slm-research
 ```
 Expected: the one-liner prints the exact pattern string for the YAML (48, 24, 20, 4) — if it differs from the literal in Step 3, fix the YAML to match the printed string; all tests PASS; total ≈ 604,840,000; dry-run command contains `-m launchers.pretrain_mamba_slm`, `--hybrid-layer-pattern`, `--squared-relu`, `--position-embedding-type none`, no `--rotary-base`, no `--mtp-num-layers`, same `--train-samples 5859375`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add configs/base/family/nemotron_h.yaml configs/base/scale/600m_nemotron_h.yaml tests/unit/test_scale_budget.py
@@ -1349,7 +1349,7 @@ EOF
 **Files:**
 - Create: `tests/integration/test_megatron_pin_features.py`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```python
 """Pin guard: the bake-off families rely on these Megatron CLI args existing
@@ -1399,12 +1399,12 @@ def test_pin_exposes_family_flags():
     assert not missing, f"pin lacks expected args: {missing}"
 ```
 
-- [ ] **Step 2: Run it with the cluster env**
+- [x] **Step 2: Run it with the cluster env**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && source load_cuda13_2_nccl_env.sh && PYTHONPATH=third_party/Megatron-LM /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/integration/test_megatron_pin_features.py -v`
 Expected: 1 PASSED (or SKIPPED if transformer_engine cannot load on the current node — in that case run it on a compute node before the GPU smoke in Task 11; do not proceed to Task 11 without a PASS).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/integration/test_megatron_pin_features.py
@@ -1421,7 +1421,7 @@ EOF
 **Files:**
 - Create: `scripts/train_bakeoff_600m.sh`
 
-- [ ] **Step 1: Write the script**
+- [x] **Step 1: Write the script**
 
 ```bash
 #!/usr/bin/env bash
@@ -1460,7 +1460,7 @@ python -m launchers.train_megatron \
   "$@"
 ```
 
-- [ ] **Step 2: Dry-run all four families through the script**
+- [x] **Step 2: Dry-run all four families through the script**
 
 Run:
 ```bash
@@ -1471,7 +1471,7 @@ done
 ```
 Expected: four JSON payloads, each with run_name `adam-<family>-<scale>-s42-<ts>`; identical `--train-samples` across all four; nemotron's command uses `launchers.pretrain_mamba_slm`. (If `python` in the sourced env lacks the repo deps, prefix with the venv path as in earlier tasks.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add scripts/train_bakeoff_600m.sh
@@ -1490,7 +1490,7 @@ EOF
 - Create: `docs/adding_a_family.md`
 - Modify: `CHANGELOG.md` (prepend entry)
 
-- [ ] **Step 1: Write `docs/experiments/arch_bakeoff_600m.md`**
+- [x] **Step 1: Write `docs/experiments/arch_bakeoff_600m.md`**
 
 ```markdown
 # Architecture-family bake-off @ 600M (2026-06)
@@ -1558,7 +1558,7 @@ and run the 1.2B gate.
 | nemotron_h | | | | |
 ```
 
-- [ ] **Step 2: Write `docs/adding_a_family.md`**
+- [x] **Step 2: Write `docs/adding_a_family.md`**
 
 ```markdown
 # Adding an architecture family
@@ -1615,7 +1615,7 @@ tweak the dims.
    separately) before any real run.
 ```
 
-- [ ] **Step 3: Prepend a CHANGELOG entry**
+- [x] **Step 3: Prepend a CHANGELOG entry**
 
 Prepend under the changelog's top heading, matching the file's existing entry format:
 
@@ -1633,7 +1633,7 @@ Prepend under the changelog's top heading, matching the file's existing entry fo
   protocol in docs/experiments/arch_bakeoff_600m.md.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/experiments/arch_bakeoff_600m.md docs/adding_a_family.md CHANGELOG.md
