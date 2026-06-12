@@ -1,0 +1,31 @@
+# @package _global_
+# DeepSeek-V3 mechanisms realized at the 600M non-embedding budget
+# (arch bake-off; docs/experiments/arch_bakeoff_600m.md). Sized by
+# tools/size_check.py: total 592.1M (-1.3%), active ~252M (MoE topk=4/16).
+base:
+  scale: "600m_deepseek_v3"
+  non_embedding_params: 600_000_000
+  model:
+    num_layers: 24
+    hidden_size: 1024
+    ffn_hidden_size: 2816          # dense layer(s) only (layer 0)
+    num_attention_heads: 16
+    num_query_groups: 16           # MLA path; no GQA grouping
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true
+    q_lora_rank: 384
+    kv_lora_rank: 256
+    qk_head_dim: 64
+    qk_pos_emb_head_dim: 32
+    v_head_dim: 64
+    moe:
+      num_experts: 16
+      layer_freq: "([0]*1+[1]*23)"
+      ffn_hidden_size: 384
+      shared_expert_intermediate_size: 768
+      router_topk: 4
+      router_group_topk: null      # n-group routing off at this expert count
+      router_num_groups: null
+      token_dispatcher_type: "alltoall"
+      enable_deepep: false
