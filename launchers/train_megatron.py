@@ -28,7 +28,19 @@ def _launch_nnodes() -> int:
     return 1
 
 
+_ENTRYPOINT_MODULES = {
+    "gpt": "launchers.pretrain_gpt_slm",
+    "mamba": "launchers.pretrain_mamba_slm",
+}
+
+
 def build_torchrun_command(cfg) -> list[str]:
+    entrypoint = str(cfg.base.model.get("entrypoint", "gpt"))
+    if entrypoint not in _ENTRYPOINT_MODULES:
+        raise ValueError(
+            f"Unknown base.model.entrypoint {entrypoint!r}; "
+            f"expected one of {sorted(_ENTRYPOINT_MODULES)}"
+        )
     cmd = [
         "torchrun",
         "--nproc_per_node",
@@ -42,7 +54,7 @@ def build_torchrun_command(cfg) -> list[str]:
         "--master_port",
         str(os.environ.get("MASTER_PORT", "6000")),
         "-m",
-        "launchers.pretrain_gpt_slm",
+        _ENTRYPOINT_MODULES[entrypoint],
         "--slm-config-path",
         os.fspath(Path(REPO_ROOT) / cfg._derived.run_dir / "resolved_config.yaml"),
     ]
