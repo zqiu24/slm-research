@@ -42,6 +42,39 @@ def total_tokens(tokens_per_param: float | int, non_embedding_params: int) -> in
     return int(round(float(tokens_per_param) * non_embedding_params))
 
 
+_TOKEN_SUFFIXES = {"K": 10**3, "M": 10**6, "B": 10**9, "T": 10**12}
+
+
+def parse_token_count(value: int | float | str) -> int:
+    """Parse an explicit token budget into an int token count.
+
+    Accepts plain numbers (``500_000_000``, ``5e9``) and human-friendly
+    suffixed strings (``"500M"``, ``"1B"``, ``"2.5b"``; K/M/B/T,
+    case-insensitive). Underscores and commas in strings are ignored.
+    Rejects non-positive results.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"token count must be a number or suffixed string, got {value!r}")
+    if isinstance(value, int | float):
+        tokens = int(round(value))
+    else:
+        text = str(value).strip().replace("_", "").replace(",", "")
+        if not text:
+            raise ValueError(f"token count is empty: {value!r}")
+        multiplier = _TOKEN_SUFFIXES.get(text[-1].upper())
+        if multiplier is not None:
+            text = text[:-1]
+        else:
+            multiplier = 1
+        try:
+            tokens = int(round(float(text) * multiplier))
+        except ValueError as exc:
+            raise ValueError(f"cannot parse token count {value!r}") from exc
+    if tokens <= 0:
+        raise ValueError(f"token count must be positive, got {value!r}")
+    return tokens
+
+
 def steps_from_tokens(
     total_tokens_: int,
     *,
