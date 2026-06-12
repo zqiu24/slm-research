@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — architecture-family bake-off infrastructure (2026-06-12)
+
+- `src/utils/arch_params.py` + budget gate (`tests/unit/test_scale_budget.py`):
+  families realize a declared non-embedding budget within ±2% (600M bake-off:
+  deepseek_v3 592.1M, qwen3_next 594.9M, nemotron_h 604.8M); `tools/size_check.py`
+  CLI for sizing new realizations.
+- `megatron_args`: GDN (`--experimental-attention-variant gated_delta_net`),
+  hybrid-mamba, squared-relu, and rope-conditional emission.
+- New `launchers/pretrain_mamba_slm.py` + `base.model.entrypoint` routing
+  (MambaModel path for nemotron_h; no MTP there by pin limitation).
+- New families `qwen3_next`, `nemotron_h`; scales `600m_{deepseek_v3,
+  qwen3_next,nemotron_h}`; `scripts/train_bakeoff_600m.sh`; protocol in
+  `docs/experiments/arch_bakeoff_600m.md`; guide in `docs/adding_a_family.md`.
+
 ### Added — fixed token budgets (dataset pinning across architectures)
 
 - `training.total_tokens` can now be set explicitly (config or CLI override;
