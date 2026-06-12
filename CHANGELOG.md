@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added — Megatron-Bridge submodule pin
+
+- Vendored [NVIDIA-NeMo/Megatron-Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge)
+  under `third_party/Megatron-Bridge`, pinned to `v0.4.2`
+  (`c810129341a84e58f4cbed3093f70668a088c028`) — the latest stable release
+  (2026-05-28; newer `26.04-alpha.rc*` tags are pre-releases). Same submodule +
+  pin-doc procedure as Megatron-LM/torchtitan; see `docs/megatron_bridge_pin.md`.
+
 ### Added — first-party DeepSeek-3Bv2 (MQA + sandwich-norm) port
 
 - Landed the Megatron-poet `DeepSeek-3Bv2-sandwich-mqa` architecture as a

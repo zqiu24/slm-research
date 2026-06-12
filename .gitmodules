@@ -4,3 +4,6 @@
 [submodule "third_party/torchtitan"]
 	path = third_party/torchtitan
 	url = https://github.com/pytorch/torchtitan.git
+[submodule "third_party/Megatron-Bridge"]
+	path = third_party/Megatron-Bridge
+	url = https://github.com/NVIDIA-NeMo/Megatron-Bridge.git
