@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 BAKEOFF_PAIRS = [
     ("deepseek_v3", "600m_deepseek_v3"),
+    ("qwen3_next", "600m_qwen3_next"),
 ]
 
 
