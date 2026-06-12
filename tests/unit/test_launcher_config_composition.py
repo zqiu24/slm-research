@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from launchers.submit import _parse_overrides
+from launchers.submit import _parse_overrides, resolve_config
 
 
 def test_parse_overrides_loads_defaults_and_data_axis():
@@ -54,3 +54,45 @@ def test_data_catalog_prefixes_point_at_bin_and_idx_files():
         assert not str(prefix).endswith(".idx")
         assert Path(str(prefix) + ".bin").exists(), f"{path} points at missing bin"
         assert Path(str(prefix) + ".idx").exists(), f"{path} points at missing idx"
+
+
+def test_fixed_regime_total_tokens_is_scale_independent():
+    def resolved(scale: str):
+        cfg = _parse_overrides(
+            [
+                "base/family=llama3",
+                f"base/scale={scale}",
+                "experiment=champion",
+                "training_regime=fixed_1b",
+                "cluster=h800_cn",
+            ]
+        )
+        resolve_config(cfg)
+        return cfg
+
+    small, large = resolved("60m"), resolved("300m")
+    assert int(small.training.total_tokens) == 1_000_000_000
+    assert int(large.training.total_tokens) == 1_000_000_000
+    assert small.training.tokens_per_param is None
+
+
+def test_all_fixed_regimes_parse_to_expected_budgets():
+    expected = {
+        "fixed_500m": 500_000_000,
+        "fixed_1b": 1_000_000_000,
+        "fixed_10b": 10_000_000_000,
+        "fixed_50b": 50_000_000_000,
+        "fixed_100b": 100_000_000_000,
+    }
+    for regime, budget in expected.items():
+        cfg = _parse_overrides(
+            [
+                "base/family=llama3",
+                "base/scale=60m",
+                "experiment=champion",
+                f"training_regime={regime}",
+                "cluster=h800_cn",
+            ]
+        )
+        resolve_config(cfg)
+        assert int(cfg.training.total_tokens) == budget, regime
