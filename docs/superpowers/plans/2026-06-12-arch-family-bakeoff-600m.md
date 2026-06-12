@@ -2,6 +2,22 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## STATUS (updated 2026-06-12) — resume at Task 11
+
+- **Tasks 1–10: DONE**, committed on `main` (`059df60..1a02375`, 2026-06-12). All CPU
+  verifications passed: budget gates (deepseek_v3 592,091,136 / qwen3_next 594,939,712 /
+  nemotron_h 604,840,000 — all within ±2% of 600M), all four families dry-run with
+  identical `--train-samples 5859375`, nemotron_h routes to `launchers.pretrain_mamba_slm`.
+- **Task 11 Step 1 (pin guard): DONE** — `tests/integration/test_megatron_pin_features.py`
+  PASSED 2026-06-12 (transformer_engine loaded, all 12 required CLI fields present in the pin).
+- **Remaining: Task 11 Steps 2–4 only** (GPU smoke → real 24B runs → results + verdict).
+  All GPU launches are the user's; commands are inline in Task 11 below.
+- Baseline correction for any future full-suite run: `pytest tests/unit -q` in the
+  `slm_env` venv has **25 pre-existing failures** (stale POET/nGPT/train_scripts/
+  patch-resolution tests; not the "2 known failures" cited below, which referred to a
+  torch-free subset in the cpu312 venv). The post-implementation run reproduced exactly
+  those 25 with 587 passed — zero regressions from this plan's commits.
+
 **Goal:** Make model architecture a swappable, budget-matched axis on the frozen dataset + training pipeline, implement three candidate families (DeepSeek-V3, Qwen3-Next-style, Nemotron-H-style) at a 600M non-embedding-parameter budget, and run a controlled bake-off to pick the base architecture for from-scratch pretraining.
 
 **Architecture:** The repo already splits `base/family` (architecture mechanisms) from `base/scale` (dimensions). This plan adds: (1) a CPU-only parameter-accounting module so every family realizes the *same* declared `non_embedding_params` budget within ±2% (the budget drives token count and the dataset cache key, so it must be identical across runs); (2) Megatron-arg emission for the two mechanisms not yet wired (GatedDeltaNet linear attention via the GPT path; Mamba2 hybrids via a new per-rank entrypoint mirroring the GPT one); (3) per-family 600M scale realizations plus a bake-off protocol. The pinned `third_party/Megatron-LM` (core_v0.17.0, SHA `9539a12e`) is **never edited** — everything lands in slm-research configs, `src/`, and launchers. No new monkey-patches are required: GDN and Mamba dims are auto-generated CLI flags from `TransformerConfig` dataclass fields in this pin.
@@ -1649,9 +1665,9 @@ EOF
 
 No file changes. CPU work is done; everything below runs on GPU and is the **user's to launch** (ask before any GPU smoke; never launch the 24B-token runs).
 
-- [ ] **Step 1: Confirm pin guard passed on a compute node** (Task 8 Step 2; rerun there if it skipped on the login node).
+- [x] **Step 1: Confirm pin guard passed on a compute node** (Task 8 Step 2; rerun there if it skipped on the login node). — PASSED 2026-06-12 (TE loaded, 1 passed in 98s; no rerun needed unless the submodule pin moves).
 
-- [ ] **Step 2: Hand over smoke commands (~30M tokens ≈ 7 steps each)**
+- [ ] **Step 2: Run the smoke commands (~30M tokens ≈ 7 steps each)** — logs land in `/lustre/home/zqiu/log/<NAME>.log` via codexlog
 
 ```bash
 cd /lustre/fast/fast/zqiu/slm-research
@@ -1662,15 +1678,20 @@ codexlog bakeoff-smoke-nemotron  bash scripts/train_bakeoff_600m.sh nemotron_h  
 
 Smoke pass criteria (check each log):
 - run reaches the first logged iterations and loss is finite and falling;
-- wandb_trainable_params total ≈ `tools/size_check.py` total + embedding params (±2%);
+- wandb_trainable_params total ≈ `tools/size_check.py` total + embedding params (±2%).
+  Reference non-embedding totals (verified 2026-06-12): deepseek_v3 592,091,136
+  (active 252,352,512), qwen3_next 594,939,712 (active 241,045,312), nemotron_h
+  604,840,000 (dense), qwen3 control 648,915,200 (declared-vs-realized drift is
+  expected on the control). Embeddings add vocab×hidden on top (tied).
 - nemotron run shows the MambaModel build (and no MTP/rotary flags);
+- `tokens_seen` appears in the nemotron smoke's W&B run (logging patches compose on the mamba path — see Risks);
 - known fallbacks if a smoke fails: `base.model.transformer_impl=local`
   (TE spec issue), `base.model.moe.grouped_gemm=false` (grouped-GEMM kernel
   issue), `base.model.attention_backend=auto` (flash-attn dispatch issue) —
   record whichever was needed in the experiment doc, applied identically to
   all families it affects.
 
-- [ ] **Step 3: Hand over the real bake-off commands (24B tokens each; user's call on cluster + timing)**
+- [ ] **Step 3: Launch the real bake-off runs (24B tokens each; only after all three smokes pass; user's call on cluster + timing)**
 
 ```bash
 codexlog bakeoff-600m-qwen3     bash scripts/train_bakeoff_600m.sh qwen3       cluster=h100_de
@@ -1678,6 +1699,10 @@ codexlog bakeoff-600m-deepseek  bash scripts/train_bakeoff_600m.sh deepseek_v3 c
 codexlog bakeoff-600m-qwen3next bash scripts/train_bakeoff_600m.sh qwen3_next  cluster=h100_de
 codexlog bakeoff-600m-nemotron  bash scripts/train_bakeoff_600m.sh nemotron_h  cluster=h100_de
 ```
+
+If a smoke needed one of the fallback overrides, append it identically to every
+family's real-run command it affects and record it in
+`docs/experiments/arch_bakeoff_600m.md` (fairness: same override everywhere).
 
 - [ ] **Step 4: After runs finish — fill the Results table in `docs/experiments/arch_bakeoff_600m.md`, apply the decision rule, and only then start the winner's `1_2b_<winner>.yaml` promotion (new plan).**
 
