@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — fixed token budgets (dataset pinning across architectures)
+
+- `training.total_tokens` can now be set explicitly (config or CLI override;
+  `"500M"`/`"1B"`-style strings accepted via `parse_token_count`) and takes
+  precedence over `tokens_per_param * non_embedding_params` (decay-only
+  resume's `decay_tokens` still ranks highest). This pins `--train-samples`
+  and hence the GPTDataset cache key, so near-scale architecture ablations
+  share one pre-built dataset and identical data amounts. New regimes:
+  `training_regime/fixed_{500m,1b,10b,50b,100b}`. Switching the data axis
+  (different tokenizer) still rebuilds into its own `runs/_data_cache/<name>`
+  at the same fixed budget.
+
 ### Added — Megatron-Bridge submodule pin
 
 - Vendored [NVIDIA-NeMo/Megatron-Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge)
