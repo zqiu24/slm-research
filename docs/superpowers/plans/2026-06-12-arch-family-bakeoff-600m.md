@@ -77,6 +77,8 @@ the wandb_trainable_params log compared during GPU smoke (±2%).
 
 from __future__ import annotations
 
+import pytest
+
 from src.utils.arch_params import (
     active_non_embedding_params,
     attention_params,
@@ -191,6 +193,20 @@ def test_dispatch_gdn_moe():
     assert active_non_embedding_params(model) == 3332
 
 
+def test_int_layer_freq_rejected():
+    # Megatron's int form means different things per field; configs must use
+    # explicit list-expression strings.
+    model = _dense_model() | {
+        "gdn": {
+            "enabled": True, "num_key_heads": 2, "key_head_dim": 4,
+            "num_value_heads": 4, "value_head_dim": 4, "conv_kernel_dim": 4,
+        },
+        "linear_attention_freq": 2,
+    }
+    with pytest.raises(ValueError):
+        non_embedding_params(model)
+
+
 def test_dispatch_hybrid_mamba():
     model = {
         "hidden_size": 8, "ffn_hidden_size": 16,
@@ -237,9 +253,18 @@ from typing import Any
 
 
 def _eval_pattern(freq: Any, num_layers: int) -> list[int]:
-    """Resolve a Megatron layer-frequency spec (int or python-list string)."""
+    """Resolve a Megatron layer-frequency python-list-expression string.
+
+    Integer frequencies are rejected on purpose: Megatron gives the int form
+    *different* semantics per field (linear_attention_freq N -> every Nth
+    layer is SDPA, training.py:539; moe_layer_freq differs again). Explicit
+    list-expression strings are unambiguous — use those in configs.
+    """
     if isinstance(freq, int):
-        return [1 if (i + 1) % freq == 0 else 0 for i in range(num_layers)]
+        raise ValueError(
+            f"int layer freq {freq!r} is ambiguous across Megatron fields; "
+            "use an explicit list expression string like '([1]*3+[0]*1)*6'"
+        )
     pattern = list(eval(str(freq), {}, {}))  # noqa: S307 - trusted repo config
     if len(pattern) != num_layers:
         raise ValueError(
@@ -464,7 +489,7 @@ def active_non_embedding_params(model: dict) -> int:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_arch_params.py -v`
-Expected: 11 PASSED
+Expected: 12 PASSED
 
 - [ ] **Step 5: Run ruff + the full unit suite for regressions**
 
@@ -858,7 +883,7 @@ base:
 - [ ] **Step 3: Run the budget test + sizing tool**
 
 Run: `cd /lustre/fast/fast/zqiu/slm-research && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_scale_budget.py -v && /lustre/fast/fast/zqiu/slm_env/.venv/bin/python tools/size_check.py base/family=deepseek_v3 base/scale=600m_deepseek_v3`
-Expected: 2 PASSED; tool prints total ≈ 592,092,160 (−1.32%), active ≈ 252,353,536. If outside ±2%, adjust `moe.ffn_hidden_size` (each ±32 moves total by ≈ ±2.3M × 24) and re-run — do NOT change `non_embedding_params`.
+Expected: 2 PASSED; tool prints total 592,091,136 (−1.32%), active 252,352,512. If outside ±2%, adjust `moe.ffn_hidden_size` (each ±32 moves total by ≈ ±2.3M × 24) and re-run — do NOT change `non_embedding_params`.
 
 - [ ] **Step 4: Dry-run the full launcher path (CPU)**
 
@@ -898,7 +923,7 @@ Expected: deepseek pair PASSES, qwen3_next pair FAILS (`FileNotFoundError`).
 
 - [ ] **Step 2: Write the family file**
 
-`configs/base/family/qwen3_next.yaml`. Mechanisms from the published Qwen3-Next release (hybrid GatedDeltaNet : full attention at 3:1, MoE with shared expert, QK-norm, 1M rotary base). Deliberate deviations, documented here: the MoE *router recipe* mirrors the deepseek_v3 family (sigmoid + seq_aux_loss + expert bias) so the bake-off isolates the mixer stack — a Qwen-faithful router is a follow-up ablation; MTP is omitted (composition of MTP with the experimental-attention spec path is unvalidated in this pin).
+`configs/base/family/qwen3_next.yaml`. Mechanisms from the published Qwen3-Next release (hybrid GatedDeltaNet : full attention at 3:1, MoE with shared expert, QK-norm, 1M rotary base, partial RoPE 25%). Deliberate deviations, documented here: the MoE *router recipe* mirrors the deepseek_v3 family (sigmoid + seq_aux_loss + expert bias) so the bake-off isolates the mixer stack — a Qwen-faithful router is a follow-up ablation; MTP is omitted (composition of MTP with the experimental-attention spec path is unvalidated in this pin); the full-attention layers use standard Megatron attention (no per-head output gate) and standard RMSNorm (not zero-centered) — both are Qwen3-Next refinements with no native Megatron flag, accepted as approximations and noted in the protocol doc.
 
 ```yaml
 # @package _global_
@@ -915,6 +940,7 @@ base:
     rotary_base: 1000000
     rotary_scaling: null
     qk_norm: true
+    rotary_percent: 0.25           # partial RoPE (published Qwen3-Next)
     attention_dropout: 0.0
     hidden_dropout: 0.0
     init_method_std: 0.02
@@ -1497,7 +1523,9 @@ have ~2.4x fewer active params per token — recorded, not equalized. LR is
 the optim/adam default for every family (per-family LR tuning is a
 follow-up sweep, not part of the controlled comparison). DeepSeek keeps its
 MTP head (family identity); its `lm loss` is the comparison metric, not the
-MTP auxiliary loss.
+MTP auxiliary loss. qwen3_next approximates the published model on its
+full-attention layers (no per-head output gate, standard rather than
+zero-centered RMSNorm — no native Megatron flags for either).
 
 **Launch.**
     bash scripts/train_bakeoff_600m.sh <family> cluster=<cluster>
