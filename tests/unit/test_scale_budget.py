@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BAKEOFF_PAIRS = [
     ("deepseek_v3", "600m_deepseek_v3"),
     ("qwen3_next", "600m_qwen3_next"),
+    ("nemotron_h", "600m_nemotron_h"),
 ]
 
 
@@ -38,3 +39,13 @@ def test_bakeoff_scale_within_budget(family, scale):
 def test_active_not_above_total(family, scale):
     model, _ = _merged_model(family, scale)
     assert active_non_embedding_params(model) <= non_embedding_params(model)
+
+
+def test_nemotron_pattern_shape():
+    model, _ = _merged_model("nemotron_h", "600m_nemotron_h")
+    pattern = str(model["hybrid_layer_pattern"])
+    assert len(pattern) == int(model["num_layers"]) == 48
+    assert pattern.count("M") == 24
+    assert pattern.count("-") == 20
+    assert pattern.count("*") == 4
+    assert set(pattern) <= {"M", "-", "*"}

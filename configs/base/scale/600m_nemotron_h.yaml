@@ -1,0 +1,18 @@
+# @package _global_
+# Nemotron-H mechanisms realized at the 600M non-embedding budget
+# (arch bake-off; docs/experiments/arch_bakeoff_600m.md). Sized by
+# tools/size_check.py: total 604.8M (+0.8%); dense (active == total).
+# Pattern = "M-M-M-M-M*M-" * 4 (24 M / 20 - / 4 *).
+base:
+  scale: "600m_nemotron_h"
+  non_embedding_params: 600_000_000
+  model:
+    num_layers: 48
+    hidden_size: 1280
+    ffn_hidden_size: 5632
+    num_attention_heads: 10
+    num_query_groups: 2            # GQA 5:1 on the 4 attention layers
+    head_dim: 128
+    seq_length: 4096
+    tie_embeddings: true
+    hybrid_layer_pattern: "M-M-M-M-M*M-M-M-M-M-M*M-M-M-M-M-M*M-M-M-M-M-M*M-"
