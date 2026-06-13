@@ -10,7 +10,10 @@
   is always registered (`_ALWAYS_ON_PATCHES`) but inert unless
   `training.log_weight_norms` is set (interval `log_weight_norms_interval`,
   layers `weight_norm_layers`). Wraps `train_step` as the OUTER wrapper so for
-  POET it reads the post-merge effective weight `W_eff`.
+  POET it reads the post-merge effective weight `W_eff`. Warns once if a POET
+  run's interval is not a multiple of `merge_period` (logs land only on merge
+  boundaries, so the effective cadence is the LCM — easy to silently get sparse
+  or zero logging otherwise).
 
 ### Added — architecture-family bake-off infrastructure (2026-06-12)
 

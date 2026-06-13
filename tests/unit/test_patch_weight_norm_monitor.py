@@ -250,3 +250,83 @@ def test_weight_norm_monitor_in_always_on_and_sorts_after_merge():
     assert "weight_norm_monitor" in _ALWAYS_ON_PATCHES
     # registry applies in sorted order; outer wrapper must sort AFTER poet_merge_step
     assert "weight_norm_monitor" > "poet_merge_step"
+
+
+def test_wrapper_warns_once_on_poet_cadence_misalignment(monkeypatch, caplog):
+    import logging
+    import sys
+    import types
+
+    import torch
+
+    # wandb is present but iter 5 is not a merge boundary, so should_log is False
+    # and the logging path is never reached — we are only exercising the warning.
+    fake_wandb = types.SimpleNamespace(
+        run=object(), log=lambda d, step=None: None, Histogram=lambda x: ("HIST", len(x))
+    )
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    mod = _FakeMod(torch.ones(2, 2))
+    model = [_FakeChunk([("decoder.layers.0.self_attention.linear_qkv", mod)])]
+
+    def orig_train_step(*a, **k):
+        return "ret"
+
+    # interval (5) is NOT a multiple of merge_period (400): effective cadence is
+    # lcm(5, 400) = 400, far sparser than the requested 5 -> warn (once).
+    opts = types.SimpleNamespace(
+        log_weight_norms=True,
+        log_weight_norms_interval=5,
+        weight_norm_layers="0",
+        num_layers=1,
+        poet=True,
+        poet_merge_period=400,
+    )
+
+    from src.patches.weight_norm_monitor import _wrapped_train_step_factory
+
+    wrapped = _wrapped_train_step_factory(orig_train_step, get_args=lambda: opts)
+    with caplog.at_level(logging.WARNING):
+        wrapped(None, None, model, None, None, None, None, 5)
+        wrapped(None, None, model, None, None, None, None, 10)  # second call: no new warning
+
+    cadence = [r for r in caplog.records if "is not a multiple of" in r.getMessage()]
+    assert len(cadence) == 1  # warn-once
+    assert "400" in cadence[0].getMessage()  # reports the effective lcm cadence
+
+
+def test_wrapper_no_cadence_warning_when_interval_is_multiple_of_merge_period(monkeypatch, caplog):
+    import logging
+    import sys
+    import types
+
+    import torch
+
+    fake_wandb = types.SimpleNamespace(
+        run=object(), log=lambda d, step=None: None, Histogram=lambda x: ("HIST", len(x))
+    )
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    mod = _FakeMod(torch.ones(2, 2))
+    model = [_FakeChunk([("decoder.layers.0.self_attention.linear_qkv", mod)])]
+
+    def orig_train_step(*a, **k):
+        return "ret"
+
+    # interval (800) IS a multiple of merge_period (400) -> aligned -> no warning
+    opts = types.SimpleNamespace(
+        log_weight_norms=True,
+        log_weight_norms_interval=800,
+        weight_norm_layers="0",
+        num_layers=1,
+        poet=True,
+        poet_merge_period=400,
+    )
+
+    from src.patches.weight_norm_monitor import _wrapped_train_step_factory
+
+    wrapped = _wrapped_train_step_factory(orig_train_step, get_args=lambda: opts)
+    with caplog.at_level(logging.WARNING):
+        wrapped(None, None, model, None, None, None, None, 400)
+
+    assert not [r for r in caplog.records if "is not a multiple of" in r.getMessage()]

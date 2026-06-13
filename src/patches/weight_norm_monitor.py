@@ -40,8 +40,9 @@ _SUFFIX_TO_TYPE = {
 }
 _LAYER_RE = re.compile(r"(?:^|\.)decoder\.layers\.(\d+)\.")
 
-# warn-once state for the POET merge_period=0 (frozen-base) corner case
-_state = {"warned_merge0": False}
+# warn-once state for the POET corner cases (frozen base; interval/merge_period
+# cadence misalignment)
+_state = {"warned_merge0": False, "warned_cadence": False}
 
 
 def parse_layer_selection(spec, num_layers: int) -> set[int]:
@@ -250,6 +251,27 @@ def _wrapped_train_step_factory(orig_train_step, get_args=None):
                     "weight-norm logging is a no-op (W_eff is not materialized)."
                 )
                 _state["warned_merge0"] = True
+
+            if (
+                poet
+                and merge_period > 0
+                and interval % merge_period != 0
+                and not _state["warned_cadence"]
+            ):
+                import math
+
+                eff = math.lcm(interval, merge_period)
+                logger.warning(
+                    "[WNORM] POET log_weight_norms_interval=%d is not a multiple of "
+                    "merge_period=%d; weight norms are read only on merge boundaries, "
+                    "so the effective logging cadence is %d steps (sparser than the "
+                    "requested interval). Set the interval to a multiple of "
+                    "merge_period for the intended cadence.",
+                    interval,
+                    merge_period,
+                    eff,
+                )
+                _state["warned_cadence"] = True
 
             if not should_log(iteration, interval, poet=poet, merge_period=merge_period):
                 return ret
