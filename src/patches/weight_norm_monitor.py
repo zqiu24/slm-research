@@ -140,3 +140,74 @@ def compute_matrix_norm_stats(weight) -> dict:
         "_row_rms_vec": row_rms,
         "_col_rms_vec": col_rms,
     }
+
+
+def collect_target_weights(model, selected_layers: set[int]) -> list:
+    """Walk the model and return ``[(layer_index, matrix_type, weight)]`` for the
+    qkv/proj/fc1/fc2 linears in ``selected_layers``. Reads each module's
+    ``.weight`` (the POET base alias == W_eff post-merge; the trained weight for
+    Adam/Muon). Non-2-D or missing weights are skipped.
+    """
+    chunks = model if isinstance(model, list) else [model]
+    out = []
+    for chunk in chunks:
+        for name, mod in chunk.named_modules():
+            cls = classify_linear(name)
+            if cls is None:
+                continue
+            layer_idx, mtype = cls
+            if layer_idx not in selected_layers:
+                continue
+            weight = getattr(mod, "weight", None)
+            if weight is None or getattr(weight, "dim", lambda: 0)() != 2:
+                continue
+            out.append((layer_idx, mtype, weight))
+    return out
+
+
+def _log_weight_norms(model, iteration: int, opts) -> None:
+    """Compute and log row/col norm summaries + per-layer RMS histograms.
+
+    Rank-gated implicitly: returns early unless a W&B run is active (Megatron
+    initializes ``wandb.run`` only on the logging rank). Never raises — callers
+    wrap it defensively, but we also guard here.
+    """
+    import torch
+
+    try:
+        import wandb
+    except Exception:
+        return
+    if getattr(wandb, "run", None) is None:
+        return
+
+    num_layers = int(getattr(opts, "num_layers", 0) or 0)
+    if num_layers <= 0:
+        return
+    spec = getattr(opts, "weight_norm_layers", "first,mid,last")
+    selected = parse_layer_selection(spec, num_layers)
+    if not selected:
+        return
+    targets = collect_target_weights(model, selected)
+    if not targets:
+        return
+
+    payload: dict = {}
+    pools: dict = {}  # layer_idx -> {"row": [vec...], "col": [vec...]}
+    with torch.no_grad():
+        for layer_idx, mtype, weight in targets:
+            stats = compute_matrix_norm_stats(weight)
+            prefix = f"weightnorm/L{layer_idx}/{mtype}"
+            for kind in ("row", "col", "row_rms", "col_rms"):
+                for stat_name, value in stats[kind].items():
+                    payload[f"{prefix}/{kind}/{stat_name}"] = value
+            pool = pools.setdefault(layer_idx, {"row": [], "col": []})
+            pool["row"].append(stats["_row_rms_vec"])
+            pool["col"].append(stats["_col_rms_vec"])
+        for layer_idx, pool in pools.items():
+            row_all = torch.cat(pool["row"]).cpu().numpy()
+            col_all = torch.cat(pool["col"]).cpu().numpy()
+            payload[f"weightnorm/L{layer_idx}/row_rms_hist"] = wandb.Histogram(row_all)
+            payload[f"weightnorm/L{layer_idx}/col_rms_hist"] = wandb.Histogram(col_all)
+
+    wandb.log(payload, step=iteration)

@@ -85,3 +85,83 @@ def test_compute_matrix_norm_stats_values_and_rms():
     # raw RMS vectors are returned for histogram pooling
     assert stats["_row_rms_vec"].shape == (2,)
     assert stats["_col_rms_vec"].shape == (3,)
+
+
+class _FakeMod:
+    def __init__(self, weight):
+        self.weight = weight
+
+
+class _FakeChunk:
+    """Minimal stand-in for a model chunk exposing named_modules()."""
+
+    def __init__(self, named):
+        self._named = named  # list[(name, module)]
+
+    def named_modules(self):
+        return iter(self._named)
+
+
+def _fake_model():
+    import torch
+
+    named = [
+        ("decoder.layers.0.self_attention.linear_qkv", _FakeMod(torch.ones(6, 4))),
+        ("decoder.layers.0.mlp.linear_fc1", _FakeMod(torch.ones(8, 4) * 2)),
+        ("decoder.layers.0.self_attention.linear_qkv.poet_linear", _FakeMod(torch.zeros(6, 4))),
+        ("decoder.layers.1.self_attention.linear_qkv", _FakeMod(torch.ones(6, 4) * 3)),
+        ("embedding.word_embeddings", _FakeMod(torch.ones(100, 4))),
+    ]
+    return [_FakeChunk(named)]
+
+
+def test_collect_target_weights_filters_to_selected_layers_and_types():
+    from src.patches.weight_norm_monitor import collect_target_weights
+
+    got = collect_target_weights(_fake_model(), {0})
+    labels = {(idx, mtype) for idx, mtype, _w in got}
+    # layer 0 qkv + fc1 only; the poet_linear child, layer 1, and embeddings dropped
+    assert labels == {(0, "qkv"), (0, "fc1")}
+
+
+def test_log_weight_norms_emits_scalars_and_per_layer_histograms(monkeypatch):
+    import sys
+    import types
+
+    captured = {}
+    fake_wandb = types.SimpleNamespace(
+        run=object(),
+        log=lambda d, step=None: captured.update(d),
+        Histogram=lambda x: ("HIST", len(x)),
+    )
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    opts = types.SimpleNamespace(num_layers=2, weight_norm_layers="0")
+    from src.patches.weight_norm_monitor import _log_weight_norms
+
+    _log_weight_norms(_fake_model(), iteration=100, opts=opts)
+
+    # scalar keys for both matrices in layer 0, all four kinds
+    assert "weightnorm/L0/qkv/row/mean" in captured
+    assert "weightnorm/L0/qkv/col_rms/max" in captured
+    assert "weightnorm/L0/fc1/row/mean" in captured
+    # per-layer pooled RMS histograms (one row + one col), tagged HIST
+    assert captured["weightnorm/L0/row_rms_hist"][0] == "HIST"
+    assert captured["weightnorm/L0/col_rms_hist"][0] == "HIST"
+    # pooled row histogram length = qkv rows (6) + fc1 rows (8) = 14
+    assert captured["weightnorm/L0/row_rms_hist"][1] == 14
+    # layer 1 was not selected -> no keys for it
+    assert not any(k.startswith("weightnorm/L1/") for k in captured)
+
+
+def test_log_weight_norms_noop_when_wandb_run_is_none(monkeypatch):
+    import sys
+    import types
+
+    fake_wandb = types.SimpleNamespace(run=None, log=lambda d, step=None: None)
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    opts = types.SimpleNamespace(num_layers=2, weight_norm_layers="0")
+    from src.patches.weight_norm_monitor import _log_weight_norms
+
+    # must not raise even though no run is active
+    _log_weight_norms(_fake_model(), iteration=100, opts=opts)
