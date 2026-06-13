@@ -158,10 +158,13 @@ def test_log_weight_norms_noop_when_wandb_run_is_none(monkeypatch):
     import sys
     import types
 
-    fake_wandb = types.SimpleNamespace(run=None, log=lambda d, step=None: None)
+    captured = {}
+    fake_wandb = types.SimpleNamespace(run=None, log=lambda d, step=None: captured.update(d))
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     opts = types.SimpleNamespace(num_layers=2, weight_norm_layers="0")
     from src.patches.weight_norm_monitor import _log_weight_norms
 
     # must not raise even though no run is active
     _log_weight_norms(_fake_model(), iteration=100, opts=opts)
+    # and must not have logged anything (the wandb.run is None guard short-circuits)
+    assert not captured, f"unexpected log calls: {list(captured)[:3]}"
