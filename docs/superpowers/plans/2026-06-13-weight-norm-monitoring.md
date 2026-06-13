@@ -32,70 +32,71 @@
 
 **Files:**
 - Modify: `launchers/pretrain_gpt_slm.py:145` (end of `add_slm_args`, before `return parser`)
-- Modify: `src/utils/megatron_args.py:610` (inside `_logging_args`, before `return args`)
+- Modify: `src/utils/megatron_args.py` — add a `_weight_norm_args` helper and call it from `_logging_args`
 - Test: `tests/unit/test_megatron_args.py`
+
+> **Why a separate helper (not an inline block in `_logging_args`):** `_logging_args` calls `wandb_run_name(cfg)`, which unconditionally reads `optim.type`, `experiment.name`, `base.family`, `base.scale`, and `optim.lr`. A test that called `_logging_args` with a minimal cfg would raise `KeyError` from `wandb_run_name`, not exercise our flags. A pure `_weight_norm_args(training)` helper is testable in isolation with just a `training` dict — matching the existing "minimal `OmegaConf.create` + call the sub-function directly" pattern used by `test_poet_argv_includes_cache_mode`.
 
 - [ ] **Step 1: Write the failing test**
 
 Append to `tests/unit/test_megatron_args.py`:
 
 ```python
-def test_logging_args_emit_weight_norm_flags_when_enabled():
+def test_weight_norm_args_emits_flags_when_enabled():
     from omegaconf import OmegaConf
 
-    from src.utils.megatron_args import _logging_args
+    from src.utils.megatron_args import _weight_norm_args
 
-    cfg = OmegaConf.create(
+    training = OmegaConf.create(
         {
-            "training": {
-                "log_weight_norms": True,
-                "log_weight_norms_interval": 50,
-                "weight_norm_layers": "first,last",
-            },
-            "wandb": {"project": "p"},
-            "_derived": {"run_dir": "runs/x"},
+            "log_weight_norms": True,
+            "log_weight_norms_interval": 50,
+            "weight_norm_layers": "first,last",
         }
     )
-    argv = _logging_args(cfg)
+    argv = _weight_norm_args(training)
     assert "--log-weight-norms" in argv
-    i = argv.index("--log-weight-norms-interval")
-    assert argv[i + 1] == "50"
-    j = argv.index("--weight-norm-layers")
-    assert argv[j + 1] == "first,last"
+    assert argv[argv.index("--log-weight-norms-interval") + 1] == "50"
+    assert argv[argv.index("--weight-norm-layers") + 1] == "first,last"
 
 
-def test_logging_args_omit_weight_norm_flags_by_default():
+def test_weight_norm_args_omits_flags_by_default():
     from omegaconf import OmegaConf
 
-    from src.utils.megatron_args import _logging_args
+    from src.utils.megatron_args import _weight_norm_args
 
-    cfg = OmegaConf.create(
-        {"training": {}, "wandb": {"project": "p"}, "_derived": {"run_dir": "runs/x"}}
-    )
-    argv = _logging_args(cfg)
-    assert "--log-weight-norms" not in argv
-    assert "--log-weight-norms-interval" not in argv
-    assert "--weight-norm-layers" not in argv
+    assert _weight_norm_args(OmegaConf.create({})) == []
+    # bool false also emits nothing
+    assert _weight_norm_args(OmegaConf.create({"log_weight_norms": False})) == []
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_megatron_args.py::test_logging_args_emit_weight_norm_flags_when_enabled -v`
-Expected: FAIL — `--log-weight-norms` not in argv.
+Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_megatron_args.py::test_weight_norm_args_emits_flags_when_enabled -v`
+Expected: FAIL — `cannot import name '_weight_norm_args'`.
 
-- [ ] **Step 3: Emit the flags in `_logging_args`**
+- [ ] **Step 3: Add the `_weight_norm_args` helper and call it from `_logging_args`**
 
-In `src/utils/megatron_args.py`, immediately before `return args` at the end of `_logging_args` (currently [line 614](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L614)), add:
+In `src/utils/megatron_args.py`, add this helper just above `def _logging_args(` (currently [line 562](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L562)):
 
 ```python
-    # Weight-norm monitoring (consumed by the weight_norm_monitor patch).
-    _maybe_bool(args, "--log-weight-norms", cfg.training.get("log_weight_norms", False))
-    wn_interval = cfg.training.get("log_weight_norms_interval", None)
-    if wn_interval is not None:
-        _add(args, "--log-weight-norms-interval", wn_interval)
-    wn_layers = cfg.training.get("weight_norm_layers", None)
-    if wn_layers is not None:
-        _add(args, "--weight-norm-layers", wn_layers)
+def _weight_norm_args(training: DictConfig) -> list[str]:
+    """Emit the weight_norm_monitor flags from the `training` config block."""
+    args: list[str] = []
+    _maybe_bool(args, "--log-weight-norms", training.get("log_weight_norms", False))
+    interval = training.get("log_weight_norms_interval", None)
+    if interval is not None:
+        _add(args, "--log-weight-norms-interval", interval)
+    layers = training.get("weight_norm_layers", None)
+    if layers is not None:
+        _add(args, "--weight-norm-layers", layers)
+    return args
+```
+
+Then, inside `_logging_args`, immediately before `return args` (currently [line 614](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L614)), add:
+
+```python
+    args.extend(_weight_norm_args(cfg.training))
 ```
 
 - [ ] **Step 4: Add the argparse flags**
@@ -161,13 +162,20 @@ def test_parse_layer_selection_keywords_and_indices():
     assert parse_layer_selection(" first , 3 ", 12) == {0, 3}  # whitespace tolerant
 
 
-def test_classify_linear_matches_four_types_and_skips_others():
+def test_classify_linear_matches_fused_and_unfused_types_and_skips_others():
     from src.patches.weight_norm_monitor import classify_linear
 
+    # fused names
     assert classify_linear("decoder.layers.5.self_attention.linear_qkv") == (5, "qkv")
     assert classify_linear("decoder.layers.0.self_attention.linear_proj") == (0, "proj")
     assert classify_linear("module.decoder.layers.3.mlp.linear_fc1") == (3, "fc1")
     assert classify_linear("decoder.layers.7.mlp.linear_fc2") == (7, "fc2")
+    # unfused names (--unfuse-qkv / --unfuse-fc1, e.g. head-aligned POET configs)
+    assert classify_linear("decoder.layers.2.self_attention.linear_q") == (2, "q")
+    assert classify_linear("decoder.layers.2.self_attention.linear_k") == (2, "k")
+    assert classify_linear("decoder.layers.2.self_attention.linear_v") == (2, "v")
+    assert classify_linear("decoder.layers.4.mlp.linear_fc1_gate") == (4, "fc1_gate")
+    assert classify_linear("decoder.layers.4.mlp.linear_fc1_up") == (4, "fc1_up")
     # POET base-weight child module is NOT matched (name doesn't end in a type suffix)
     assert classify_linear("decoder.layers.5.self_attention.linear_qkv.poet_linear") is None
     # embeddings / lm_head / norms not matched
@@ -226,11 +234,19 @@ from src.patches._registry import register_patch
 
 logger = logging.getLogger(__name__)
 
-# module-name suffix -> short matrix-type label
+# module-name suffix -> short matrix-type label. Covers both the fused mcore
+# names and the unfused variants produced by --unfuse-qkv / --unfuse-fc1 (used by
+# some POET configs, e.g. head-aligned attention). A module name ends in exactly
+# one of these, so endswith matching is unambiguous.
 _SUFFIX_TO_TYPE = {
     "self_attention.linear_qkv": "qkv",
+    "self_attention.linear_q": "q",
+    "self_attention.linear_k": "k",
+    "self_attention.linear_v": "v",
     "self_attention.linear_proj": "proj",
     "mlp.linear_fc1": "fc1",
+    "mlp.linear_fc1_gate": "fc1_gate",
+    "mlp.linear_fc1_up": "fc1_up",
     "mlp.linear_fc2": "fc2",
 }
 _LAYER_RE = re.compile(r"(?:^|\.)decoder\.layers\.(\d+)\.")
@@ -269,9 +285,9 @@ def parse_layer_selection(spec, num_layers: int) -> set[int]:
 def classify_linear(name: str):
     """Map a module name to ``(layer_index, matrix_type)`` or ``None``.
 
-    Matches the four transformer linears (qkv/proj/fc1/fc2) by suffix. The POET
-    base-weight child (``...linear_qkv.poet_linear``), embeddings, lm_head and
-    norms do not match.
+    Matches the transformer linears by suffix — fused (qkv/proj/fc1/fc2) and the
+    unfused variants (q/k/v, fc1_gate/fc1_up). The POET base-weight child
+    (``...linear_qkv.poet_linear``), embeddings, lm_head and norms do not match.
     """
     m = _LAYER_RE.search(name)
     if not m:
@@ -851,6 +867,10 @@ W&B keys to overlay across the three runs:
 weightnorm/L{i}/{qkv,proj,fc1,fc2}/{row,col,row_rms,col_rms}/{mean,std,min,max}
 weightnorm/L{i}/{row,col}_rms_hist
 ```
+Note: runs built with `--unfuse-qkv` / `--unfuse-fc1` emit `q,k,v` instead of `qkv`
+and `fc1_gate,fc1_up` instead of `fc1`. For a clean 1:1 overlay, keep the same
+fusion setting across the POET/Muon/Adam configs you compare; the RMS scalars and
+per-layer histograms still line up regardless.
 
 ---
 

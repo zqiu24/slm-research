@@ -30,13 +30,18 @@ blocks — default **first / middle / last** = `{0, L//2, L-1}` — configurable
 `first,mid,last`). This is cheaper than all-layers and preserves depth
 resolution among the chosen few.
 
-Within each selected layer we measure its four transformer linears, matched by
-name substring:
+Within each selected layer we measure its transformer linears, matched by name
+suffix:
 
-- `qkv` — attention QKV projection
+- `qkv` — attention QKV projection (fused)
 - `proj` — attention output projection
-- `fc1` — MLP up/gate projection
+- `fc1` — MLP up/gate projection (fused)
 - `fc2` — MLP down projection
+
+Configs built with `--unfuse-qkv` / `--unfuse-fc1` (e.g. head-aligned POET) expose
+the unfused variants instead, which we also match: `q`/`k`/`v` (for qkv) and
+`fc1_gate`/`fc1_up` (for fc1). Keys then carry those labels; keep the same fusion
+setting across compared runs for a clean 1:1 overlay.
 
 Token embeddings, `lm_head`/output layer, and layernorms are **excluded**.
 
