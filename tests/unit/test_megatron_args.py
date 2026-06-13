@@ -1175,3 +1175,31 @@ def test_fixed_total_tokens_pins_train_samples_across_scales_and_data():
     assert c["--train-samples"] == a["--train-samples"]
     assert c["--data-path"] != a["--data-path"]
     assert c["--data-cache-path"] != a["--data-cache-path"]
+
+
+def test_weight_norm_args_emits_flags_when_enabled():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _weight_norm_args
+
+    training = OmegaConf.create(
+        {
+            "log_weight_norms": True,
+            "log_weight_norms_interval": 50,
+            "weight_norm_layers": "first,last",
+        }
+    )
+    argv = _weight_norm_args(training)
+    assert "--log-weight-norms" in argv
+    assert argv[argv.index("--log-weight-norms-interval") + 1] == "50"
+    assert argv[argv.index("--weight-norm-layers") + 1] == "first,last"
+
+
+def test_weight_norm_args_omits_flags_by_default():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _weight_norm_args
+
+    assert _weight_norm_args(OmegaConf.create({})) == []
+    # bool false also emits nothing
+    assert _weight_norm_args(OmegaConf.create({"log_weight_norms": False})) == []

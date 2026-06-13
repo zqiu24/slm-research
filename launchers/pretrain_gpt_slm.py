@@ -145,6 +145,10 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         action="store_true",
         help="Force LR warmup steps to 0 (matches reference train.py:114)",
     )
+    # Weight-matrix row/column norm monitoring (weight_norm_monitor patch).
+    group.add_argument("--log-weight-norms", action="store_true")
+    group.add_argument("--log-weight-norms-interval", type=int, default=100)
+    group.add_argument("--weight-norm-layers", type=str, default="first,mid,last")
     return parser
 
 

@@ -562,6 +562,19 @@ def _data_args(cfg: DictConfig) -> list[str]:
     return args
 
 
+def _weight_norm_args(training: DictConfig) -> list[str]:
+    """Emit the weight_norm_monitor flags from the `training` config block."""
+    args: list[str] = []
+    _maybe_bool(args, "--log-weight-norms", training.get("log_weight_norms", False))
+    interval = training.get("log_weight_norms_interval", None)
+    if interval is not None:
+        _add(args, "--log-weight-norms-interval", interval)
+    layers = training.get("weight_norm_layers", None)
+    if layers is not None:
+        _add(args, "--weight-norm-layers", layers)
+    return args
+
+
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
     archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
@@ -614,6 +627,7 @@ def _logging_args(cfg: DictConfig) -> list[str]:
     if resume:
         _add(args, "--finetune")
         _add(args, "--override-opt-param-scheduler")
+    args.extend(_weight_norm_args(cfg.training))
     return args
 
 
