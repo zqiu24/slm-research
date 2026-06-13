@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 import re
 
+from src.patches._registry import register_patch
+
 logger = logging.getLogger(__name__)
 
 # module-name suffix -> short matrix-type label. Covers both the fused mcore
@@ -211,3 +213,61 @@ def _log_weight_norms(model, iteration: int, opts) -> None:
             payload[f"weightnorm/L{layer_idx}/col_rms_hist"] = wandb.Histogram(col_all)
 
     wandb.log(payload, step=iteration)
+
+
+def _wrapped_train_step_factory(orig_train_step, get_args=None):
+    """Build the outer train_step wrapper. ``get_args`` is injectable for testing;
+    in production it is imported lazily from Megatron at call time.
+
+    Calls the inner train_step FIRST (running optimizer.step and, for POET, the
+    periodic merge), then — on a logging step — reads and logs the post-step
+    weights. Wrapped in try/except: diagnostics must never break training.
+    """
+
+    def _wrapped(*args, **kwargs):
+        ret = orig_train_step(*args, **kwargs)
+        try:
+            _get_args = get_args
+            if _get_args is None:
+                from megatron.training import get_args as _get_args  # type: ignore
+            opts = _get_args()
+            if not getattr(opts, "log_weight_norms", False):
+                return ret
+
+            iteration = kwargs.get("iteration")
+            if iteration is None and len(args) >= 8:
+                iteration = args[7]
+            if iteration is None:
+                iteration = getattr(opts, "iteration", 0)
+
+            interval = int(getattr(opts, "log_weight_norms_interval", 100))
+            poet = bool(getattr(opts, "poet", False))
+            merge_period = int(getattr(opts, "poet_merge_period", 0))
+
+            if poet and merge_period <= 0 and not _state["warned_merge0"]:
+                logger.warning(
+                    "[WNORM] POET with merge_period=0: base weight is frozen; "
+                    "weight-norm logging is a no-op (W_eff is not materialized)."
+                )
+                _state["warned_merge0"] = True
+
+            if not should_log(iteration, interval, poet=poet, merge_period=merge_period):
+                return ret
+
+            model = args[2] if len(args) >= 3 else kwargs.get("model")
+            if model is None:
+                logger.warning("[WNORM] model not found in train_step args; skipping")
+                return ret
+            _log_weight_norms(model, iteration, opts)
+        except Exception:  # diagnostics must never break training
+            logger.exception("[WNORM] weight-norm logging failed; continuing")
+        return ret
+
+    return _wrapped
+
+
+@register_patch(name="weight_norm_monitor", targets=())
+def apply() -> None:
+    from megatron.training import training as _mt
+
+    _mt.train_step = _wrapped_train_step_factory(_mt.train_step)

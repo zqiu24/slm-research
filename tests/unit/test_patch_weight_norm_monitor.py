@@ -168,3 +168,85 @@ def test_log_weight_norms_noop_when_wandb_run_is_none(monkeypatch):
     _log_weight_norms(_fake_model(), iteration=100, opts=opts)
     # and must not have logged anything (the wandb.run is None guard short-circuits)
     assert not captured, f"unexpected log calls: {list(captured)[:3]}"
+
+
+def test_wrapper_logs_after_inner_train_step_with_post_step_weights(monkeypatch):
+    """The wrapper must call the inner train_step FIRST (so POET's merge has run)
+    and only THEN read weights — i.e. it logs the post-step weight values."""
+    import sys
+    import types
+
+    import torch
+
+    captured = {}
+    fake_wandb = types.SimpleNamespace(
+        run=object(),
+        log=lambda d, step=None: captured.update({"_step": step, **d}),
+        Histogram=lambda x: ("HIST", len(x)),
+    )
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+
+    # one selected layer-0 qkv weight; inner step "merges" by scaling it to 5.0
+    mod = _FakeMod(torch.ones(2, 2))
+    model = [_FakeChunk([("decoder.layers.0.self_attention.linear_qkv", mod)])]
+
+    def orig_train_step(*args, **kwargs):
+        mod.weight = torch.ones(2, 2) * 5.0  # simulate the post-step / post-merge value
+        return ("loss", "skipped", "grad", "extra")
+
+    opts = types.SimpleNamespace(
+        log_weight_norms=True,
+        log_weight_norms_interval=10,
+        weight_norm_layers="0",
+        num_layers=1,
+        poet=False,
+        poet_merge_period=0,
+    )
+
+    from src.patches.weight_norm_monitor import _wrapped_train_step_factory
+
+    wrapped = _wrapped_train_step_factory(orig_train_step, get_args=lambda: opts)
+    # train_step positional args: (..., model=args[2], ..., iteration=args[7])
+    ret = wrapped(None, None, model, None, None, None, None, 10)
+
+    assert ret == ("loss", "skipped", "grad", "extra")  # pass-through unchanged
+    assert captured["_step"] == 10
+    # row norm of a [5,5] row = sqrt(50); reads the POST-step weight, not the pre-step ones
+    assert captured["weightnorm/L0/qkv/row/max"] == pytest.approx(50.0**0.5)
+
+
+def test_wrapper_is_noop_when_flag_off(monkeypatch):
+    import types
+
+    calls = {"n": 0}
+
+    def orig_train_step(*a, **k):
+        calls["n"] += 1
+        return "ret"
+
+    opts = types.SimpleNamespace(log_weight_norms=False)
+    from src.patches.weight_norm_monitor import _wrapped_train_step_factory
+
+    wrapped = _wrapped_train_step_factory(orig_train_step, get_args=lambda: opts)
+    assert wrapped(None, None, None) == "ret"
+    assert calls["n"] == 1  # inner still runs; logging skipped
+
+
+def test_patch_registers_with_empty_targets():
+    import importlib
+
+    from src.patches import registered_patches
+
+    importlib.import_module("src.patches.weight_norm_monitor")
+    reg = registered_patches()
+    assert "weight_norm_monitor" in reg
+    # targets=() so it composes with poet_merge_step's train_step wrapper
+    assert reg["weight_norm_monitor"].targets == ()
+
+
+def test_weight_norm_monitor_in_always_on_and_sorts_after_merge():
+    from launchers.pretrain_gpt_slm import _ALWAYS_ON_PATCHES
+
+    assert "weight_norm_monitor" in _ALWAYS_ON_PATCHES
+    # registry applies in sorted order; outer wrapper must sort AFTER poet_merge_step
+    assert "weight_norm_monitor" > "poet_merge_step"

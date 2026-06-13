@@ -176,6 +176,7 @@ _ALWAYS_ON_PATCHES = (
     "overfit_single_batch",
     "poet_grad_conditioning",
     "grad_conditioning",
+    "weight_norm_monitor",
 )
 
 
