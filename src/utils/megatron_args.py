@@ -474,6 +474,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: first-vs-second moment for the lie_ortho optimizer.
         if poet.get("lie_ortho_use_second_moment", False):
             poet_args.append("--poet-lie-ortho-use-second-moment")
+        # store_true: Muon-style Nesterov look-ahead on the lie_ortho skew direction.
+        if poet.get("lie_ortho_nesterov", False):
+            poet_args.append("--poet-lie-ortho-nesterov")
         if poet.get("lie_ortho_distributed", False):
             poet_args.append("--poet-lie-ortho-distributed")
         # store_true: head-aligned attention rotation (requires unfused q/k/v).

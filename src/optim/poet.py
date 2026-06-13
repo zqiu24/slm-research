@@ -601,11 +601,13 @@ def get_megatron_poet_lie_momentum_optimizer(
         _dp_rank = mpu.get_data_parallel_rank() if _lie_ortho_distributed else 0
         _dp_group = mpu.get_data_parallel_group() if _lie_ortho_distributed else None
         logger.info(
-            "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s, distributed=%s",
+            "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s, "
+            "nesterov=%s, distributed=%s",
             getattr(config, "poet_lie_ortho_method", "muon"),
             getattr(config, "poet_lie_ortho_c", 0.01),
             getattr(config, "poet_lie_ortho_ns_steps", 5),
             getattr(config, "poet_lie_ortho_use_second_moment", False),
+            getattr(config, "poet_lie_ortho_nesterov", False),
             _lie_ortho_distributed,
         )
         if _lie_ortho_distributed:
@@ -619,6 +621,7 @@ def get_megatron_poet_lie_momentum_optimizer(
             ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
             ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
             ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
+            nesterov=getattr(config, "poet_lie_ortho_nesterov", False),
             distributed=_lie_ortho_distributed,
             true_single_side=getattr(config, "poet_single_step_x_alternating", False),
             dp_world_size=_dp_world,
