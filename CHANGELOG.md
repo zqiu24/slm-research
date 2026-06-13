@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added — weight-matrix norm monitoring (2026-06-13)
+
+- New `weight_norm_monitor` patch: logs row/column L2-norm summaries (+ per-layer
+  RMS histograms) of the qkv/proj/fc1/fc2 weights for a few layers to W&B,
+  enabling POET vs Muon vs Adam weight-norm comparison without weight decay. It
+  is always registered (`_ALWAYS_ON_PATCHES`) but inert unless
+  `training.log_weight_norms` is set (interval `log_weight_norms_interval`,
+  layers `weight_norm_layers`). Wraps `train_step` as the OUTER wrapper so for
+  POET it reads the post-merge effective weight `W_eff`.
+
 ### Added — architecture-family bake-off infrastructure (2026-06-12)
 
 - `src/utils/arch_params.py` + budget gate (`tests/unit/test_scale_budget.py`):
