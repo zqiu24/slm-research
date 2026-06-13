@@ -20,15 +20,17 @@ set -uo pipefail
 #   bash scripts/run_bakeoff_600m_full.sh base.model.attention_backend=auto
 #
 # Knobs (env vars):
-#   CLUSTER       target cluster config        (default: h100_de)
-#   FAMILIES      space-separated subset/order  (default: qwen3 deepseek_v3 qwen3_next nemotron_h)
-#   STOP_ON_FAIL  abort the chain on first failed run (default: 0 = continue)
+#   CLUSTER        target cluster config        (default: h100_de)
+#   FAMILIES       space-separated subset/order  (default: qwen3 deepseek_v3 qwen3_next nemotron_h)
+#   WANDB_PROJECT  shared W&B project for all four (default: slm-<user>-arch)
+#   STOP_ON_FAIL   abort the chain on first failed run (default: 0 = continue)
 
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SLM_REPO"
 
 CLUSTER="${CLUSTER:-h100_de}"
 FAMILIES="${FAMILIES:-qwen3 deepseek_v3 qwen3_next nemotron_h}"
+WANDB_PROJECT="${WANDB_PROJECT:-slm-${USER:-unknown}-arch}"
 STOP_ON_FAIL="${STOP_ON_FAIL:-0}"
 LOG_DIR="${CODEX_LOG_DIR:-/lustre/home/zqiu/log}"
 mkdir -p "$LOG_DIR"
@@ -44,6 +46,7 @@ declare -A LOG_NAME=(
 echo "=================================================================="
 echo " Full 600M arch bake-off  |  cluster=$CLUSTER"
 echo " families: $FAMILIES"
+echo " wandb project: $WANDB_PROJECT"
 echo " extra overrides (applied to ALL): ${*:-<none>}"
 echo " logs: $LOG_DIR/<name>.log"
 echo "=================================================================="
@@ -57,7 +60,7 @@ for family in $FAMILIES; do
   echo
   echo ">>> [$(date '+%F %T')] START $family  ->  $log"
 
-  bash scripts/train_bakeoff_600m.sh "$family" "cluster=$CLUSTER" "$@" 2>&1 | tee "$log"
+  bash scripts/train_bakeoff_600m.sh "$family" "cluster=$CLUSTER" "wandb.project=$WANDB_PROJECT" "$@" 2>&1 | tee "$log"
   rc="${PIPESTATUS[0]}"
   ln -sf "$log" "$LOG_DIR/terminal.log"
 
