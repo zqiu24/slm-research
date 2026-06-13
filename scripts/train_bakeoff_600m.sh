@@ -11,6 +11,12 @@ set -euo pipefail
 # Examples:
 #   bash scripts/train_bakeoff_600m.sh deepseek_v3 cluster=h100_de
 #   bash scripts/train_bakeoff_600m.sh nemotron_h cluster=h100_de training.micro_batch_size=8
+#
+# micro_batch_size: ablation_40x leaves it null, which megatron_args derives to
+# min(64, gbs)=64 -> OOMs at the first forward on 80GB H100 (seq 4096, tp=1).
+# Default to a value that fits every family; override via MICRO_BATCH_SIZE=... or
+# a trailing training.micro_batch_size=N (the latter wins, last override = winner).
+MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
 
@@ -31,4 +37,5 @@ python -m launchers.train_megatron \
   "training_regime=ablation_40x" \
   "scheduler=wsd" \
   "seed=42" \
+  "training.micro_batch_size=$MICRO_BATCH_SIZE" \
   "$@"

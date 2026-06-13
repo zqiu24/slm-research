@@ -31,6 +31,10 @@
 - `scripts/run_bakeoff_600m_full.sh`: chains all four full (24B-token) runs
   sequentially on one node (foreground torchrun blocks per run), tee-logging
   each family codexlog-style and printing a pass/fail summary.
+- `train_bakeoff_600m.sh` now defaults `training.micro_batch_size=4`
+  (`MICRO_BATCH_SIZE` env / trailing override wins): `ablation_40x` leaves it
+  null, which derives to `min(64, gbs)=64` and OOMs at the first forward on 80GB
+  H100 (seq 4096, tp=1) for all four families.
 
 ### Added — fixed token budgets (dataset pinning across architectures)
 
