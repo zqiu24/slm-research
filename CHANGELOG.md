@@ -15,6 +15,9 @@
 - New families `qwen3_next`, `nemotron_h`; scales `600m_{deepseek_v3,
   qwen3_next,nemotron_h}`; `scripts/train_bakeoff_600m.sh`; protocol in
   `docs/experiments/arch_bakeoff_600m.md`; guide in `docs/adding_a_family.md`.
+- `scripts/run_bakeoff_600m_full.sh`: chains all four full (24B-token) runs
+  sequentially on one node (foreground torchrun blocks per run), tee-logging
+  each family codexlog-style and printing a pass/fail summary.
 
 ### Added — fixed token budgets (dataset pinning across architectures)
 
