@@ -60,3 +60,28 @@ def test_should_log_cadence_for_adam_and_poet():
     assert should_log(100, 100, poet=True, merge_period=400) is False
     # POET merge_period=0: frozen base -> never
     assert should_log(100, 100, poet=True, merge_period=0) is False
+
+
+def test_compute_matrix_norm_stats_values_and_rms():
+    import math
+
+    import torch
+
+    from src.patches.weight_norm_monitor import compute_matrix_norm_stats
+
+    # 2x3 matrix: rows have norms; cols have norms.
+    w = torch.tensor([[3.0, 0.0, 0.0], [0.0, 4.0, 0.0]])
+    stats = compute_matrix_norm_stats(w)
+
+    # row norms = [3, 4]; row_rms = norm / sqrt(in_dim=3)
+    assert stats["row"]["min"] == pytest.approx(3.0)
+    assert stats["row"]["max"] == pytest.approx(4.0)
+    assert stats["row"]["mean"] == pytest.approx(3.5)
+    assert stats["row_rms"]["max"] == pytest.approx(4.0 / math.sqrt(3))
+    # col norms = [3, 4, 0]; col_rms = norm / sqrt(out_dim=2)
+    assert stats["col"]["max"] == pytest.approx(4.0)
+    assert stats["col"]["min"] == pytest.approx(0.0)
+    assert stats["col_rms"]["max"] == pytest.approx(4.0 / math.sqrt(2))
+    # raw RMS vectors are returned for histogram pooling
+    assert stats["_row_rms_vec"].shape == (2,)
+    assert stats["_col_rms_vec"].shape == (3,)

@@ -101,3 +101,42 @@ def should_log(iteration: int, interval: int, *, poet: bool, merge_period: int) 
         if iteration % merge_period != 0:
             return False
     return iteration % interval == 0
+
+
+def _summary(vec) -> dict:
+    """mean/std/min/max of a 1-D tensor as Python floats."""
+    n = vec.numel()
+    return {
+        "mean": vec.mean().item(),
+        "std": vec.std(unbiased=False).item() if n > 1 else 0.0,
+        "min": vec.min().item(),
+        "max": vec.max().item(),
+    }
+
+
+def compute_matrix_norm_stats(weight) -> dict:
+    """Row/col L2-norm summaries (raw and RMS-normalized) for a 2-D weight.
+
+    For ``weight`` of shape ``(out, in)``:
+      * row norms ``r_i = ||W[i, :]||`` (length ``out``); RMS = ``r_i / sqrt(in)``
+      * col norms ``c_j = ||W[:, j]||`` (length ``in``);  RMS = ``c_j / sqrt(out)``
+    RMS divides out the matrix width so different-shaped matrices are comparable.
+    Returns scalar summaries under keys ``row``/``col``/``row_rms``/``col_rms``
+    plus the raw RMS vectors (``_row_rms_vec``/``_col_rms_vec``) for histograms.
+    """
+    import torch
+
+    w = weight.detach().to(torch.float32)
+    out_dim, in_dim = w.shape
+    row = torch.linalg.vector_norm(w, dim=1)
+    col = torch.linalg.vector_norm(w, dim=0)
+    row_rms = row / (in_dim**0.5)
+    col_rms = col / (out_dim**0.5)
+    return {
+        "row": _summary(row),
+        "col": _summary(col),
+        "row_rms": _summary(row_rms),
+        "col_rms": _summary(col_rms),
+        "_row_rms_vec": row_rms,
+        "_col_rms_vec": col_rms,
+    }
