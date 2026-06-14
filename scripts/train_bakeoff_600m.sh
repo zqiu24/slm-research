@@ -27,10 +27,10 @@ SEQ_LENGTH="${SEQ_LENGTH:-4096}"
 
 # micro_batch_size: ablation_40x leaves it null, which megatron_args derives to
 # min(64, gbs)=64 -> OOMs at the first forward on 80GB H100 (seq 4096, tp=1).
-# Default to 1, which fits every family at seq 4096; override via
-# MICRO_BATCH_SIZE=... or a trailing training.micro_batch_size=N (the latter
-# wins, last override = winner). At a shorter SEQ_LENGTH a larger mbs also fits.
-MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-1}"
+# Default to 16 to favor throughput; if it OOMs on a given family at seq 4096,
+# reduce via MICRO_BATCH_SIZE=... or a trailing training.micro_batch_size=N (the
+# latter wins, last override = winner).
+MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-16}"
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
 
