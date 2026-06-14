@@ -115,3 +115,31 @@ def test_hybrid_rejects_mtp():
     )
     with pytest.raises(ValueError):
         _model_args(cfg)
+
+
+def test_geglu_emits_quick_geglu():
+    args = _model_args(_cfg(activation="GeGLU"))
+    assert "--quick-geglu" in args
+    assert "--swiglu" not in args
+    assert "--squared-relu" not in args
+
+
+def test_layernorm_zero_centered_emits_1p():
+    args = _model_args(_cfg(layernorm_zero_centered=True))
+    assert "--apply-layernorm-1p" in args
+
+
+def test_layernorm_zero_centered_default_omits_1p():
+    assert "--apply-layernorm-1p" not in _model_args(_cfg())
+
+
+def test_sliding_window_emission():
+    args = _model_args(_cfg(sliding_window={"enabled": True, "window": 1024, "skip_freq": 6}))
+    assert _value(args, "--window-size") == "1024,0"
+    assert _value(args, "--window-attn-skip-freq") == "6"
+
+
+def test_sliding_window_disabled_omits_flags():
+    args = _model_args(_cfg())
+    assert "--window-size" not in args
+    assert "--window-attn-skip-freq" not in args

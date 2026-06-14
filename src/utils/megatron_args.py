@@ -68,6 +68,11 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--hidden-dropout", model.hidden_dropout)
     _add(args, "--normalization", model.normalization)
     _add(args, "--norm-epsilon", model.norm_epsilon)
+    # Zero-centered (1+w) RMSNorm (Gemma). --apply-layernorm-1p maps to the
+    # config field layernorm_zero_centered_gamma (transformer_config.py:170
+    # argparse_meta; pin core_v0.17.0).
+    if bool(model.get("layernorm_zero_centered", False)):
+        _add(args, "--apply-layernorm-1p")
     _add(args, "--init-method-std", model.init_method_std)
     # Default `flash` (not `fused`): TE's `fused` backend dispatches to cuDNN's
     # fused attention, which on this cluster's cu13 stack silently falls back
@@ -81,6 +86,11 @@ def _model_args(cfg: DictConfig) -> list[str]:
         _add(args, "--swiglu")
     elif activation == "squared_relu":
         _add(args, "--squared-relu")
+    elif activation == "GeGLU":
+        # Gemma-style gated GELU. --quick-geglu sets gated_linear_unit + the
+        # sigmoid-approx quick_gelu (arguments.py:1676, pin core_v0.17.0); the
+        # tanh-approx gelu_pytorch_tanh has no native flag (documented approx).
+        _add(args, "--quick-geglu")
     else:
         raise ValueError(f"Unsupported model.activation {activation!r}")
     _add(args, "--disable-bias-linear")
@@ -102,6 +112,15 @@ def _model_args(cfg: DictConfig) -> list[str]:
 
     if bool(model.get("qk_norm", False)):
         _add(args, "--qk-layernorm")
+
+    # Local/global sliding-window interleave (Gemma 3-style). Native Megatron
+    # CLI args (arguments.py:2020/2023, pin core_v0.17.0): --window-size parses
+    # "W,0" -> (W,0) via tuple_type; --window-attn-skip-freq takes int N (=
+    # (N-1):1 SWA:full, so 6 -> 5 sliding : 1 global) or a list-expr string.
+    sliding = model.get("sliding_window", {}) or {}
+    if bool(sliding.get("enabled", False)):
+        _add(args, "--window-size", f"{int(sliding.get('window', 1024))},0")
+        _add(args, "--window-attn-skip-freq", sliding.get("skip_freq", 6))
 
     if bool(model.get("multi_latent_attention", False)):
         _add(args, "--multi-latent-attention")
