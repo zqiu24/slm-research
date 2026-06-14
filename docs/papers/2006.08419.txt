@@ -1,0 +1,1225 @@
+                                           S PHERICAL M OTION DYNAMICS : L EARNING DYNAM -
+                                           ICS OF N EURAL N ETWORK WITH N ORMALIZATION ,
+                                           W EIGHT D ECAY, AND SGD
+                                            Ruosi Wan∗, Xiangyu Zhang, Jian Sun
+                                            Megvii Technology
+                                            {wanruosi,zhangxiangyu,sunjian}@megvii.com
+arXiv:2006.08419v4 [stat.ML] 27 Nov 2020
+
+
+
+
+                                            Zhanxing Zhu∗
+                                            Peking University
+                                            {zhanxing.zhu}@pku.edu.cn
+
+
+
+                                                                                         A BSTRACT
+
+                                                    In this work, we comprehensively reveal the learning dynamics of neural network
+                                                    with normalization, weight decay (WD), and SGD (with momentum), named as
+                                                    Spherical Motion Dynamics (SMD). Most related works study SMD by focusing
+                                                    on “effective learning rate” in “equilibrium” condition, i.e. assuming the con-
+                                                    vergence of weight norm. However, their discussions on why this equilibrium
+                                                    condition can be reached in SMD is either absent or less convincing. Our work in-
+                                                    vestigates SMD by directly exploring the cause of equilibrium condition. Specif-
+                                                    ically, 1) we introduce the assumptions that can lead to equilibrium condition in
+                                                    SMD, and prove that weight norm can converge at linear rate with given assump-
+                                                    tions; 2) we propose “angular update” as a substitute for effective learning rate to
+                                                    measure the evolving of neural network in SMD, and prove angular update can
+                                                    also converge to its theoretical value at linear rate; 3) we verify our assumptions
+                                                    and theoretical results on various computer vision tasks including ImageNet and
+                                                    MSCOCO with standard settings. Experiment results show our theoretical find-
+                                                    ings agree well with empirical observations.
+
+
+                                           1   I NTRODUCTION AND BACKGROUND
+
+                                           Normalization techniques (e.g. Batch Normalization (Ioffe & Szegedy, 2015) or its variants) are
+                                           one of the most commonly adopted techniques for training deep neural networks (DNN). A typical
+                                           normalization can be formulated as following: consider a single unit in a neural network, the input
+                                           is X, the weight of linear layer is w (bias is included in w), then its output is
+                                                                                             Xw − µ(Xw)
+                                                                        y(X; w; γ; β) = g(              γ + β),                             (1)
+                                                                                               σ(wX)
+                                           where g is a nonlinear activation function like ReLU or sigmoid, µ, σ are mean and standard de-
+                                           viation computed across specific dimension of Xw (like Batch Normalization (Ioffe & Szegedy,
+                                           2015), Layer Normalization Ba et al. (2016), Group Normalization (Wu & He, 2018), etc.). β, γ
+                                           are learnable parameters to remedy for the limited range of normalized feature map. Aside from
+                                           normalizing feature map, Salimans & Kingma (2016) normalizes weight by l2 norm instead:
+                                                                                                    w
+                                                                           y(X; w; γ; β) = g(X           γ + β),                            (2)
+                                                                                                  ||w||2
+                                           where || · ||2 denotes l2 norm of a vector.
+                                              ∗
+                                                Equal Contribution. This work is supported by The National Key Research and Development Program
+                                           of China (No. 2017YFA0700800) and Beijing Academy of Artificial Intelligence (BAAI). Corresponce to
+                                           wanruosi@megvii.com.
+
+
+                                                                                             1
+Characterizing evolving of networks during training. Though formulated in different manners,
+all normalization techniques mentioned above share an interesting property: the weight w affiliated
+with a normalized unit is scale-invariant: ∀α ∈ R+ , y(X; αW ; γ, β) = y(X; w; γ, β). Due to the
+scale-invariant property of weight, the Euclidean distance defined in weight space completely fails
+to measure the evolving of DNN during learning process. As a result, original definition of learning
+rate η cannot sufficiently represent the update efficiency of normalized DNN.
+To deal with such issue, van Laarhoven (2017); Hoffer et al. (2018); Zhang et al. (2019) propose “ef-
+fective learning rate” as a substitute for learning rate to measure the update efficiency of normalized
+neural network with stochastic gradient descent (SGD), defined as
+                                                         η
+                                              ηef f =         .                                     (3)
+                                                      ||w||22
+
+Joint effects of normalization and weight decay. van Laarhoven (2017) explores the joint effect
+of normalization and weight decay (WD), and obtains the magnitudes of weight by assuming the
+convergence    of weight, i.e. if wt ≈ wt+1 , the weight norm can be approximated as ||wt ||2 ≈
+   p                                                                                      √
+O( 4 η/λ), where λ is WD coefficient. Combining with Eq.(3), we have ηef f = ηλ. A more
+intuitive demonstration about relationship between normalization and weight decay is presented in
+Chiley et al. (2019) (see Figure 1): due to the fact that the gradient of scale invariant weight ∂L/∂w
+(L is the loss function of normalized network without WD part) is always perpendicular to weight
+w, one can infer that gradient component ∂L/∂w always tends to increase the weight norm, while
+the gradient component provided by WD always tends to reduce weight norm. Thus if weight norm
+remains unchanged, or “equilibrium has been reached”1 , one can obtain
+                                  wt − wt+1      p          ∂L/∂w
+                                              = 2ηλ                     .                           (4)
+                                   ||wt ||2              E||∂L/∂w||2
+Eq.(4) implies
+            √ the magnitude of update is scale-invariant of gradients, and effective learning rate
+should be 2ηλ. Li & Arora (2020) manages to estimate the magnitude of update in SGDM, their
+                                                                                 PT
+result is presented in limit and accumulation manner: if both limT −→∞ RT = 1/T t=0 ||wt || and
+                         PT
+limT −→∞ DT = 1/T t=0 ||wt − wt+1 || exist, then we have
+                                                 DT    2ηλ
+                                             lim    =      .                                                (5)
+                                           T −→∞ RT   1+α
+Though not rigorously,
+                 p      one can easily speculate from Eq.(5) the magnitude of update in SGDM
+cases should be 2ηλ/(1 + α) in equilibrium condition. But proof of Eq.(5) requires more strong
+assumptions: not only convergence of weight norm, but also convergence of update norm kwt+1 −
+wt k2 (both in accumulation manner).
+As discussed above, all previous qualitative
+results about “effective learning rate” (van
+Laarhoven, 2017; Chiley et al., 2019; Li &
+Arora, 2020) highly rely on equilibrium condi-
+tion, but none of them explores why such equi-
+librium condition can be achieved. Only van
+Laarhoven (2017) simply interprets the occur-
+rence of equilibrium as a natural result of con-
+vergence of optimization, i.e. when optimiza-
+tion is close to be finished, wt ≈ wt+1 , result-
+ing in equilibrium condition. However, this in-
+terpretation has an apparent contradiction: ac-
+cording to Eq.(4) and (5), when equilibrium            Figure 1: Illustration of optimization behavior
+condition is reached, the magnitude of update is       with BN and WD. Angular update ∆t represents
+constant, only determined by hyper-parameters,         the angle between the updated weight Wt and its
+which means optimization process has not con-          former value Wt+1 .
+verged yet. Li & Arora (2020) also notices the
+   1
+     ”Weight norm remains unchanged” means ||wt ||2 ≈ ||wt+1 ||2 , Chiley et al. (2019) calls this condition as
+“equilibrium”, which will also be used in the following context of this paper. Note equilibrium condition is not
+mathematically rigorous, we only use it for intuitive analysis.
+
+
+                                                       2
+non-convergence of SGD with BN and WD, so they do not discuss reasonableness of assumptions
+adopted by Eq.(5). In a word, previous results about “effective learning rate” in equilibrium condi-
+tion can only provide vague insights, they are difficult to be connected with empirical observation.
+In this work, we comprehensively reveal the learning dynamics of normalized neural network using
+stochastic gradient descent without/with momentum (SGD/SGDM) and weight decay, named as
+Spherical Motion Dynamics (SMD). Our investigation aims to answer the following question,
+
+       Why and how equilibrium condition can be reached in Spherical Motion Dynamics?
+
+Specifically, our contributions are
+
+       • We introduce the assumptions that can lead to equilibrium condition in SMD, and justify
+         their reasonableness by sufficient experiments. We also prove under given assumptions,
+         equilibrium condition can be reached as weight norm converges to its theoretical value at
+         linear rate in SMD. Our assumptions show the equilibrium condition can occur long before
+         the convergence of the whole optimization;
+       • We define a novel index, angular update, to measure the change of normalized neural
+         network in a single iteration, and derive its theoretical value under equilibrium condition
+         in SMD. We also prove angular update can converge to its theoretical value at linear rate
+         along with convergence of weight norm. Our results imply that the update efficiency of
+         SGD/SGDM on normalized neural network only depends on pre-defined hyper-parameters
+         in both SGD and SGDM case;
+       • We verify our theorems on different computer vision tasks (including one of most challeng-
+         ing datasets ImageNet (Russakovsky et al., 2015) and MSCOCO (Lin et al., 2014)) with
+         various networks structures and normalization techniques. Experiments show the theoreti-
+         cal value of angular update and weight norm agree well with empirical observation.
+
+2   R ELATED W ORK
+Normalization techniques Batch normalization(BN (Ioffe & Szegedy, 2015)) is proposed to deal
+with gradient vanishing/explosion, and accelerate the training of DNN. Rapidly, BN has been widely
+used in almost all kinds of deep learning tasks. Aside from BN, more types of normalization tech-
+niques have been proposed to remedy the defects of BN (Ioffe, 2017; Wu & He, 2018; Chiley et al.,
+2019; Yan et al., 2020) or to achieve better performance (Ba et al., 2016; Ulyanov et al., 2016; Sal-
+imans & Kingma, 2016; Shao et al., 2019; Singh & Krishnan, 2020). Though extremely effective,
+the mechanism of BN still remains as a mystery. Existing works attempt to analyze the function of
+BN: Ioffe & Szegedy (2015) claims BN can reduce the Internal Covariance Shift (ICS) of DNN;
+Santurkar et al. (2018) argue that the effectiveness of BN is not related to ICS, but the smoothness
+of normalized network; Luo et al. (2019) shows BN can be viewed as an implicit regularization
+technique; Cai et al. (2019) proves that with BN orthogonal least square problem can converge at
+linear rate; Dukler et al. (2020) proves weight normalization can speed up training in a two-layer
+ReLU network.
+
+Weight decay Weight decay (WD) is well-known as l2 regularization, or ridge regression, in statis-
+tics. WD is also found to be extreme effective when applied in deep learning tasks. Krizhevsky &
+Geoffrey (2009) shows WD sometimes can even improve training accuracy not just generalization
+performance; Zhang et al. (2019) show WD can regularize the input-output Jacobian norm and re-
+duce the effective damping coefficient; Li et al. (2020) discusses the disharmony between WD and
+weight normalizaiton.
+
+Effective learning rate Due to the scale invariant property caused by normalization, researchers
+start to study the behavior of effective learning rate. van Laarhoven (2017); Chiley et al. (2019)
+estimate the magnitude of effective learning rate under equilibrium assumptions in SGD case; Hoffer
+et al. (2018) quantify effective learning rate without equilibrium assumptions, so their results are
+much weaker; Arora et al. (2019) proves that without WD, normalized DNN can still converge
+with fixed/decaying learning rate in GD/SGD cases respectively; Zhang et al. (2019) shows WD
+can increase effective learning rate; Li & Arora (2020) proves standard multi-stage learning rate
+
+
+                                                 3
+schedule with BN and WD is equivalent to an exponential increasing learning rate schedule without
+WD. As a proposition, Li & Arora (2020) quantifies the magnitude of effective learning rate in
+SGDM case. But none of them have ever discussed why equilibrium condition can be reached.
+
+3    P RELIMINARY ON S PHERICAL M OTION DYNAMICS
+First of all, we review the property of scale invariant weight, and depict Spherical Motion Dynamics
+(SMD) in SGD case.
+Lemma 1. If w is scale-invariant with respect to L(w) , then for all k > 0, we have:
+                                        ∂L
+                                hwt ,           i = 0                                            (6)
+                                        ∂w w=wt
+                                        ∂L          1 ∂L
+                                                  =   ·       .                                  (7)
+                                        ∂w w=kwt    k ∂w w=wt
+
+Proof can be seen in Appendix A.1. Lemma 1 is also discussed in Hoffer et al. (2018); van Laarhoven
+(2017); Li & Arora (2020). Eq.(7) implies gradient norm is influenced by weight norm, but weight
+norm does not affect the output of DNN, thus we define unit gradient to eliminate the effect of
+weight norm.
+Definition 1 (Unit Gradient). If wt 6= 0, w̃ = w/||w||2 , the unit gradient of ∂L/∂w|w=wt is
+∂L/∂w|w=w̃t .
+
+According to Eq.(7), we have
+                                    ∂L          1      ∂L
+                                            =        ·         .                                 (8)
+                                    ∂w w=wt   ||wt || ∂w w=w̃t
+A typical SGD update rule without WD is
+                                                            ∂L
+                                        wt+1 = wt − η               ,                            (9)
+                                                            ∂w w=wt
+if ||wt ||2 ≈ ||wt+1 ||2 , one can obtain
+                                        η ∂L                            ∂L
+                     w̃t+1 = w̃t −                      = w̃t − ηef f ·          .             (10)
+                                     ||wt ||22 ∂w w=w̃t                 ∂w w=w̃t
+Eq.(10) shows effective learning rate can be viewed as learning rate of SGD on unit sphere
+S p−1 (Hoffer et al., 2018). But effective learning rate still cannot properly represent the magni-
+tude of update, since unit gradient norm is unknown. Therefore we propose the angular update
+defined below.
+Definition 2 (Angular Update). Assuming wt is a scale-invariant weight from a neural network at
+iteration t, then the angular update ∆t is defined as
+                                                                            
+                                                           hwt , wt+1 i
+                         ∆t = ](wt , wt+1 ) = arccos                           ,               (11)
+                                                         ||wt || · ||wt+1 ||
+where ](·, ·) denotes the angle between two vectors, h·, ·i denotes the inner product.
+
+According to Eq.(6), ∂L/∂w is perpendicular to weight w. Therefore, if learning rate η is small
+enough, one can derive
+                                                η          ∂L
+                           ∆t ≈ tan(∆t ) =            · ||         ||2 .                   (12)
+                                              ||wt ||      ∂w w=wt
+Another deduction from Eq.(6) is that weight norm always increases because
+                                                          ∂L
+                         ||wt+1 ||22 = ||wt ||22 + (η||           ||2 )2 > ||wt ||22 .         (13)
+                                                          ∂w w=wt
+From Eq.(7) we can infer that increasing weight norm can lead to smaller gradient norm if unit gra-
+dient norm is unchanged. Zhang et al. (2019) states the potential risk that GD/SGD without WD but
+BN will converge to a stationary point not by reducing loss but by reducing effective learning rate
+
+
+                                                      4
+due to increasing weight norm. Arora et al. (2019) proves that full gradient descent can avoid such
+problem and converge to a stationary point defined in S p−1 , but their results still require sophisti-
+cated learning rate decay schedule in SGD case. Besides, practical implementation suggests training
+DNN without WD always suffers from poor generalization.
+Now considering the update rule of SGD with WD:
+                                                           ∂L
+                                         wt+1 = wt − η(            + λwt ).                                 (14)
+                                                           ∂w w=wt
+We can easily derive the update of weight norm by
+                                                                     η2           ∂L
+                        ||wt+1 ||2 ≈ ||wt ||2 − λη||wt ||2 +                 · ||         ||2 .             (15)
+                                                                  2||wt ||32      ∂w w=w̃t 2
+Eq.(15) implies WD can provide direction to reduce weight norm, hence Chiley et al. (2019); Zhang
+et al. (2019) point out the possibility that weight norm can be steady, but do not explain this clearly.
+Here we demonstrate the mechanism deeper (see Figure 1): if unit gradient norm remains un-
+changed, note “centripetal force” (−λη||wt ||2 ) is proportional to weight norm, while “centrifugal
+              2
+            η            ∂L
+force” ( 2||w t ||
+                  3 · || ∂w           ||22 ) is inversely proportional cubic weight norm. As a result, the dynam-
+                  2           w=w̃t
+ics of weight norm is like a spherical motion in physics: overly large weight norm makes centripetal
+force larger than centrifugal force, leading to decreasing weight norm; while too small weight norm
+makes centripetal force smaller than centrifugal force, resulting in the increase of weight norm.
+Intuitively, equilibrium condition tends to be reached if the number of iterations is sufficiently large.
+Notice that the core assumption mentioned above is “unit gradient norm is unchanged”. In fact
+this assumption can solve the contradiction we present in Section 1: the convergence of weight
+norm is not equivalent to convergence of weight, steady unit gradient norm can also make weight
+norm converge, steady unit gradient norm does not rely on the fact that optimization has reached
+an optimum solution. In next section, We formulate this assumption in a reasonable manner, and
+rigorously prove the existence of equilibrium condition in SGD case. Discussion about SGD cannot
+be easily extended to SGDM case, because momentum is not always perpendicular to weight as unit
+gradient. But we can still prove the convergence of weight norm in SGDM case under modified
+assumptions.
+
+4     M AIN R ESULTS
+First of all, we prove the existence of equilibrium condition in SGD case and provide the conver-
+gence rate of weight norm.
+Theorem 1. (Equilibrium condition in SGD) Assume the loss function is L(X; w) with scale-
+                                         ∂L
+invariant weight w, denote gt = ∂w           Xt ,wt
+                                                    , g̃t = gt · ||wt ||2 . Considering the update rule of SGD
+with weight decay,
+                                          wt+1 = wt − η · (gt + λwt )                                       (16)
+where λ, η ∈ (0, 1). If the following assumptions hold: 1) λη << 1; 2) ∃L, V, ∈ R+ ,
+                                                                                               2λη 2
+E[||g̃t ||22 |wt ] = L, E[(||g̃t ||22 − L)2 |wt ] ≤ V ; 3) ∃l ∈ R+ , ||g̃t ||22 > l, l > 2[ 1−2λη   ] L. Then
+                    p
+∃B > 0, w∗ = 4 Lη/(2λ), we have
+                                                                 V η2
+                                 E[||wT ||22 − (w∗ )2 ]2 ≤ (1 − 4λη)T B +
+                                                                      .                     (17)
+                                                                   l
+Remark 1. The theoretical value of weight norm w∗ in Theorem 1 is consistent with the derivation
+of weight norm in equilibrium in van Laarhoven (2017), though van Laarhoven (2017) assumes the
+equilibrium condition has been reached in advance, hence it cannot provide the convergence rate
+and magnitude of variance.
+
+Proof of Theorem 1 can be seen in Appendix A.2. It shows the square of weight norm can linearly
+converge to its theoretical value in equilibrium, and its variance is bounded by the variance of the
+square of unit gradient norm multiplying the square of learning rate. Now we discuss the reason-
+ableness of assumptions in Theorem 1. Assumption 1 is consistent with commonly used settings;
+
+
+                                                            5
+assumptions 2 and 3 imply the expectation of the square of unit gradient norm remains unchanged
+within several iterations, and its lower bound cannot be far from its expectation. We need to clarify
+assumption 2 further: we do not require the expectation of the unit gradient norm must be constant
+across the whole training process, but only remains unchanged locally. On one hand, small learning
+rate can guarantee the expectation of unit gradient norm square changes slowly; on the other hand,
+when its expectation changes, it means that the weight norm square will change to its new theoretical
+value as Theorem 1 describes. Experiment result in Figure 2 strongly justifies our analysis. We also
+conduct extensive experiments to verify our claim further, please refer Appendix B.1.
+Now we extend Theorem 1 to SGDM case. SGDM is more complex than SGD since momentum is
+not always perpendicular to the weight, therefore we need to modify assumptions.
+Theorem 2. (Equilibrium condition in SGDM) Considering the update rule of SGDM (heavy ball
+method (Polyak, 1964)):
+                                       vt     =    αvt−1 + gt + λwt                                      (18)
+                                     wt+1     =    wt − ηvt                                              (19)
+                                                                                            √
+where λ, η, α ∈ (0, 1). If following assumptions hold: 4) λη << 1, λη < (1 − α)2 ;
+5) Define ht = ||gt ||22 + 2αhvt−1 , gt i, h̃t = ht · ||wt ||22 . ∃L, V, ∈ R+ , E[h̃t |wt ] = L,
+                                                                  6λη
+E[(h̃t − L)2 |wt ] ≤ V ; 6)∃l ∈ R+ , ht > l, l > 2[ (1−α)3 (1+α)−8λη(1−α)   ]2 L. then ∃B > 0,
+       p
+w∗ = 4 Lη/(λ(1 − α)(2 − λη/(1 + α))), we have
+                                                        4λη T 3V η 2 (1 + 4α2 + α4 )
+                E[||wT ||22 − (w∗ )2 ]2 ≤ 3B · (1 −         ) +                      ,                   (20)
+                                                       1−α           l(1 − α)4
+
+Proof can be seen in Appendix. Like assumption 1,√assumption 4 is also satisfied for commonly
+used hyper-parameter settings. Besides, λη < (1 − α)2 is also mentioned in Li & Arora (2020)
+for other purpose; Assumption 5 shows not unit gradient gradient norm ||g̃t ||22 but an adjusted value
+h̃t dominates the expectation and variance of the weight norm square. We empirically find the
+expectation of hvt−1 , gt i is very close to 0, therefore the behavior of h̃t is similar to that of ||g̃t ||22
+(see (d) in Figure 2), making the weight norm square linearly converge in SGDM case. We leave
+theoretical analysis on h̃t as future work. As for assumption 6, commonly used settings (ηλ << 1)
+                       6λη
+can make 2[ (1−α)3 (1+α)−8λη(1−α)     ]2 as an very small lower bound for l/L. The experiments on
+justification of assumptions 4,5,6 can be seen in Figure 2 and appendix B.1. Comparing with Eq.(17)
+and Eq.(20), it implies that with same η, λ, SGDM can reach equilibrium condition much faster than
+SGD, but may have a larger variance, our experiments also verify that(see (b), (e) in Figure 2).
+Since the convergence of weight norm in SMD has been proven, we can drive the theoretical value
+of angular update ∆t and its rate of convergence.
+Theorem 3. (The convergence of angular update) In SGD case, if ||g̃t2 ||2 remains unchanged
+(V = 0), ∃C > 0 we have                   p
+                                    |∆t − 2λη| < C(1 − ηλ)t                                (21)
+In SGDM case, if h̃t remains unchanged (V = 0), ∃C > 0 we have
+                                            r
+                                                2λη              ηλ t
+                                      |∆t −         | < C(1 −        )                             (22)
+                                               1+α              1−α
+Remark 2. Theoretical value of angular update in Theorem 3 is consistent with Chiley et al. (2019);
+Li & Arora (2020) respectively. Note that we only present the convergence rate of angular update in
+ideal cases, i.e. ||g̃t2 ||2 or h̃t remain unchanged across the whole training process, because though
+Eq.(17) and (20) imply that the variance of weight norm square is very small (O(η 2 )) with small
+learning rate, this bound is not tight enough to properly estimate the variance of angular update.
+Numerical experiments(see Figure 4, 5 in appendix B.1) show the variance of weight norm and
+angular update can be extremely small, we leave this theoretical gap as future work.
+
+5    E XPERIMENTS
+In this section, we show that our theorems can agree well with empirical observations on Ima-
+geNet (Russakovsky et al., 2015) and MSCOCO (Lin et al., 2014). We conduct experiments in two
+
+
+                                                      6
+cases. In the first case we train neural network with fixed learning rate to verify our theorems in
+SGD and SGDM, respectively; in the second case we investigate SMD with more commonly used
+settings, multi-stage learning rate schedule.
+
+5.1     F IXED L EARNING R ATE
+
+With fixed learning rate, we train Resnet50 (He et al., 2016) with SGD/SGDM on ImageNet. Learn-
+ing rate is fixed as η = 0.2; WD factor is λ = 10−4 ; with SGDM, the momentum factor is α = 0.9.
+Figure 2 presents the unit gradient norm square, weight norm, and angular update of the weights
+from LAYER .2.0. CONV 2 of Resnet50 in SGD and SGDM cases, respectively. It can be inferred
+from Figure 2 the behavior of ||g̃t ||22 , h̃t and hyper-parameter settings satisfy our assumptions in
+Theorem 1 and 2, therefore theoretical value of weight norm and angular update agree with empir-
+ical value very well. We also can observe SGDM can achieve equilibrium more quickly than SGD.
+According to Eq.(17),(20), the underlying reason might be with same learning rate η and WD factor
+                                       λη
+λ, convergence rate of SGDM (1 − 1−α        ) is smaller than that of SGD (1 − λη).
+
+
+
+
+      (a) Unit gradient norm in SGD      (b) Weight norm in SGD           (c) Angular update in SGD
+
+
+
+
+  (d) Unit gradient norm square and     (e) Weight norm in SGDM          (f) Angular update in SGDM
+  h̃ in SGDM
+
+Figure 2: Performance of layer.2.0.conv2 from Resnet50 in SGD and SGDM, respectively. In (a),
+(d), semitransparent line represents the raw value of ||g̃t ||22 or h̃t , while solid line represents the
+averaged value within consecutive 200 iterations to estimate the expectation of ||g̃t ||22 or h̃t ; In (b),
+(e), blue solid lines shows the raw value of weight norm ||wt ||2 , while dashed line represent the
+theoretical value of weight norm computed in Theorem 1, 2 respectively. The expectations of ||g̃||22
+and h̃ are estimated as (a) and (d) respectively; In (c), (f), red lines represent raw value of angular
+update
+√       during
+            p training, dashed lines represent the theoretical value of angular update computed by
+  2λη and 2λη/(1 + α) respectively.
+
+
+5.2     M ULTI - STAGE L EARNING R ATE S CHEDULE
+
+Now we turn to study the behavior of angular update with SGDM and multi-stage leanring rate
+schedule on Imagenet (Russakovsky et al., 2015) and MSCOCO (Lin et al., 2014). In ImageNet
+classification task, we still adopt Resnet50 as baseline for it is a widely recognized network struc-
+ture.The training settings rigorously follow Goyal et al. (2017): learning rate is initialized as 0.1,
+and divided by 10 at 30, 60, 80-th epoch; the WD factor is 10−4 ; the momentum factor is 0.9. In
+MSCOCO experiment, we conduct experiments on Mask-RCNN (He et al., 2017) benchmark using
+a Feature Pyramid Network (FPN) (Lin et al., 2017), ResNet50 backbone and SyncBN (Peng et al.,
+2018) following the 4x setting in He et al. (2019): total number of iteration is 360, 000, learning rate
+is initialized as 0.02, and divided by 10 at iteration 300, 000, 340, 000; WD coefficient is 10−4 .
+
+
+                                                    7
+    (a) Angular update in Imagenet (b) Angular update in Imagenet     (c) Weight norm in Imagenet
+                                   (rescaled)
+
+
+
+
+    (d) Angular update in MSCOCO (e) Angular update in MSCOCO        (f) Weight norm in MSCOCO
+                                 (rescaled)
+
+Figure 3: In (a),(b),(d),(e), solid lines with different colors represent raw value of angular update
+of weights from all convolutional layer in the model; In (a), (d), training setting rigorously √
+                                                                                               follows
+Goyal et al. (2017); He et al. (2019) respectively; In (b), (e), weight norm is dividied by 4 10 as
+long as learning rate is divided by 10; In (c), (f), weight norm is computed on layer.1.0.conv2 in
+Resnet50 backbone. Blue line represent original settings, orange line represent rescaled settings.
+
+There appears to be some mismatch between theorems and empirical observations in (a), (b) of
+Figure 3: angular update in the last two stages is smaller than its theoretical value. This phenomenon
+can be well interpreted by our theory: according to Theorem p      1, 2, when equilibrium condition is
+reached, theoretical value of weight norm satisfies ||wt ||2 ∝ 4 λη , therefore when learning rate is
+divided by k, equilibrium
+                       p condition is broken, theoretical value of weight norm in new equilibrium
+condition should get 4 1/k smaller. But new equilibrium condition cannot be reached immediately
+(see (c), (f) in Figure 3), following corollary gives the least number of iterations to reach the new
+equilibrium condition.
+Corollary 3.1. In SGD case with learning rate η, WD coefficient λ, if learning rate is divided by k,
+and unit gradient norm remains unchanged, then at least d[log(k)]/(4λη)e iterations are required
+to reach the new equilibrium condition; In SGDM case with momentum coefficient α, then at least
+d[log(k)(1 − α)]/(4λη)e iterations are required to reach the new equilibrium condition.
+
+Corollary 3.1 also implies SGD/SGDM with smaller learning rate requires more iterations to reach
+new equilibrium condition. Hence, in second learning rate stage in Imagenet experiments, angular
+update can reach its new theoretical value within 15 epochs, but during last two learning rate stages
+of Imagenet/MSCOCO experiments, SGDM cannot completely reach new equilibrium by the end
+of training procedure. As a result, we observe empirical value of angular update seems smaller than
+its theoretical value. Based on our theorem, we can bridge the gap by skipping the intermediate
+process from old equilibrium to new one. √     Specifically, when learning rate is divided by k, norm
+of scale-invariant weight is also divided by 4 k, SGDM can reach in new equilibrium immediately.
+Experiments((b),(e) in Figure 3) show this simple strategy can make angular update always approx-
+imately equal to its theoretical value across the whole training process though learning rate changes.
+
+6    C ONCLUSION
+In this paper, we comprehensively reveal the learning dynamics of DNN with normalization,
+WD, and SGD/SGDM, named as Spherical Motion Dynamics (SMD). Different from most related
+works (van Laarhoven, 2017; Hoffer et al., 2018; Chiley et al., 2019; Li & Arora, 2020), we directly
+explore the cause of equilibrium. Specifically, we introduce the assumptions that can lead to equi-
+librium condition, and show these assumptions are easily satisfied by practical implementation of
+DNN; Under given assumptions, we prove equilibrium condition can be reached at linear rate, far
+
+
+                                                  8
+before optimization has converged. Most importantly, we show our theorem is widely valid, they
+can be verified on one of most challenging computer vision tasks, beyond synthetic datasets. We
+believe our theorems on SMD can bridge the gap between current theoretical progress and practical
+usage on deep learning techniques.
+
+R EFERENCES
+Sanjeev Arora, Zhiyuan Li, and Kaifeng Lyu. Theoretical analysis of auto rate-tuning by batch
+  normalization. In International Conference on Learning Representations, 2019. URL https:
+  //openreview.net/forum?id=rkxQ-nA9FX.
+
+Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E Hinton. Layer normalization. arXiv preprint
+  arXiv:1607.06450, 2016.
+
+Yongqiang Cai, Qianxiao Li, and Zuowei Shen. A quantitative analysis of the effect of batch nor-
+  malization on gradient descent. In Kamalika Chaudhuri and Ruslan Salakhutdinov (eds.), Pro-
+  ceedings of the 36th International Conference on Machine Learning, volume 97 of Proceedings
+  of Machine Learning Research, Long Beach, California, USA, 09–15 Jun 2019. PMLR. URL
+  http://proceedings.mlr.press/v97/cai19a.html.
+
+Vitaliy Chiley, Ilya Sharapov, Atli Kosson, Urs Koster, Ryan Reece, Sofia Samaniego de la Fuente,
+  Vishal Subbiah, and Michael James. Online normalization for training neural networks. In Ad-
+  vances in Neural Information Processing Systems 32, pp. 8433–8443. Curran Associates, Inc.,
+  2019.
+
+Yonatan Dukler, Quanquan Gu, and Guido Montúfar. Optimization theory for relu neural networks
+  trained with normalization layers. In International conference on machine learning, 2020.
+
+Priya Goyal, Piotr Dollár, Ross Girshick, Pieter Noordhuis, Lukasz Wesolowski, Aapo Kyrola, An-
+  drew Tulloch, Yangqing Jia, and Kaiming He. Accurate, large minibatch sgd: Training imagenet
+  in 1 hour. arXiv preprint arXiv:1706.02677, 2017.
+
+Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. Deep residual learning for image recog-
+  nition. In Proceedings of the IEEE conference on computer vision and pattern recognition, pp.
+  770–778, 2016.
+
+Kaiming He, Georgia Gkioxari, Piotr Dollár, and Ross Girshick. Mask r-cnn. In Proceedings of the
+  IEEE international conference on computer vision, pp. 2961–2969, 2017.
+
+Kaiming He, Ross Girshick, and Piotr Dollar. Rethinking imagenet pre-training. In Proceedings of
+  the IEEE/CVF International Conference on Computer Vision (ICCV), October 2019.
+
+Elad Hoffer, Ron Banner, Itay Golan, and Daniel Soudry. Norm matters: efficient and accurate
+  normalization schemes in deep networks. In S. Bengio, H. Wallach, H. Larochelle, K. Grauman,
+  N. Cesa-Bianchi, and R. Garnett (eds.), Advances in Neural Information Processing Systems 31,
+  pp. 2160–2170. Curran Associates, Inc., 2018.
+
+Sergey Ioffe. Batch renormalization: Towards reducing minibatch dependence in batch-normalized
+  models. In Advances in neural information processing systems, pp. 1945–1953, 2017.
+
+Sergey Ioffe and Christian Szegedy. Batch normalization: Accelerating deep network training by
+  reducing internal covariate shift. In ICML, pp. 448–456, 2015.
+
+Alex Krizhevsky and Hinton Geoffrey. Learning multiple layers of features from tiny images. 2009.
+
+Xiang Li, Chen Shuo, and Yang Jian. Understanding the disharmony between weight normalization
+  family and weight decay. In AAAI, 2020.
+
+Zhiyuan Li and Sanjeev Arora. An exponential learning rate schedule for deep learning. In Interna-
+  tional Conference on Learning Representations, 2020. URL https://openreview.net/
+  forum?id=rJg8TeSFDH.
+
+
+                                                9
+Tsung-Yi Lin, Michael Maire, Serge Belongie, James Hays, Pietro Perona, Deva Ramanan, Piotr
+  Dollár, and C Lawrence Zitnick. Microsoft coco: Common objects in context. In European
+  conference on computer vision, pp. 740–755. Springer, 2014.
+Tsung-Yi Lin, Piotr Dollár, Ross Girshick, Kaiming He, Bharath Hariharan, and Serge Belongie.
+  Feature pyramid networks for object detection. In Proceedings of the IEEE conference on com-
+  puter vision and pattern recognition, pp. 2117–2125, 2017.
+Ping Luo, Xinjiang Wang, Wenqi Shao, and Zhanglin Peng. Towards understanding regularization
+  in batch normalization. In International Conference on Learning Representations, 2019. URL
+  https://openreview.net/forum?id=HJlLKjR9FQ.
+Ningning Ma, Xiangyu Zhang, Hai-Tao Zheng, and Jian Sun. Shufflenet v2: Practical guidelines
+  for efficient cnn architecture design. In Proceedings of the European Conference on Computer
+  Vision (ECCV), pp. 116–131, 2018.
+Chao Peng, Tete Xiao, Zeming Li, Yuning Jiang, Xiangyu Zhang, Kai Jia, Gang Yu, and Jian Sun.
+  Megdet: A large mini-batch object detector. In Proceedings of the IEEE Conference on Computer
+  Vision and Pattern Recognition, pp. 6181–6189, 2018.
+Boris T Polyak. Some methods of speeding up the convergence of iteration methods. USSR Com-
+  putational Mathematics and Mathematical Physics, 4(5):1–17, 1964.
+Olga Russakovsky, Jia Deng, Hao Su, Jonathan Krause, Sanjeev Satheesh, Sean Ma, Zhiheng
+  Huang, Andrej Karpathy, Aditya Khosla, Michael Bernstein, et al. Imagenet large scale visual
+  recognition challenge. International journal of computer vision, 115(3):211–252, 2015.
+Tim Salimans and Durk P Kingma. Weight normalization: A simple reparameterization to accelerate
+  training of deep neural networks. In Advances in Neural Information Processing Systems, pp.
+  901–909, 2016.
+Mark Sandler, Andrew Howard, Menglong Zhu, Andrey Zhmoginov, and Liang-Chieh Chen. Mo-
+ bilenetv2: Inverted residuals and linear bottlenecks. In Proceedings of the IEEE conference on
+ computer vision and pattern recognition, pp. 4510–4520, 2018.
+Shibani Santurkar, Dimitris Tsipras, Andrew Ilyas, and Aleksander Madry. How Does Batch Nor-
+  malization Help Optimization? arXiv e-prints, art. arXiv:1805.11604, May 2018.
+Wenqi Shao, Tianjian Meng, Jingyu Li, Ruimao Zhang, Yudian Li, Xiaogang Wang, and Ping Luo.
+ Ssn: Learning sparse switchable normalization via sparsestmax. In Proceedings of the IEEE
+ Conference on Computer Vision and Pattern Recognition, pp. 443–451, 2019.
+Saurabh Singh and Shankar Krishnan. Filter response normalization layer: Eliminating batch de-
+  pendence in the training of deep neural networks. In Proceedings of the IEEE/CVF Conference
+  on Computer Vision and Pattern Recognition (CVPR), June 2020.
+Dmitry Ulyanov, Andrea Vedaldi, and Victor Lempitsky. Instance normalization: The missing in-
+ gredient for fast stylization. arXiv preprint arXiv:1607.08022, 2016.
+Twan van Laarhoven. L2 regularization versus batch and weight normalization. In Advances in
+  Neural Information Processing Systems. 2017.
+Yuxin Wu and Kaiming He. Group normalization. In Proceedings of the European Conference on
+  Computer Vision (ECCV), pp. 3–19, 2018.
+Junjie Yan, Ruosi Wan, Xiangyu Zhang, Wei Zhang, Yichen Wei, and Jian Sun. Towards stabi-
+  lizing batch statistics in backward propagation of batch normalization. In International Confer-
+  ence on Learning Representations, 2020. URL https://openreview.net/forum?id=
+  SkgGjRVKDS.
+Guodong Zhang, Chaoqi Wang, Bowen Xu, and Roger Grosse. Three mechanisms of weight decay
+  regularization. In International Conference on Learning Representations, 2019. URL https:
+  //openreview.net/forum?id=B1lz-3Rct7.
+
+
+                                               10
+A     P ROOF OF T HEOREMS
+Remark 3. In the following context, we will use the following conclusion multiple times: ∀δ, ε ∈ R,
+if |δ|  1, |ε|  1, then we have:
+                           √          δ             1
+    (1 + δ)2 ≈ 1 + 2δ,         1+δ ≈1+ ,               ≈ 1 − δ,          (1 + δ)(1 + ε) ≈ 1 + δ + ε.   (23)
+                                      2            1+δ
+
+A.1    P ROOF OF L EMMA 1
+
+Proof. Given w0 ∈ Rp \{0}, since ∀k > 0, L(w0 ) = L(kw0 ), then we have
+            ∂L(w)                    ∂L(kw)         ∂L(w)
+                                   =             =              ·k                                     (24)
+             ∂w w=w0                    ∂w w=w0       ∂w w=kw0
+           ∂L(kw)                      ∂L(w)             1 ∂L(w)
+                                   = h           , w0 i = · h         , w0 i = 0                       (25)
+             ∂k   w=w0                  ∂w w=kw0         k    ∂w w=w0
+
+
+
+A.2    P ROOF OF T HEOREM 1
+
+Lemma 2. If the sequence {xt }∞
+                              t=1 satisfies
+
+                                                                 L
+                                              xt ≥ αxt−1 +                                             (26)
+                                                             xt−1
+. where x1 > 0, L > 0
+
+Then, we have                             r                  r
+                                               L                  L
+                                   xt ≥           − αt−1 |           − x1 |                            (27)
+                                              1−α                1−α
+                 q
+                      L
+                                   p                √
+Proof. If xt ≥       1−α , since       L/(1 − α) ≥ 2 αL then we have
+                                         r                           r
+                                 L            L           L               L
+                  xt+1 ≥ αxt +      ≥α             +p              =         ,            (28)
+                                 xt         1−α        L/(1 − α)        1−α
+                          p                       p
+which means ∀k > t, xk ≥ L/(1 − α). If xt < L/(1 − α), then we have
+          r                         p               r                   r
+               L                       L(1 − α)        L                   L
+                   − xt+1 ≤ (α −                 )(        − xt ) < α(         − xt ).    (29)
+             1−α                         xt           1−α                 1−α
+                                                     p
+Therefore, by deduction we can easily prove if xT < L/(1 − α), then ∀t ∈ [1, T − 1], we have
+                                                        r
+                                                            L
+                           0 < xt < xt+1 < XT <                  ,                        (30)
+                                                          1−α
+                           r                           r
+                               L                           L
+                         (          − xt ) < αt−1 (             − x1 ).                   (31)
+                             1−α                         1−α
+In summary, we have                       r                  r
+                                               L                  L
+                                   xt ≥           − αt−1 |           − x1 |                            (32)
+                                              1−α                1−α
+
+
+Proof of Theorem 1. since hwt , gt i = 0, then we have:
+                                                                      ||g̃t ||22 η 2
+                                ||wt+1 ||22 = (1 − ηλ)2 ||wt ||22 +                                    (33)
+                                                                       ||wt ||22
+
+                                                     11
+Denote xt as ||wt ||22 , Lt as ||g̃t ||22 and omit O((ηλ)2 ) part. Then Lt > l, E[Lt |xt ] = L,
+V ar(Lt |xt ) = E[(Lt − L)2 |xt ] < V . Eq.(33) is equivalent to
+
+                                                                Lt η 2
+                                    xt+1 = (1 − 2λη)xt +               .                             (34)
+                                                                 xt
+According to Lemma 2, we have
+                                    r                          r
+                                      lη             t−1          lη
+                            xt >         − (1 − 2λη) |x0 −           |.                              (35)
+                                      2λ                          2λ
+                                    √    √                  √                          q
+                               log(( 2−1) lη/(4λ))−log(|x0 − lη/(4λ)|)                   lη
+Eq.(35) implies when t > 1 +                 log(1−2λη)                , we have x t >   4λ .
+                      q
+Now, denote x∗ as the Lη2λ , then we have
+
+                                                     Lη 2                 Lt − L 2
+            E[(xt+1 − x∗ )2 |xt ] = E[((1 − 2λη −         ∗
+                                                            )(xt − x∗ ) +         ) |xt ]
+                                                     xt x                    xt
+                                                                                                     (36)
+                                                 Lη 2 2            ∗ 2   E[(Lt − L)2 |xt ]η 4
+                                   = (1 − 2λη −        )  (x t − x  )  +
+                                                 xt x∗                            x2t
+                                      √    √                    √
+                                 log(( 2−1) lη/(4λ))−log(|x0 − lη/(4λ)|)
+If t > T (α, λ, η, l, x0 ) = 1 +              log(1−2λη)                  , Eq.(35) implies
+                                         r
+                                      2L                      Lη 2
+                             1 − 2λη −    · 2λη < 1 − 2λη − ∗ .                        (37)
+                                       l                      x xt
+                                                                 q
+Combining with assumption 3 in Theorem 1, we can derive 1 − 2λη − 2L
+                                                                   l · 2λη > 0, which means
+
+                                                            L
+                                         0 < 1 − 2λη −            .                                  (38)
+                                                          x∗ xt
+Combining with Eq.(36), (35), (38), if t > T (α, λ, η, l, x0 ), we have
+
+                                                                               4V η 3 λ
+                      E[(xt+1 − x∗ )2 |xt ] < (1 − 2λη)2 (xt − x∗ )2 +                  .            (39)
+                                                                                  l
+Considering the expectation with respect to the distribution of xt , we have
+
+                                                                           4V η 3 λ
+                        E(xt+1 − x∗ )2 < (1 − 2λη)2 E(xt − x∗ )2 +                  .                (40)
+                                                                              l
+Approximate (1 − 2λη)2 = 1 − 4λη, and iterate Eq.(40) for t − T (α, λ, η, l, x0 ) times, we have
+
+                                                                                            V η2
+              E(xt − x∗ )2 < (1 − 4λη)t−T (α,λ,η,l,x0 ) E(xT (α,λ,η,l,x0 ) − x∗ )2 +             .   (41)
+                                                                                              l
+
+T (α, λ, η, l, x0 ) is finite, and only depends on α, λ, η, l, x0 . Hence we can set B = max{(1 −
+4λη)−t E(xt − x∗ )2 |t = 0, 1, 2, ..., T (α, λ, η, l, x0 )}, note we can prove B is finite by
+
+                                             L2t                                 V + L2
+Ex2t+1 = E[(1−2λη)2 x2t +2(1−2λη)Lt +            ] < (1−4λη)Ex 2
+                                                               t +2(1−2λη)L+                    .
+                                             x2t                             min(x20 , lη/(2λ))
+                                                                                            (42)
+therefore, ∀t > 0, we have
+                                                                      V η2
+                                E(xt − x∗ )2 < (1 − 4λη)t B +              .                         (43)
+                                                                        l
+
+
+
+
+                                                   12
+A.2.1     P ROOF OF T HEOREM 2
+                                                                 2β                            2
+                                                                              2α
+Lemma 3. Assume α, β, ε ∈ (0, 1), where β << 1. Denote diag(1 − 1−α , α, α2 + 1−α β as Λ,
+                                 2                                      2
+         1         2α       α     T               T         1 1−α    8
+k = ( (1−α)2 , − (1−α)2 , (1−α)2 ) , e = (1, 1, 1) . If ε < 3 [ β − 1−α ], then ∀d ∈ Rp , we have
+                                                                        4β
+                             ||(Λ − εβ(1 − α)2 keT )d||22 < (1 −           )||d||22                 (44)
+                                                                       1−α
+
+Proof. Omit O(β 2 ) part, we have
+                                    4β                         4β
+||(Λ−εβ(1−α)2 keT )d||22 = (1−           )d21 +α2 d22 +α4 (1+     )d2 −2εβ(d1 +d2 +d3 )(d1 −2α2 d2 +α4 d3 )
+                                   1−α                        1−α 3
+                                                                                             (45)
+      (d1 + d2 + d3 )(d1 − 2α2 d2 + α4 d3 )
+    [d1 + (1 − 2α2 )d2 ]2   [d1 + (1 + α4 )d3 ]2                     1 + α8
+  =                       +                      − (1/2 + 2α4 )d22 −        + (α4 − 2α2 )d2 d3
+             2                       2                                  2
+        1           α4 2       α8    α4           5
+  ≥ − ( + 2α4 +        )d2 − (    +     − 2α2 + )d23
+        2           2          2     2            2
+          2  5 2
+  ≥ − 3d2 − d3 .
+             2
+                                                                                            (46)
+Then we have
+                                                    4β                              4βα4   5βε 2
+ ||(Λ − εβ(1 − α)2 keT )d||22 ≤ (1 −                   )d21 + (α2 + 3βε)d22 + (α4 +      +    )d3 . (47)
+                                                   1−α                              1−α     2
+                  2
+Since ε < 31 [ 1−α
+                 β
+                      8
+                   − 1−α ], we can prove
+                                                                        4β
+                                                    α2 + 3βε    < 1−       ,                        (48)
+                                                                       1−α
+                                               4βα4   5βε               4β
+                                        α4 +        +           <   1−     .                        (49)
+                                               1−α     2               1−α
+Hence, we have
+                                                                        4β
+                             ||(Λ − εβ(1 − α)2 keT )d||22 < (1 −           )||d||22                 (50)
+                                                                       1−α
+
+
+Proof of Theorem 2. The update rule is
+                              wt+1 = wt − ηvt
+                                                           g̃t
+                                        = wt − η(αvt−1 +         + λwt )
+                                                         ||wt ||
+                                                                                                    (51)
+                                                   wt−1 − wt       g̃t
+                                        = wt − η(α             +         + λwt )
+                                                       η         ||wt ||
+                                        = (1 − ηλ + α)wt − αwt−1 − gt η.
+Then we have
+          ||wt+1 ||22 = (1 − ηλ + α)2 ||wt ||22 − 2α(1 + α − ηλ)hwt , wt−1 i + α2 ||wt−1 ||22
+                      + ||gt ||22 η 2 + 2hαwt−1 , gt ηi
+                      = (1 − ηλ + α)2 ||wt ||22 − 2α(1 + α − ηλ)hwt , wt−1 i + α2 ||wt−1 ||22
+                      + ||gt ||22 η 2 + 2hα(wt + ηvt−1 ), gt ηi                                     (52)
+                      = (1 − ηλ + α) ||wt ||22 − 2α(1 + α − ηλ)hwt , wt−1 i + α2 ||wt−1 ||22
+                                               2
+
+                            h̃t η 2
+                      +             .
+                          ||wt ||22
+
+                                                           13
+                             hwt+1 , wt i = (1 + α − λη)||wt ||2 − αhwt , wt−1 i,                           (53)
+Let Xt , A, e denote:
+                                                   
+                                          ||wt ||22
+                    Xt         =     hwt , wt−1 i  ,                                                      (54)
+                                        ||wt−1 ||22
+                                                                      
+                                      (1 + α − λη)2 −2α(1 + α − λη) α2
+                      A =            1 + α − λη          −α        0 ,                                    (55)
+                                               1           0        0
+                                      1
+                                          !
+                         e     =      0 ,                                                                   (56)
+                                      0
+                                                                                                            (57)
+respectively. The Eq.(52), (53) can be formulated as
+
+                                                                        h̃t η 2
+                                           Xt+1 = AXt +                         e.                          (58)
+                                                                       eT Xt
+                  √
+When λη < (1 −  α)2 , the eigen value of A are all real number:
+                                       p
+       (1 + α − λη)2 + (1 + α − λη) (1 + α − λη)2 − 4α                    2λη
+λ1   =                                                         −α=1−           + O(λ2 η 2 ), (59)
+                                  2                                      1−α
+λ2   = α,                                                                                    (60)
+                   2
+                                       p
+       (1 + α − λη) − (1 + α − λη) (1 + α − λη) − 4α    2                      2
+                                                                            2α
+λ3   =                                                         − α = α2 +         λη + O(λ2 (61)
+                                                                                             η 2 ),
+                                  2                                       (1 − α)
+and it’s easy to prove
+                                          0 < λ3 < λ2 = α < λ1 < 1.                                         (62)
+Therefore, A can be formulated as
+                                                     S −1 AS = Λ,                                           (63)
+where Λ is a diagonal matrix whose diagonal elements are the eigen value of A; the column vector
+of S is the eigen vectors of A, note the fromulation of S, Λ are not unique. Specifically, we set
+Λ, S as
+
+
+                                                λ1       0    0
+                                                                   !
+                                Λ =             0        λ2   0        ,                                    (64)
+                                                0        0    λ3
+                                                     1             1                 1
+                                                                                         
+                                                1+α−λη         1+α−λη         1+α−λη
+                                S    =          α+λ1           α+λ2           α+λ3
+                                                                                          .                (65)
+                                                   1              1              1
+                                                  λ1             λ2             λ3
+
+Moreover, the inverse of S exists, and can be explicitly expressed as
+                         (α+λ1 )λ1            2λ1 (α+λ1 )(α+λ3 )       λ1 λ3 (α+λ1 )    
+                       (λ1 −α)(λ1 −λ3 )  − (λ1 −λ 3 )(λ1 −α)(1+α−β)   (λ1 −α)(λ1 −λ3 )
+                              2α2             2α(α+λ1 )(α+λ3 )
+          S −1 =  − (λ1 −α)(α−λ                                            2αλ1 λ3
+                                                                     − (λ1 −α)(α−λ       .                 (66)
+                                                                                        
+                                     3)   (λ1 −α)(α−λ3 )(1+α−β)                       3)
+                               (α+λ3 )λ3               2λ3 (α+λ3 )(α+λ1 )                  (α+λ3 )λ1 λ3
+                             (α−λ3 )(λ1 −λ3 )    − (λ1 −λ 3 )(α−λ3 )(1+α−β)              (α−λ3 )(λ1 −λ3 )
+
+
+let Yt = S −1 Xt , combining with Eq.(58), we have
+
+                                                                 h̃t η 2
+                                        Yt+1 = ΛYt +                      S −1 e.                           (67)
+                                                              (S T e)T Yt
+
+                                                              14
+Combining with Eq.(65) and Eq.(66), and set Yt = (ãt , b̃t , c̃t )T , we can rewritten Eq.(67) as
+
+                                                      h̃t η 2       (α + λ1 )λ1
+                          ãt+1     = λ1 ãt +                   ·                 ,                   (68)
+                                                ãt + b̃t + c̃t (λ1 − α)(λ1 − λ3 )
+                                                    h̃t η 2           2α2
+                          b̃t+1     = αb̃t −                   ·                ,                      (69)
+                                              ãt + b̃t + c̃t (λ1 − α)(α − λ3 )
+                                                     h̃t η 2       (α + λ3 )λ3
+                          c̃t+1     = λ3 c̃t +                   ·                 .                   (70)
+                                               ãt + b̃t + c̃t (α − λ3 )(λ1 − λ3 )
+Note ||wt ||22 = ãt + b̃t + c̃t . Now we can prove the following inequations by mathematical induction
+
+                                              b̃t     <    0,                                          (71)
+                                              c̃t     >    0,                                          (72)
+                                   (α − λ1 )b̃t       >    (λ1 − λ3 )c̃t ,                             (73)
+                                  ãt + b̃t + c̃t     >    0,                                          (74)
+                                                                                       h̃t η 2
+                       ãt+1 + b̃t+1 + c̃t+1 ,        >    λ1 (ãt + b̃t + c̃t ) +                 ,   (75)
+                                                                                   ãt + b̃t + c̃t
+
+Since the start point X1 = (a1 , a1 , a1 )T (a1 > 0), the start point Y1 = S −1 X1 . Combining with
+Eq.(66), we have
+                                      2α2 λη
+                 b̃1     =    −                   a1 ,                                                 (76)
+                                (λ1 − α)(α − λ3 )
+                                  λ3 (λ3 + α)(1 − α + λη)     1 − α − λη
+                 c̃1     =                                  (            − λ1 )a1 ,                    (77)
+                              (λ3 − α)(λ1 − λ3 )(1 + α − λη) 1 − α + λη
+
+by which it’s easy to prove (α − λ1 )b̃1 > (λ1 − λ3 )c̃1 . Besides ã1 + b̃1 + c̃1 = eT SY1 = eT X1 =
+a1 > 0.
+Suppose for t = T , Eq. (71), (72), (73), (74) hold, combining with Eq.(69), (70), we can derive
+b̃T +1 < 0, ãT +1 > 0, so Eq.(71), (72) hold for t = T + 1; Besides, we have
+
+                                                                  h̃t η 2         2α2
+                  (α − λ1 )b̃T +1 = α(α − λ1 )b̃T +                          ·
+                                                            ãT + b̃T + c̃T (α − λ3 )
+                                                                     h̃t η 2     (α + λ3 )λ3           (78)
+                                       > λ3 (λ1 − λ3 )c̃T +                    ·
+                                                               ãT + b̃T + c̃T     (α − λ3 )
+                                       = (λ1 − λ3 )c̃T +1 ,
+thus Eq.(73) holds for t = T + 1. Sum Eq.(68), Eq.(69), Eq.(70), due to Eq.(73) we have
+
+                                                                                       h̃t η 2
+                  ãT +1 + b̃T +1 + c̃T +1 = λ1 ãT + αb̃T + λ3 c̃T +
+                                                                                 ãT + b̃T + c̃T
+                                                                                                       (79)
+                                                                                    h̃t η 2
+                                                    > λ1 (ãT + b̃T + c̃T ) +                  ,
+                                                                              ãT + b̃T + c̃T
+Eq.(75) holds for t = T + 1, combining with the fact that ãT + b̃T + c̃T > 0, we have ãT +1 +
+b̃T +1 + c̃T +1 > 0.
+According
+     √    √to Lemma 2, we can√ estimate the lower bound of ãt + b̃t + c̃t : when t > 1 +
+log(( 2−1) lη/(4λ))−log(|||w0 ||22 − lη/(4λ)|)
+               log(1−2λη)                      ,
+                                                      s                   r
+                                                              lη              lη(1 − α)
+                                  ãt + b̃t + c̃t ≥                  ≈                                 (80)
+                                                          2(1 − λ1 )             4λ
+
+
+                                                             15
+Now we can analyze the expectation of distance(l2 norm) between Yt = (ãt , b̃t , c̃t )T and the fixed
+point Y ∗ = (ã∗ , b̃∗ , c̃∗ )T which satisfies
+                                                     Lη 2
+                                      Y ∗ = ΛY ∗ + T T ∗ S −1 e.                                  (81)
+                                                  (S e) Y
+Assume xt = ãt + b̃t + c̃t , x∗ = ã∗ + b̃∗ + c̃∗ > 0, then we have:
+                                                Lη 2 T                         (h̃t − L)η 2
+                       Yt+1 − Y ∗ = (Λ −            ∗
+                                                      ke )(Yt − Y ∗ ) +                       k                    (82)
+                                               xt x                                  xt
+where k = (k1 , k2 , k3 )T = S −1 e. In the following context, will omit the O(λ2 η 2 ) part since
+λη  1. k1 , k2 , k3 can be approximated as
+                                                        1
+                                      k1 =                     + O(β),                                             (83)
+                                                   (1 − α)2
+                                                          2α
+                                      k2 = −                     + O(β),                                           (84)
+                                                      (1 − α)2
+                                                       α2
+                                      k3 =                     + O(β).                                             (85)
+                                                   (1 − α)2
+Then we have
+                                             L                                E[(h̃t − L)2 |Yt ]η 4
+      E[||Yt+1 − Y ∗ ||22 |Yt ] = ||(Λ −         ke   T
+                                                        )(Y t −  Y ∗ 2
+                                                                    )||2 +                             ||k||22     (86)
+                                           xt x∗                                         x2t
+                                                                                 r
+                                                                                             Lη
+It’s easy to obtain the value of fixed point x∗ = ã∗ + b̃∗ + c̃∗ =                 λ(1−α)(2− 1+α λη
+                                                                                                      )
+                                                                                                        , and we have
+                                √     √                           √                      q
+                           log(( 2−1) lη/(4λ))−log(|||w0 ||22 − lη/(4λ)|)
+known that if t > 1 +                         log(1−2λη)                        , xt > lη(1−α)  4λ     ,, therefore we
+have
+                                                                  r
+                                                    Lη 2             2L
+                                                             <            · 2λη,                                   (87)
+                                                    xt x∗             l
+                                  E[(h̃t − L)2 |Yt ] 4             4V η 3 λ
+                                            2          η <                    .                                    (88)
+                                          xt                      l(1 − α)
+According to assumption 3, we can prove
+                                   r
+                                     2L       (1 − α)2 1 − α2              8
+                                          <               [         −            ],                                (89)
+                                      l            3           β        1−α
+combining with Lemma 3, we have
+                                                        4λη                         4V η 3 λ||k||22
+                 E[||Yt+1 − Y ∗ ||22 |Yt ] < (1 −             )||Yt − Y ∗ ||22 +                    ,              (90)
+                                                       1−α                             l(1 − α)
+which implies
+                                           4λη t−T                              V η 2 (1 + 4α2 + α4 )
+            E||Yt+1 − Y ∗ ||22 < (1 −             )      E||YT − Y ∗ ||22 +                                ,       (91)
+                                          1−α                                          l(1 − α)4
+                          √      √                          √
+                    log(( 2−1) lη/(4λ))−log(|||w0 ||22 − lη/(4λ)|)
+where T = [1 +                          log(1−2λη)                      ]. Therefore, similar to the proof of
+theorem 1, ∃B > 0,
+                                                      4λη t         V η 2 (1 + 4α2 + α4 )
+                     E||Yt+1 − Y ∗ ||22 < (1 −              )B+                                 .                  (92)
+                                                     1−α                    l(1 − α)4
+Recall ||wt ||22 = eT Yt , therefore
+                                                                   4λη t   3V η 2 (1 + 4α2 + α4 )
+    E[||wt ||22 − (w∗ )2 ]2 ≤ 3E||Yt+1 − Y ∗ ||22 < 3(1 −              )B+                        .               (93)
+                                                                  1−α             l(1 − α)4
+
+                                                                                2       2   4
+Remark 4. By Eq.(93), the variance of ||wt ||22 is bounded by 3V η l(1−α) (1+4α +α )
+                                                                               4     , which is not small
+enough. But we somehow can reduce it: according to Eq.(88), if xt is close to its theoretical value,
+                2              3                                                           2
+                                                                                             (1+4α2 +α4 )
+then E[(h̃t −L)
+            x2
+                  |Yt ] 4
+                       η < 4V η λ(1−α)
+                                 l     , hence variance of ||wt ||22 can be bounded by 3V η2L(1−α)  2     .
+             t
+
+
+
+
+                                                          16
+A.3   P ROOF OF T HEOREM 3
+
+Proof. In SGD case, we have
+                                         hwt+1 , wt i = (1 − λη)||wt ||22 ,                          (94)
+then we have
+                                 hwt+1 , wt i2                    ||wt ||22
+                         cos2 ∆t =   2            2 = (1 − 2λη)             .                        (95)
+                              ||wt ||2 · ||wt+1 ||2             ||wt+1 ||22
+Accoring to Theorem 1, when V = 0, we have
+                                         ||wt ||22
+                                     |             − 1| < O((1 − 2λη)T ),                            (96)
+                                          (w∗ )2
+which implies
+                        |∆2t − 2λη| = |cos2 ∆t − 1 + 2λη| < O((1 − 2λη)T ).                          (97)
+               √
+Since ∆t and       2λη are both finite, we have
+                                           p
+                                    |∆t − 2λη| < O((1 − 2λη)T ).                                     (98)
+In SGDM case, according to theorem 2, when V = 0, Eq.(92 implies
+                                                                                 2λη t
+                                             |||wt ||22 − (w∗ )2 | <     O((1 −      ) ),            (99)
+                                                                                1−α
+                                          1 + α − 2λη ∗ 2                        2λη t
+                     |hwt+1 , wt i2 −                (w ) | <            O((1 −      ) ).           (100)
+                                             1+α                                1−α
+Therefore it is easy to derive
+                            2λη                       2λη              2λη T
+                   |∆2t −         | = |cos2 ∆t − 1 +       | < O((1 −      ) ).                     (101)
+                           1+α                       1+α              1+α
+               q
+                  2λη
+Since ∆t and 1+α       are both finite, we have
+                                        r
+                                           2λη               2λη T
+                                |∆t −           | < O((1 −       ) ).                               (102)
+                                          1+α               1+α
+
+
+A.4   P ROOF OF C OROLLARY 3.1
+
+Proof of Corollary 3.1. In SGD case, and Eq.(34), we have
+                                         ||wt+1 ||22 > (1 − 2λη)||wt ||22 ,                         (103)
+which means
+                                     ||wt+T ||22 > (1 − 2λη)T ||wt ||22 .                           (104)
+                                                                                            √
+On the other hand, we know that when η is divided by k, ||wt ||22 should be divided by          k to reach
+the new equilibrium condition, therefore we have
+                                     ||wt+T ||2    1
+                                                = √ > (1 − 2λη)T .                                  (105)
+                                       ||wt ||2     k
+Since λη  1, log(1 − 2λη) ≈ −2λη, thus
+                                                        log(k)
+                                                  T >          .                                    (106)
+                                                         4λη
+.
+In SGDM case, by Eq.(79), we have
+                                                              2λη
+                                     ||wt+1 ||22 > (1 −           )||wt ||22 ,                      (107)
+                                                             1−α
+Similar to SGD case, we have
+                                                    log(k)(1 − α)
+                                              T >                 .                                 (108)
+                                                         4λη
+.
+
+
+                                                        17
+B     E XPERIMENTS
+
+B.1   E XPERIMENTS ON SYTHETIC DATA
+
+In this section we apply experiments on sythetic data to prove our claim in section 4: theorem 1 only
+requires expected square norm of unit gradient is locally steady, it do not need to remain unchanged
+across the whole training. The proof of theorem implies square norm of weight is determined by the
+following iterative map:
+                                                            Lt η 2
+                                  xt+1 = (1 − 2λη)xt +             ,                            (109)
+                                                             xt
+where λ, η ∈ (0, 1), Lt denotes the square of unit gradient norm. Hence we simulate xt with
+different type of {Lt }∞t=1 . Results in Figure 4 shows as long as the local variance of square norm
+of unit gradient is not too much, and expectation of Lt changes smoothly, weight norm can quickly
+converge to its theoretical value base on expectation of square norm of unit gradient.
+
+
+
+
+                     (a) Lt = 10                                    (b) Lt = 10 + t
+
+
+
+
+               (c) Lt = 10 + sin( 10t 5 )                   (d) Lt = 10 + sin( 10t 5 ) + t
+
+         Figure 4: Simulation of Eq.(109), η = 0.1, λ = 0.001, x0 = 10, t ∼ U(−3, 3).
+
+We also simulate SGDM case by following iteration map
+                                                      Lt η 2
+                                      Xt+1 = AXt +           · e,                              (110)
+                                                      Xt [0]
+where A, Xt , e is defined as Eq.(54), (55), (56). Simulation results is shown in Figure 5.
+
+B.2   R ETHINKING L INEAR S CALING P RINCIPLE IN S PHERICAL M OTION DYNAMICS
+
+In this section, we will discuss the effect of Linear Scaling Principle (LSP) under the view of SMD.
+Linear Scaling Principle is proposed by Goyal et al. (2017) to tune the learning rate η with batch
+size B by η ∝ B. The intuition of LSP is if weights do not change too much within k iterations,
+
+
+                                                 18
+                     (a) Lt = 10                                   (b) Lt = 10 + t
+
+
+
+
+               (c) Lt = 10 + sin( 10t 5 )                    (d) Lt = 10 + sin( 10t 5 ) + t
+
+     Figure 5: Simulation of Eq.(109), η = 0.1, λ = 0.001, x0 = 10, t ∼ U(−3, 3), α = 0.9.
+
+
+then k iterations of SGD with learning rate η and minibatch size B (Eq.(111)) can be approximated
+by a single iteration of SGD with learning rate kη and minibatch size kB (Eq.(112):
+                                          X 1 X ∂L
+                       wt+k = wt − η          (                   + λwt+j ),                (111)
+                                                B      ∂w wt+j ,x
+                                            j<k    x∈Bj
+                                           1 X X ∂L
+                      wt+1     = wt − kη(                 + λwt ).                             (112)
+                                          kB     ∂w wt ,x
+                                                  j<k x∈Bj
+
+Goyal et al. (2017) shows that combining with gradual warmup, LSP can enlarge the batch size up
+to 8192(256 × 32) without severe degradation on ImageNet experiments.
+LSP has been proven extremely effective in a wide range of applications. However, from the perspec-
+tive of SMD, the angular update mostly relies on the pre-defined hyper-parameters, and it is hardly
+affected by batch size. To clarify the connection between LSP and SMD, we explore the learning
+dynamics of DNN with different batch size by conducting extensive experiments with ResNet50
+on ImageNet, the training settings rigorously follow Goyal et al. (2017): momentum coefficient is
+α = 10−4 ; WD coefficient is λ = 10−4 ; Batch size is denoted by B; learning rate is initialized as
+ B
+256 · 0.1; Total training epoch is 90 epoch, and learning rate is divided by 10 at 30, 60, 80 epoch
+respectively.
+The results of experiments(Figure 6, 7) suggests that the assumption of LSP does not always hold
+in practice because of three reasons: first, the approximate equivalence between a single iteration
+in large batch setting, and multiple iterations in small batch setting can only hold in pure SGD
+formulation, but momentum method is far more commonly used; Second, according Theorem 2,
+the enlargement ratio of angular update is only determined by the increase factor of learning rate.
+Figure 6 shows in practice, the accumulated angular update ](wt , wt+k ) in small batch batch setting
+is much larger than angular update ](wt , wt+1 ) of a single iteration in larger batch setting when
+using Linear Scaling Principle; Third, even in pure SGD cases, the enlargement of angular update
+
+
+                                                  19
+           (a) B = 256 versus B = 1024                    (b) B = 256 versus B = 4096
+
+Figure 6: Angular update of weights from layer1.0.conv2 in ResNet50. The blue lines represent
+the angular update of weights within a single iteration in when batch settings is B = 1024(4096);
+The red lines represent the accumulated angular update within 4(16) iterations in smaller batch
+setting(B = 256).
+
+
+
+
+                           (1024)                                         (4096)
+                   (a) ||g         ||
+                        ||g (256) ||
+                                                                  (b) ||g         ||
+                                                                       ||g (256) ||
+
+
+
+Figure 7: Enlargement ratio of gradients’ norm of weights from layer1.0.conv2 when batch size
+increases . ||g (k) || represents the gradient’s norm computed using k samples(not average).
+
+
+still relies on the increase of learning rate, and has no obvious connection to the enlargement of
+gradient’s norm when equilibrium condition is reached (see Figure 7).
+In conclusion, though LSP usually works well in practical applications, SMD suggests we can find
+more sophisticated and reasonable schemes to tune the learning rate when batch size increases.
+
+B.3   S PHERICAL M OTION DYNAMICS WITH D IFFERENT N ETWORK S TRUCTURES
+
+
+
+
+                                               20
+         (a) Angle Update of MobileNet-V2                (b) Angular Update of ShuffleNet-V2+
+
+Figure 8: The angular update ∆t of MobileNet-V2Sandler et al. (2018) and ShuffleNet-V2+Ma
+et al. (2018). The solid lines with different colors represent all scale-invariant weights from the
+model;
+q        The dash black line represents the theoretical value of angular update, which is computed by
+   2λη
+   1+α . Learning rate η is initialized as 0.5, and divided by 10 at epoch 30, 60, 80 respectively; WD
+coefficient λ is 4 × 10−5 ; Momentum parameter α is set as 0.9.
+
+
+
+
+                                                 21

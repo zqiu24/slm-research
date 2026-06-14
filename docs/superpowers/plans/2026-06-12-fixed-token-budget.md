@@ -74,7 +74,7 @@ def parse_token_count(value: int | float | str) -> int:
     """
     if isinstance(value, bool):
         raise ValueError(f"token count must be a number or suffixed string, got {value!r}")
-    if isinstance(value, (int, float)):
+    if isinstance(value, int | float):
         tokens = int(round(value))
     else:
         text = str(value).strip().replace("_", "").replace(",", "")
@@ -393,7 +393,13 @@ def test_all_fixed_regimes_parse_to_expected_budgets():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_launcher_config_composition.py -v`
-Expected: FAIL with `FileNotFoundError: No such config: .../configs/training_regime/fixed_1b.yaml`
+Expected: the two new tests FAIL with `FileNotFoundError: No such config: .../configs/training_regime/fixed_1b.yaml`.
+
+KNOWN PRE-EXISTING FAILURE in this file (baselined 2026-06-12, before this plan):
+`test_parse_overrides_loads_defaults_and_data_axis` asserts the default cluster
+is `h800_cn`, but `configs/launch/config.yaml` now defaults to `b200_de`. It is
+unrelated to this plan — do NOT fix it here and do NOT count it against your
+changes. It stays failing in Step 4 too.
 
 - [ ] **Step 3: Create the five regime configs**
 
@@ -428,7 +434,7 @@ The other four files are identical except for the comment's budget and `total_to
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_launcher_config_composition.py -v`
-Expected: all PASS
+Expected: both new tests PASS; only the pre-existing `test_parse_overrides_loads_defaults_and_data_axis` failure remains (see Step 2)
 
 - [ ] **Step 5: Commit**
 
@@ -542,7 +548,7 @@ Add under `## Unreleased` (top of section), matching the existing entry style:
 - [ ] **Step 4: Sanity-check docs didn't break anything**
 
 Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit/test_launcher_config_composition.py tests/unit/test_megatron_args.py -q`
-Expected: PASS (config comments are load-bearing only as YAML comments)
+Expected: PASS apart from the pre-existing `test_parse_overrides_loads_defaults_and_data_axis` failure (config comments are load-bearing only as YAML comments)
 
 - [ ] **Step 5: Commit**
 
@@ -568,7 +574,7 @@ Expected: exit 0, no output
 - [ ] **Step 2: Full unit suite**
 
 Run: `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest tests/unit -q`
-Expected: everything green except any pre-existing failures unrelated to this change. Before claiming success, compare against a baseline if unsure: `git stash && pytest tests/unit -q && git stash pop` is NOT allowed (destructive churn) — instead, re-run only the failing test files and confirm the failures predate this work by checking they don't touch token/budget code paths.
+Expected: green except KNOWN PRE-EXISTING failures baselined on 2026-06-12 before this plan (see "Pre-existing test failures" at the end of this document). Any failure NOT on that list must be treated as caused by this work — debug it before claiming success.
 
 - [ ] **Step 3: End-to-end dry-run smoke (CPU-only, no GPU)**
 
@@ -586,9 +592,25 @@ git status --short   # confirm clean (runs/ archives are untracked scratch; leav
 
 ---
 
+## Pre-existing test failures (baselined 2026-06-12, before any plan work)
+
+- `tests/unit/test_launcher_config_composition.py::test_parse_overrides_loads_defaults_and_data_axis`
+  — asserts the default cluster is `h800_cn`; `configs/launch/config.yaml` now
+  defaults to `b200_de`. Stale test, unrelated to this plan. Leave failing;
+  flag to the user at handoff.
+
+(Targeted baseline: the six test files this plan touches or depends on —
+`test_ladder_math`, `test_train_megatron_command`, `test_megatron_args`,
+`test_launcher_config_composition`, `test_ngpt_megatron_args`,
+`test_torchtitan_args` — ran 1 failed, 100 passed.)
+
+---
+
 ## Out of scope (deliberately)
 
 - **No change to GPTDataset/Megatron internals** — the cache-key behavior we rely on already exists.
+- **No change to `src/utils/torchtitan_args.py`** — it reads `cfg.training.total_tokens` only after `resolve_config` has run (verified: all its callers and tests resolve first), so explicit budgets flow through it as plain ints automatically.
+- **No fix for the pre-existing `test_parse_overrides_loads_defaults_and_data_axis` failure** (stale `h800_cn` default-cluster assertion vs. the current `b200_de` default) — unrelated to this feature; flag it to the user instead.
 - **No seq_length normalization** — a fixed token budget pins the dataset only at equal `seq_length`; cross-seq-length comparisons are genuinely different datasets.
 - **No warning when an explicit budget overrides `tokens_per_param`** — precedence is documented; the resolved config archive and the launcher's JSON output both show the final `total_tokens`.
 - **No GPU/training runs** — this is config/launcher plumbing; CPU tests + dry-run fully cover it.
