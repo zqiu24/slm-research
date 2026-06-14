@@ -440,39 +440,43 @@ In `tests/integration/test_megatron_pin_features.py`, the `REQUIRED_FIELDS` list
 
 - [ ] **Step 2: Add the gemma3 case to the launcher script**
 
-In `scripts/train_bakeoff_600m.sh`, the family `case` currently has:
+In `scripts/train_bakeoff_600m.sh`, the family `case` currently reads (note `deepseek_v3_dense` was added since the bake-off plan; preserve the column alignment):
 
 ```bash
-  qwen3)       SCALE="600m" ;;            # dense control (existing dev rung)
-  deepseek_v3) SCALE="600m_deepseek_v3" ;;
-  qwen3_next)  SCALE="600m_qwen3_next" ;;
-  nemotron_h)  SCALE="600m_nemotron_h" ;;
-  *) echo "unknown family: $FAMILY (qwen3|deepseek_v3|qwen3_next|nemotron_h)" >&2; exit 1 ;;
+case "$FAMILY" in
+  qwen3)             SCALE="600m" ;;            # dense control (existing dev rung)
+  deepseek_v3)       SCALE="600m_deepseek_v3" ;;
+  deepseek_v3_dense) SCALE="600m_deepseek_v3_dense" ;;  # MLA + MTP, MoE off
+  qwen3_next)        SCALE="600m_qwen3_next" ;;
+  nemotron_h)        SCALE="600m_nemotron_h" ;;
+  *) echo "unknown family: $FAMILY (qwen3|deepseek_v3|deepseek_v3_dense|qwen3_next|nemotron_h)" >&2; exit 1 ;;
 esac
 ```
 
 Add a `gemma3` line and extend the error string:
 
 ```bash
-  qwen3)       SCALE="600m" ;;            # dense control (existing dev rung)
-  deepseek_v3) SCALE="600m_deepseek_v3" ;;
-  qwen3_next)  SCALE="600m_qwen3_next" ;;
-  nemotron_h)  SCALE="600m_nemotron_h" ;;
-  gemma3)      SCALE="600m_gemma3" ;;
-  *) echo "unknown family: $FAMILY (qwen3|deepseek_v3|qwen3_next|nemotron_h|gemma3)" >&2; exit 1 ;;
+case "$FAMILY" in
+  qwen3)             SCALE="600m" ;;            # dense control (existing dev rung)
+  deepseek_v3)       SCALE="600m_deepseek_v3" ;;
+  deepseek_v3_dense) SCALE="600m_deepseek_v3_dense" ;;  # MLA + MTP, MoE off
+  qwen3_next)        SCALE="600m_qwen3_next" ;;
+  nemotron_h)        SCALE="600m_nemotron_h" ;;
+  gemma3)            SCALE="600m_gemma3" ;;
+  *) echo "unknown family: $FAMILY (qwen3|deepseek_v3|deepseek_v3_dense|qwen3_next|nemotron_h|gemma3)" >&2; exit 1 ;;
 esac
 ```
 
 Also update the usage comment near the top — change the line
 
 ```bash
-#   family ∈ {qwen3, deepseek_v3, qwen3_next, nemotron_h}
+#   family ∈ {qwen3, deepseek_v3, deepseek_v3_dense, qwen3_next, nemotron_h}
 ```
 
 to
 
 ```bash
-#   family ∈ {qwen3, deepseek_v3, qwen3_next, nemotron_h, gemma3}
+#   family ∈ {qwen3, deepseek_v3, deepseek_v3_dense, qwen3_next, nemotron_h, gemma3}
 ```
 
 - [ ] **Step 3: Dry-run gemma3 through the script (CPU)**
@@ -624,3 +628,4 @@ Append any fallback override identically to the other families' real-run command
 - **`tuple_type` rejects the `--window-size` value format** — caught at the Task 3 dry-run; `tuple_type` (`arguments.py:282`) strips `()` and splits on `,`, so the bare `"1024,0"` token round-trips. If a future pin changes the parser, adjust the emitted string, not the pin.
 - **Pin moved and a flag changed** — the Task 4 pin guard catches a missing arg before any GPU spend; re-run after any submodule bump.
 - **Sandwich patch not active** — `use_sandwich_norm: true` is a no-op unless `sandwich_norm_apply` is in `experiment.patches`; the bake-off uses `experiment=optim/adam`, which already lists it (`configs/experiments/optim/adam.yaml:20`). Verify `[sandwich] swapped layer class` appears in the smoke log.
+- **Zero-centered RMSNorm assert (ruled out)** — `transformer_config.py:2211` asserts `not layernorm_zero_centered_gamma`, but ONLY inside the `if self.transformer_impl == "inference_optimized":` block, which gemma3 never enters. The `--apply-layernorm-1p` + RMSNorm training path is unaffected.
