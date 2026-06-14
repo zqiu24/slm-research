@@ -18,8 +18,14 @@ comparison isolates the mixer/backbone.
 |---|---|---|---|---|
 | qwen3 (control) | 600m | ~600M | =total | gpt |
 | deepseek_v3 | 600m_deepseek_v3 | 592.1M | ~252M | gpt |
+| deepseek_v3_dense (opt.) | 600m_deepseek_v3_dense | 604.3M | =total | gpt |
 | qwen3_next | 600m_qwen3_next | 594.9M | ~241M | gpt |
 | nemotron_h | 600m_nemotron_h | 604.8M | =total | mamba |
+
+`deepseek_v3_dense` is an **optional** dense ablation (MLA + MTP identical to
+`deepseek_v3`, MoE replaced by a dense SwiGLU FFN). It isolates the value of
+sparsity at equal total non-embedding params. Not in the default 4-family
+sweep; add it with `FAMILIES="... deepseek_v3_dense"` or run it on its own.
 
 **Known asymmetries (accepted).** Hidden size differs (1280 for
 nemotron_h/control vs 1024 for the MoE families) → tied-embedding counts
@@ -59,5 +65,6 @@ and run the 1.2B gate.
 |---|---|---|---|---|
 | qwen3 (control) | | | | |
 | deepseek_v3 | | | | |
+| deepseek_v3_dense (opt.) | | | | |
 | qwen3_next | | | | |
 | nemotron_h | | | | |

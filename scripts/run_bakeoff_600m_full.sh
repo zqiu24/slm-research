@@ -39,6 +39,7 @@ mkdir -p "$LOG_DIR"
 declare -A LOG_NAME=(
   [qwen3]=bakeoff-600m-qwen3
   [deepseek_v3]=bakeoff-600m-deepseek
+  [deepseek_v3_dense]=bakeoff-600m-deepseek-dense
   [qwen3_next]=bakeoff-600m-qwen3next
   [nemotron_h]=bakeoff-600m-nemotron
 )

@@ -1,0 +1,23 @@
+# @package _global_
+# Dense DeepSeek-V3 realized at the 600M non-embedding budget (arch bake-off;
+# docs/experiments/arch_bakeoff_600m.md). Same MLA + MTP dims as
+# 600m_deepseek_v3, but MoE is off, so all 24 layers carry a dense SwiGLU MLP
+# sized to hit the budget. Dense -> active == total. Sized by
+# tools/size_check.py.
+base:
+  scale: "600m_deepseek_v3_dense"
+  non_embedding_params: 600_000_000
+  model:
+    num_layers: 24
+    hidden_size: 1024
+    ffn_hidden_size: 6912          # dense FFN on every layer (sized to budget)
+    num_attention_heads: 16
+    num_query_groups: 16           # MLA path; no GQA grouping
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true
+    q_lora_rank: 384
+    kv_lora_rank: 256
+    qk_head_dim: 64
+    qk_pos_emb_head_dim: 32
+    v_head_dim: 64

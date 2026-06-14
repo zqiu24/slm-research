@@ -40,6 +40,11 @@
   yields `--train-samples 46,875,000`), `training.micro_batch_size=4`
   (`MICRO_BATCH_SIZE`; null would derive to `min(64,gbs)=64` and OOM at the first
   forward on 80GB H100).
+- New optional dense ablation: `deepseek_v3_dense` family + `600m_deepseek_v3_dense`
+  scale (MLA + MTP identical to `deepseek_v3`, MoE replaced by a dense SwiGLU FFN
+  6912 → 604.3M, active==total). Wired into `train_bakeoff_600m.sh` and the budget
+  gate; not in the default 4-family sweep (include via `FAMILIES=...`). Isolates
+  the value of sparsity at equal total non-embedding params.
 
 ### Added — fixed token budgets (dataset pinning across architectures)
 
