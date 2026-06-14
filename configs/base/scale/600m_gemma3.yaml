@@ -1,0 +1,16 @@
+# @package _global_
+# Gemma 3 (text-only) mechanisms realized at the 600M non-embedding budget
+# (arch bake-off; docs/experiments/arch_bakeoff_600m.md). Sized by
+# tools/size_check.py: total 599,512,192 (-0.08%); dense (active == total).
+base:
+  scale: "600m_gemma3"
+  non_embedding_params: 600_000_000
+  model:
+    num_layers: 20
+    hidden_size: 1152
+    ffn_hidden_size: 6624           # wide GeGLU MLP (gated)
+    num_attention_heads: 8
+    num_query_groups: 4             # GQA 2:1
+    head_dim: 256                   # Gemma signature large head dim (--kv-channels)
+    seq_length: 4096
+    tie_embeddings: true

@@ -17,6 +17,11 @@ BAKEOFF_PAIRS = [
     ("deepseek_v3_dense", "600m_deepseek_v3_dense"),
     ("qwen3_next", "600m_qwen3_next"),
     ("nemotron_h", "600m_nemotron_h"),
+    ("gemma3", "600m_gemma3"),
+    # dense-architecture bake-off: plain dense GQA transformers, param-matched
+    ("qwen3", "600m_qwen3"),
+    ("llama3", "600m_llama3"),
+    ("minicpm", "600m_minicpm"),
 ]
 
 
