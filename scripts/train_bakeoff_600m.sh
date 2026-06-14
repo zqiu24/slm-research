@@ -12,10 +12,18 @@ set -euo pipefail
 #   bash scripts/train_bakeoff_600m.sh deepseek_v3 cluster=h100_de
 #   bash scripts/train_bakeoff_600m.sh nemotron_h cluster=h100_de training.micro_batch_size=8
 #
+# seq_length: default to 256 for cheap/fast bake-off iteration. NOTE this keeps
+# the 24B-token budget (total_tokens // seq_length) but GBS stays in *sequences*,
+# so tokens/step drop 16x vs 4096 and step count rises 16x; long-context signal
+# (Mamba/GDN/MLA) is largely absent at 256. Override via SEQ_LENGTH=... or a
+# trailing base.model.seq_length=N for the real long-context comparison.
+SEQ_LENGTH="${SEQ_LENGTH:-256}"
+
 # micro_batch_size: ablation_40x leaves it null, which megatron_args derives to
 # min(64, gbs)=64 -> OOMs at the first forward on 80GB H100 (seq 4096, tp=1).
 # Default to a value that fits every family; override via MICRO_BATCH_SIZE=... or
 # a trailing training.micro_batch_size=N (the latter wins, last override = winner).
+# (At seq 256 activations are ~16x smaller, so a much larger mbs also fits.)
 MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
@@ -37,5 +45,6 @@ python -m launchers.train_megatron \
   "training_regime=ablation_40x" \
   "scheduler=wsd" \
   "seed=42" \
+  "base.model.seq_length=$SEQ_LENGTH" \
   "training.micro_batch_size=$MICRO_BATCH_SIZE" \
   "$@"

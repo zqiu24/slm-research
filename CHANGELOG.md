@@ -35,6 +35,9 @@
   (`MICRO_BATCH_SIZE` env / trailing override wins): `ablation_40x` leaves it
   null, which derives to `min(64, gbs)=64` and OOMs at the first forward on 80GB
   H100 (seq 4096, tp=1) for all four families.
+- `train_bakeoff_600m.sh` also defaults `base.model.seq_length=256` (`SEQ_LENGTH`
+  env / trailing override) for cheap iteration; the 24B-token budget is preserved
+  (`--train-samples` rescales to 93.75M) but tokens/step drop 16x at fixed GBS.
 
 ### Added — fixed token budgets (dataset pinning across architectures)
 
