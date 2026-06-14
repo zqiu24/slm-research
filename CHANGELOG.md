@@ -31,13 +31,15 @@
 - `scripts/run_bakeoff_600m_full.sh`: chains all four full (24B-token) runs
   sequentially on one node (foreground torchrun blocks per run), tee-logging
   each family codexlog-style and printing a pass/fail summary.
-- `train_bakeoff_600m.sh` now defaults `training.micro_batch_size=4`
-  (`MICRO_BATCH_SIZE` env / trailing override wins): `ablation_40x` leaves it
-  null, which derives to `min(64, gbs)=64` and OOMs at the first forward on 80GB
-  H100 (seq 4096, tp=1) for all four families.
-- `train_bakeoff_600m.sh` also defaults `base.model.seq_length=256` (`SEQ_LENGTH`
-  env / trailing override) for cheap iteration; the 24B-token budget is preserved
-  (`--train-samples` rescales to 93.75M) but tokens/step drop 16x at fixed GBS.
+- New `configs/training_regime/fixed_12b.yaml` (12B `total_tokens`); the bake-off
+  launcher now defaults to it (`REGIME` env override) instead of `ablation_40x`,
+  so all four families train on the EXACT same token count and share one
+  GPTDataset cache despite their differing `non_embedding_params`.
+- `train_bakeoff_600m.sh` defaults (all overridable via env / trailing override):
+  `REGIME=fixed_12b`, `base.model.seq_length=256` (`SEQ_LENGTH`; cheap iteration —
+  yields `--train-samples 46,875,000`), `training.micro_batch_size=4`
+  (`MICRO_BATCH_SIZE`; null would derive to `min(64,gbs)=64` and OOM at the first
+  forward on 80GB H100).
 
 ### Added — fixed token budgets (dataset pinning across architectures)
 

@@ -12,6 +12,12 @@ set -euo pipefail
 #   bash scripts/train_bakeoff_600m.sh deepseek_v3 cluster=h100_de
 #   bash scripts/train_bakeoff_600m.sh nemotron_h cluster=h100_de training.micro_batch_size=8
 #
+# training_regime: fixed 12B-token budget (total_tokens, NOT tokens_per_param)
+# so all four families train on the EXACT same token count and share one
+# GPTDataset cache despite their slightly different non_embedding_params.
+# Override via REGIME=fixed_50b etc. for a different fixed budget.
+REGIME="${REGIME:-fixed_12b}"
+
 # seq_length: default to 256 for cheap/fast bake-off iteration. NOTE this keeps
 # the 24B-token budget (total_tokens // seq_length) but GBS stays in *sequences*,
 # so tokens/step drop 16x vs 4096 and step count rises 16x; long-context signal
@@ -42,7 +48,7 @@ python -m launchers.train_megatron \
   "base/family=$FAMILY" \
   "base/scale=$SCALE" \
   "experiment=optim/adam" \
-  "training_regime=ablation_40x" \
+  "training_regime=$REGIME" \
   "scheduler=wsd" \
   "seed=42" \
   "base.model.seq_length=$SEQ_LENGTH" \
