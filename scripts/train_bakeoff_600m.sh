@@ -18,18 +18,18 @@ set -euo pipefail
 # Override via REGIME=fixed_50b etc. for a different fixed budget.
 REGIME="${REGIME:-fixed_12b}"
 
-# seq_length: default to 256 for cheap/fast bake-off iteration. NOTE this keeps
-# the 24B-token budget (total_tokens // seq_length) but GBS stays in *sequences*,
-# so tokens/step drop 16x vs 4096 and step count rises 16x; long-context signal
-# (Mamba/GDN/MLA) is largely absent at 256. Override via SEQ_LENGTH=... or a
+# seq_length: default to 1024 for bake-off iteration. NOTE this keeps the
+# 24B-token budget (total_tokens // seq_length) but GBS stays in *sequences*,
+# so tokens/step drop 4x vs 4096 and step count rises 4x; long-context signal
+# (Mamba/GDN/MLA) is partly present at 1024. Override via SEQ_LENGTH=... or a
 # trailing base.model.seq_length=N for the real long-context comparison.
-SEQ_LENGTH="${SEQ_LENGTH:-256}"
+SEQ_LENGTH="${SEQ_LENGTH:-1024}"
 
 # micro_batch_size: ablation_40x leaves it null, which megatron_args derives to
 # min(64, gbs)=64 -> OOMs at the first forward on 80GB H100 (seq 4096, tp=1).
 # Default to a value that fits every family; override via MICRO_BATCH_SIZE=... or
 # a trailing training.micro_batch_size=N (the latter wins, last override = winner).
-# (At seq 256 activations are ~16x smaller, so a much larger mbs also fits.)
+# (At seq 1024 activations are ~4x smaller, so a larger mbs also fits.)
 MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
