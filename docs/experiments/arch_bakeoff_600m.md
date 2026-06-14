@@ -21,6 +21,7 @@ comparison isolates the mixer/backbone.
 | deepseek_v3_dense (opt.) | 600m_deepseek_v3_dense | 604.3M | =total | gpt |
 | qwen3_next | 600m_qwen3_next | 594.9M | ~241M | gpt |
 | nemotron_h | 600m_nemotron_h | 604.8M | =total | mamba |
+| gemma3 | 600m_gemma3 | 599.5M | =total | gpt |
 
 `deepseek_v3_dense` is an **optional** dense ablation (MLA + MTP identical to
 `deepseek_v3`, MoE replaced by a dense SwiGLU FFN). It isolates the value of
@@ -37,6 +38,14 @@ MTP head (family identity); its `lm loss` is the comparison metric, not the
 MTP auxiliary loss. qwen3_next approximates the published model on its
 full-attention layers (no per-head output gate, standard rather than
 zero-centered RMSNorm — no native Megatron flags for either).
+gemma3 is dense (no MoE) and keeps its local/global sliding-window interleave
+(5 sliding : 1 global), GeGLU, QK-norm, zero-centered RMSNorm, and sandwich
+norm as family identity. Accepted approximations (no native Megatron support):
+a single RoPE base (1,000,000) instead of per-layer 10k local / 1M global; no
+√d embedding scaling; sigmoid-approx `quick_gelu` instead of `gelu_pytorch_tanh`.
+NOTE: at the script's cheap `SEQ_LENGTH=256` iteration default the 1024 window
+exceeds the sequence, so local/global collapses to full attention — the real
+gemma3 comparison needs `seq >= window` (use seq 4096).
 
 **Launch.**
     bash scripts/train_bakeoff_600m.sh <family> cluster=<cluster>
@@ -68,3 +77,4 @@ and run the 1.2B gate.
 | deepseek_v3_dense (opt.) | | | | |
 | qwen3_next | | | | |
 | nemotron_h | | | | |
+| gemma3 | | | | |

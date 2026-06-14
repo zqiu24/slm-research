@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added — gemma3 (text-only) bake-off family (2026-06-14)
+
+- New `gemma3` family + `600m_gemma3` scale (dense, gpt entrypoint, 599.5M
+  non-embedding): Gemma 3's local/global sliding-window interleave (5 sliding :
+  1 global via `--window-size`/`--window-attn-skip-freq`), GeGLU (`--quick-geglu`),
+  zero-centered RMSNorm (`--apply-layernorm-1p`), QK-norm, and sandwich norm
+  (reuses the existing `sandwich_norm_apply` patch).
+- `megatron_args`: emit `--quick-geglu`, `--apply-layernorm-1p`, and the
+  sliding-window flags. `arch_params`: account GeGLU (gated) and the
+  sandwich-norm term. Pin guard + `scripts/train_bakeoff_600m.sh` extended.
+- Documented approximations: single RoPE base (1M), no √d embedding scale,
+  sigmoid-approx `quick_gelu`. See docs/experiments/arch_bakeoff_600m.md.
+
 ### Added — weight-matrix norm monitoring (2026-06-13)
 
 - New `weight_norm_monitor` patch: logs row/column L2-norm summaries (+ per-layer
