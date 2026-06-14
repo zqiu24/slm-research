@@ -1,0 +1,18 @@
+# @package _global_
+# Llama-3-style dense GQA transformer at the 600M non-embedding budget
+# (dense-architecture bake-off; docs/experiments/arch_bakeoff_600m.md). Shares
+# the param-matched dense shape with 600m_qwen3 / 600m_minicpm; the family file
+# carries the architectural deltas (no qk-norm, rope base 500k). Sized by
+# tools/size_check.py.
+base:
+  scale: "600m_llama3"
+  non_embedding_params: 600_000_000
+  model:
+    num_layers: 40
+    hidden_size: 1280
+    ffn_hidden_size: 2880
+    num_attention_heads: 20
+    num_query_groups: 4          # GQA 5:1
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true

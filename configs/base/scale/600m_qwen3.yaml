@@ -1,0 +1,18 @@
+# @package _global_
+# Budget-matched qwen3 dense rung for the dense-architecture bake-off
+# (docs/experiments/arch_bakeoff_600m.md). Same dense GQA shape as the generic
+# 600m rung but ffn trimmed 3200 -> 2880 so the control lands within ±2% of the
+# 600M budget (the generic 600m.yaml is 648.9M, +8.15%, kept for daily dev).
+# Sized by tools/size_check.py.
+base:
+  scale: "600m_qwen3"
+  non_embedding_params: 600_000_000
+  model:
+    num_layers: 40
+    hidden_size: 1280
+    ffn_hidden_size: 2880
+    num_attention_heads: 20
+    num_query_groups: 4          # GQA 5:1
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true
