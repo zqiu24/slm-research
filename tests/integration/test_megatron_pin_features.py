@@ -29,6 +29,11 @@ REQUIRED_FIELDS = [
     "mamba_num_groups",
     # Activation (nemotron_h family)
     "squared_relu",
+    # Gemma 3 family (sliding-window interleave, GeGLU, zero-centered RMSNorm)
+    "window_size",
+    "window_attn_skip_freq",
+    "quick_geglu",
+    "layernorm_zero_centered_gamma",
 ]
 
 
