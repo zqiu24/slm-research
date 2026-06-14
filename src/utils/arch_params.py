@@ -144,9 +144,12 @@ def _mlp_params(model: dict, *, active: bool, layer_is_moe: bool) -> int:
             return moe_layer_active_params(topk=int(moe["router_topk"]), **kwargs)
         return moe_layer_params(**kwargs)
     ffn = int(model["ffn_hidden_size"])
-    if str(model.get("activation", "SwiGLU")) == "squared_relu":
+    activation = str(model.get("activation", "SwiGLU"))
+    if activation == "squared_relu":
         return 2 * hidden * ffn
-    return 3 * hidden * ffn  # SwiGLU
+    if activation in ("SwiGLU", "GeGLU"):
+        return 3 * hidden * ffn  # gated GLU: gate + up + down projections
+    raise ValueError(f"Unsupported activation {activation!r} in arch_params")
 
 
 def _mixer_params(model: dict, *, layer_is_linear: bool) -> int:
@@ -196,11 +199,17 @@ def _gpt_total(model: dict, *, active: bool) -> int:
         else [0] * num_layers
     )
 
+    # Sandwich norm (Gemma-style) adds a post-attn + post-mlp norm per layer.
+    # The sandwich_norm_apply patch swaps the layer class across dense/MoE/MTP
+    # spec paths, so the term applies to MTP blocks too.
+    sandwich = 2 * hidden if bool(model.get("use_sandwich_norm", False)) else 0
+
     total = 0
     for i in range(num_layers):
         total += _mixer_params(model, layer_is_linear=bool(linear_pattern[i]))
         total += _mlp_params(model, active=active, layer_is_moe=bool(moe_pattern[i]))
         total += 2 * hidden  # input_layernorm + pre_mlp_layernorm
+        total += sandwich  # post-attn + post-mlp norm weights
     total += hidden  # final norm
 
     # MTP blocks: one decoder layer (same shape as the last layer) + eh_proj
@@ -209,6 +218,7 @@ def _gpt_total(model: dict, *, active: bool) -> int:
         total += _mixer_params(model, layer_is_linear=bool(linear_pattern[-1]))
         total += _mlp_params(model, active=active, layer_is_moe=bool(moe_pattern[-1]))
         total += 2 * hidden
+        total += sandwich
         total += 2 * hidden * hidden + 3 * hidden
     return total
 

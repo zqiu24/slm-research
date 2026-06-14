@@ -190,3 +190,19 @@ def test_dispatch_hybrid_mamba():
     assert non_embedding_params(model) == 1212
     # no MoE -> active == total
     assert active_non_embedding_params(model) == 1212
+
+
+def test_geglu_mlp_matches_swiglu():
+    # GeGLU is gated (gate+up+down) like SwiGLU -> identical 3*h*ffn accounting.
+    assert non_embedding_params(_dense_model() | {"activation": "GeGLU"}) == 1192
+
+
+def test_sandwich_norm_adds_two_norms_per_layer():
+    # Sandwich norm adds post-attn + post-mlp norm weights = +2*hidden per layer.
+    # _dense_model() has 2 layers, hidden 8 -> +2*8*2 = +32.
+    assert non_embedding_params(_dense_model() | {"use_sandwich_norm": True}) == 1192 + 32
+
+
+def test_unknown_activation_rejected():
+    with pytest.raises(ValueError):
+        non_embedding_params(_dense_model() | {"activation": "gelu"})
