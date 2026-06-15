@@ -21,3 +21,8 @@ base:
     qk_head_dim: 64
     qk_pos_emb_head_dim: 32
     v_head_dim: 64
+    # Override family YaRN params: factor=40 is for 128K context extension
+    # (DSV3 §4.3), not applicable to from-scratch 4K pre-training.
+    rotary_scaling_factor: null
+    mscale: null
+    mscale_all_dim: null
