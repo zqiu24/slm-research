@@ -86,7 +86,6 @@ RUN=(python -m "${LAUNCHER}" \
   "experiment=optim/adam" \
   "training.global_batch_size=1024" \
   "training.micro_batch_size=128" \
-  "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
   "optim.weight_decay=0" \
   "$@")
