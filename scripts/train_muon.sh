@@ -18,7 +18,7 @@ SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
 
 ARCH="${1:-llama3}"
-if [[ "${ARCH}" == "llama3" || "${ARCH}" == "deepseek_v3" ]]; then
+if [[ "${ARCH}" == "llama3" || "${ARCH}" == "deepseek_v3" || "${ARCH}" == "minicpm5" ]]; then
   shift || true
 else
   ARCH="llama3"
@@ -33,8 +33,12 @@ case "${ARCH}" in
     FAMILY="deepseek_v3"
     DEFAULT_SCALE="deepseek_v3_proxy_small"
     ;;
+  minicpm5)
+    FAMILY="minicpm5"
+    DEFAULT_SCALE="minicpm5_1b"
+    ;;
   *)
-    echo "Unknown architecture: ${ARCH}. Use llama3 or deepseek_v3." >&2
+    echo "Unknown architecture: ${ARCH}. Use llama3, deepseek_v3, or minicpm5." >&2
     exit 2
     ;;
 esac

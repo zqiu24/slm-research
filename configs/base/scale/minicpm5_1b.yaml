@@ -1,0 +1,18 @@
+# @package _global_
+# MiniCPM5-1B HF shape. The released checkpoint has 1,080,632,832 total params
+# and 679,552,512 non-embedding params. Native context is 131072, but training
+# seq_length stays 4096 by default to fit this repo's ablation/data budget.
+base:
+  scale: "minicpm5_1b"
+  non_embedding_params: 679_552_512
+
+  model:
+    num_layers: 24
+    hidden_size: 1536
+    ffn_hidden_size: 4608
+    num_attention_heads: 16
+    num_query_groups: 2
+    head_dim: 128
+    seq_length: 4096
+    max_position_embeddings: 131072
+    tie_embeddings: false

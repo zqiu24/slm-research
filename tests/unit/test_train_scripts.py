@@ -33,6 +33,13 @@ def test_adam_script_supports_llama3():
     assert "adamw" in proc.stdout
 
 
+def test_adam_script_supports_minicpm5():
+    proc = _run("train_adam.sh", "minicpm5")
+    assert "--slm-optimizer" in proc.stdout
+    assert "adamw" in proc.stdout
+    assert "minicpm5_1b" in proc.stdout
+
+
 def test_muon_script_supports_deepseek():
     proc = _run("train_muon.sh", "deepseek_v3")
     assert "--optimizer" in proc.stdout
@@ -41,6 +48,13 @@ def test_muon_script_supports_deepseek():
     # Amendment: confirm we steered to the matching scale (it should show
     # up in the wandb-exp-name and the resolved --num-layers should be 14).
     assert "deepseek_v3_proxy_small" in proc.stdout
+
+
+def test_muon_script_supports_minicpm5():
+    proc = _run("train_muon.sh", "minicpm5")
+    assert "--optimizer" in proc.stdout
+    assert "muon" in proc.stdout
+    assert "minicpm5_1b" in proc.stdout
 
 
 def test_poet_script_supports_llama3():

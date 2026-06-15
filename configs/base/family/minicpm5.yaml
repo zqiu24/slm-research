@@ -1,0 +1,22 @@
+# @package _global_
+# MiniCPM5-1B is published as a standard LlamaForCausalLM checkpoint.
+# Source config: https://huggingface.co/openbmb/MiniCPM5-1B/blob/main/config.json
+base:
+  family: minicpm5
+  family_version: "5.0"
+  reference: "OpenBMB MiniCPM5-1B (2026), LlamaForCausalLM"
+  model:
+    normalization: "RMSNorm"
+    norm_epsilon: 1.0e-6
+    activation: "SwiGLU"
+    positional_encoding: "rope"
+    rotary_base: 5000000
+    rotary_scaling: null
+    qk_norm: false
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    init_method_std: 0.02
+    depth_scaled_init: false
+  tokenizer:
+    nominal_name: "minicpm5"
+    nominal_vocab_size: 130560

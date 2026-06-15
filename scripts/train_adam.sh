@@ -14,7 +14,7 @@ if [[ "${SLM_DRYRUN_PRINT:-0}" != "1" ]]; then
 fi
 
 ARCH="${1:-llama3}"
-if [[ "${ARCH}" == "llama3" || "${ARCH}" == "deepseek_v3" || "${ARCH}" == "deepseek_v3_3b" ]]; then
+if [[ "${ARCH}" == "llama3" || "${ARCH}" == "deepseek_v3" || "${ARCH}" == "deepseek_v3_3b" || "${ARCH}" == "minicpm5" ]]; then
   shift || true
 else
   ARCH="llama3"
@@ -35,8 +35,12 @@ case "${ARCH}" in
     FAMILY="deepseek_v3"
     DEFAULT_SCALE="deepseek_v3_3b"
     ;;
+  minicpm5)
+    FAMILY="minicpm5"
+    DEFAULT_SCALE="minicpm5_1b"
+    ;;
   *)
-    echo "Unknown architecture: ${ARCH}. Use llama3, deepseek_v3, or deepseek_v3_3b." >&2
+    echo "Unknown architecture: ${ARCH}. Use llama3, deepseek_v3, deepseek_v3_3b, or minicpm5." >&2
     exit 2
     ;;
 esac
