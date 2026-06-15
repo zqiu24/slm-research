@@ -17,6 +17,7 @@ base:
     attention_dropout: 0.0
     hidden_dropout: 0.0
     init_method_std: 0.006
+    embedding_init_method_std: 0.006
     attention_backend: "flash"
     multi_latent_attention: false
     num_query_groups: 1

@@ -105,6 +105,43 @@ def test_muon_args_use_megatron_muon_and_disable_dist_optimizer_overlap():
     assert amap["--muon-momentum"] == "0.95"
 
 
+def test_poet_default_path_emits_distributed_optimizer_under_dist_cluster():
+    # The default POET path (use_poet_adam=false, q_optimizer=adam) runs stock
+    # Megatron Adam on oft_R in the DDP grad buffer, which supports the sharded
+    # distributed optimizer — so it must emit it when the cluster requests one
+    # (matches the Huawei DeepSeek-3Bv2 reference, which sets it).
+    cfg = _parse_overrides(["experiment=optim/poet", "cluster=h100_de"])
+    args = build_megatron_args(cfg)
+    assert "--use-distributed-optimizer" in args
+    assert "--overlap-grad-reduce" in args
+    assert "--overlap-param-gather" in args
+
+
+def test_poet_custom_poetadam_path_omits_distributed_optimizer():
+    # The custom POETAdam (ChainedOptimizer) path builds its own optimizer and
+    # does not drive the sharded distributed optimizer — keep it off.
+    cfg = _parse_overrides(
+        ["experiment=optim/poet", "cluster=h100_de", "optim.poet.use_poet_adam=true"]
+    )
+    args = build_megatron_args(cfg)
+    assert "--use-distributed-optimizer" not in args
+
+
+def test_poet_muon_q_path_omits_distributed_optimizer():
+    # Muon-on-Q explicitly raises on the distributed optimizer (dev-only), so its
+    # argv must not request one (merge_period=0 is the no-reset regime Muon needs).
+    cfg = _parse_overrides(
+        [
+            "experiment=optim/poet",
+            "cluster=h100_de",
+            "optim.poet.q_optimizer=muon",
+            "optim.poet.merge_period=0",
+        ]
+    )
+    args = build_megatron_args(cfg)
+    assert "--use-distributed-optimizer" not in args
+
+
 def test_poet_args_use_slm_optimizer_and_keep_megatron_optimizer_adam():
     cfg = _parse_overrides(["experiment=optim/poet"])
     args = _args_to_map(build_megatron_args(cfg))

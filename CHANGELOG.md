@@ -93,9 +93,19 @@
   wrapper inside the builder, so it no longer collides with `poet_unfuse_te_impl`
   on `core_transformer_config_from_args`. It is enabled under `optim/adam`,
   `optim/muon_hybrid`, and `optim/poet`.
+- Arg reconciliation vs the Huawei reference: (1) `--use-distributed-optimizer`
+  (+ `--overlap-grad-reduce`/`--overlap-param-gather`) now also emits for the
+  default POET path (`use_poet_adam=false`, `q_optimizer=adam`), which runs stock
+  Megatron-Adam on `oft_R` and supports the sharded distributed optimizer — the
+  Muon-on-Q / Lie / POETAdam paths still keep it off (they reject it); (2) added
+  config-driven `--embedding-init-method-std` (set to 0.006 in the family) to match
+  the reference exactly. The 4 deferred perf-only Huawei flags (`--no-rope-fusion`,
+  `--manual-gc[-interval]`, `--cross-entropy-fusion-impl native`,
+  `--make-vocab-size-divisible-by 3232`) remain intentionally absent (functionally inert).
 - CPU unit tests green (`test_sandwich_norm`, `test_patch_sandwich_norm` incl. the
-  POET-patchset compose test, `test_deepseek_v3_mqa_scale`). The 8-GPU
-  `cluster=h100_de` adam + POET GPU smoke is the remaining user-run acceptance gate.
+  POET-patchset compose test, `test_deepseek_v3_mqa_scale`, expanded
+  `test_megatron_args`). The 8-GPU `cluster=h100_de` adam + POET GPU smoke is the
+  remaining user-run acceptance gate.
 
 ### Fixed — muon_kimi end-of-training checkpoint crash (skipped final eval)
 

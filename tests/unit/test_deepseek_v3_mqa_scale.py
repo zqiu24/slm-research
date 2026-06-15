@@ -38,6 +38,12 @@ def test_megatron_args_emit_mqa_sandwich_moe():
     assert "--multi-latent-attention" not in args
 
 
+def test_embedding_init_std_emitted_to_match_huawei():
+    # Huawei DeepSeek-3Bv2 sets --embedding-init-method-std 0.006 explicitly.
+    args = build_megatron_args(_cfg())
+    assert args[args.index("--embedding-init-method-std") + 1] == "0.006"
+
+
 def test_sandwich_patch_listed_in_experiments():
     # poet is now included: sandwich_norm_apply owns only gpt_builders.gpt_builder
     # and stamps the config via a temporary wrapper inside the builder, so it no

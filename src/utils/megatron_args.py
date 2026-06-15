@@ -74,6 +74,11 @@ def _model_args(cfg: DictConfig) -> list[str]:
     if bool(model.get("layernorm_zero_centered", False)):
         _add(args, "--apply-layernorm-1p")
     _add(args, "--init-method-std", model.init_method_std)
+    # Optional separate embedding init std (Huawei DeepSeek-3Bv2 sets it explicitly).
+    # Megatron defaults embedding init to --init-method-std when unset, so emit
+    # only when the config provides it — keeps every other family unchanged.
+    if model.get("embedding_init_method_std", None) is not None:
+        _add(args, "--embedding-init-method-std", model.embedding_init_method_std)
     # Default `flash` (not `fused`): TE's `fused` backend dispatches to cuDNN's
     # fused attention, which on this cluster's cu13 stack silently falls back
     # to an O(seq²) path for head_dim=64 + GQA + seq=4096 — it OOMs a 4xB200
@@ -173,8 +178,7 @@ def _model_args(cfg: DictConfig) -> list[str]:
         pattern = str(pattern)
         if len(pattern) != int(model.num_layers):
             raise ValueError(
-                f"hybrid_layer_pattern length {len(pattern)} != num_layers "
-                f"{int(model.num_layers)}"
+                f"hybrid_layer_pattern length {len(pattern)} != num_layers {int(model.num_layers)}"
             )
         if model.get("mtp_num_layers", None):
             raise ValueError("MTP is not supported on the mamba/hybrid path")
@@ -557,6 +561,31 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
     raise ValueError(f"Unsupported optimizer type {kind!r}")
 
 
+def _distributed_optimizer_supported(cfg: DictConfig) -> bool:
+    """Whether Megatron's sharded distributed optimizer can drive this optimizer.
+
+    - ``adamw``: yes (stock Megatron path).
+    - ``poet``: yes ONLY on the default stock-Megatron-Adam path
+      (``use_poet_adam=false`` and ``q_optimizer=adam``). On that path POET's
+      trainable ``oft_R`` is a normal param in the DDP grad buffer stepped by
+      Megatron's own builder (``src/optim/poet.py`` ``_get_stock_megatron_optimizer``,
+      which respects ``config.use_distributed_optimizer``), and the
+      ``poet_merge_step`` momentum reset already handles the sharded-master
+      layout. The POETAdam / Muon-on-Q / Lie paths build their own optimizer and
+      explicitly reject the distributed optimizer, so they must keep it off.
+    - everything else (``muon``, ``ngpt``, ...): no.
+    """
+    kind = cfg.optim.type
+    if kind == "adamw":
+        return True
+    if kind == "poet":
+        poet = cfg.optim.get("poet", {})
+        return (not bool(poet.get("use_poet_adam", False))) and (
+            str(poet.get("q_optimizer", "adam")) == "adam"
+        )
+    return False
+
+
 def _parallel_args(cfg: DictConfig) -> list[str]:
     parallelism = cfg.parallelism
     args: list[str] = []
@@ -564,7 +593,9 @@ def _parallel_args(cfg: DictConfig) -> list[str]:
     _add(args, "--pipeline-model-parallel-size", parallelism.get("pp", 1))
     if bool(parallelism.get("sequence_parallel", True)):
         _add(args, "--sequence-parallel")
-    if cfg.optim.type == "adamw" and bool(parallelism.get("distributed_optimizer", False)):
+    if bool(parallelism.get("distributed_optimizer", False)) and _distributed_optimizer_supported(
+        cfg
+    ):
         _add(args, "--use-distributed-optimizer")
         _add(args, "--overlap-grad-reduce")
         _add(args, "--overlap-param-gather")
