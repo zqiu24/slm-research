@@ -134,7 +134,9 @@ def _model_args(cfg: DictConfig) -> list[str]:
             ("mscale", "--mscale"),
             ("mscale_all_dim", "--mscale-all-dim"),
         ):
-            _add(args, flag, model[key])
+            val = model.get(key)
+            if val is not None:
+                _add(args, flag, val)
 
     # MTP is independent of MLA (Huawei DeepSeek-3Bv2 uses MTP with MQA).
     if model.get("mtp_num_layers", None) is not None:
