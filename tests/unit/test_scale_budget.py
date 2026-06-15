@@ -22,6 +22,12 @@ BAKEOFF_PAIRS = [
     ("qwen3", "600m_qwen3"),
     ("llama3", "600m_llama3"),
     ("minicpm", "600m_minicpm"),
+    # dense-architecture bake-off, 1B non-embedding budget
+    ("qwen3", "1b_qwen3"),
+    ("llama3", "1b_llama3"),
+    ("minicpm", "1b_minicpm"),
+    ("gemma3", "1b_gemma3"),
+    ("deepseek_v3_dense", "1b_deepseek_v3_dense"),
 ]
 
 

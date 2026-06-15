@@ -1,0 +1,18 @@
+# @package _global_
+# Gemma 3 (text-only) mechanisms realized at the 1B non-embedding budget
+# (arch bake-off; docs/experiments/arch_bakeoff_600m.md). Keeps the Gemma
+# signature width (hidden 1152, head_dim 256, GeGLU, sandwich norm) and scales
+# by depth (20 -> 34 layers) like the Gemma-3 family. Sized by
+# tools/size_check.py.
+base:
+  scale: "1b_gemma3"
+  non_embedding_params: 1_000_000_000
+  model:
+    num_layers: 34
+    hidden_size: 1152
+    ffn_hidden_size: 6464           # wide GeGLU MLP (gated)
+    num_attention_heads: 8
+    num_query_groups: 4             # GQA 2:1
+    head_dim: 256                   # Gemma signature large head dim (--kv-channels)
+    seq_length: 4096
+    tie_embeddings: true

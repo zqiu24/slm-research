@@ -32,22 +32,32 @@ SEQ_LENGTH="${SEQ_LENGTH:-4096}"
 # via MICRO_BATCH_SIZE=... or a trailing training.micro_batch_size=N (the latter
 # wins, last override = winner) if a family has headroom.
 MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-4}"
+
+# SIZE: non-embedding budget rung; selects base/scale=<SIZE>_<family>. Defaults
+# to 600m (the original bake-off budget). Set SIZE=1b to run the 1B dense rung
+# (configs/base/scale/1b_{qwen3,llama3,minicpm,gemma3,deepseek_v3_dense}.yaml).
+SIZE="${SIZE:-600m}"
 SLM_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SLM_REPO/load_cuda13_2_nccl_env.sh"
 
 FAMILY="${1:?usage: train_bakeoff_600m.sh <family> [overrides...]}"
 shift
 case "$FAMILY" in
-  qwen3)             SCALE="600m_qwen3" ;;      # dense GQA, budget-matched (~600M)
-  deepseek_v3)       SCALE="600m_deepseek_v3" ;;
-  deepseek_v3_dense) SCALE="600m_deepseek_v3_dense" ;;  # MLA + MTP, MoE off
-  qwen3_next)        SCALE="600m_qwen3_next" ;;
-  nemotron_h)        SCALE="600m_nemotron_h" ;;
-  llama3)            SCALE="600m_llama3" ;;     # dense GQA (Llama-style)
-  minicpm)           SCALE="600m_minicpm" ;;    # dense GQA (MiniCPM, depth-scaled)
-  gemma3)            SCALE="600m_gemma3" ;;
+  qwen3)             ;;      # dense GQA, budget-matched
+  deepseek_v3)       ;;
+  deepseek_v3_dense) ;;      # MLA + MTP, MoE off
+  qwen3_next)        ;;
+  nemotron_h)        ;;
+  llama3)            ;;      # dense GQA (Llama-style)
+  minicpm)           ;;      # dense GQA (MiniCPM, depth-scaled)
+  gemma3)            ;;
   *) echo "unknown family: $FAMILY (qwen3|deepseek_v3|deepseek_v3_dense|qwen3_next|nemotron_h|llama3|minicpm|gemma3)" >&2; exit 1 ;;
 esac
+SCALE="${SIZE}_${FAMILY}"
+if [[ ! -f "$SLM_REPO/configs/base/scale/$SCALE.yaml" ]]; then
+  echo "no scale config for SIZE=$SIZE family=$FAMILY (expected configs/base/scale/$SCALE.yaml)" >&2
+  exit 1
+fi
 
 python -m launchers.train_megatron \
   "base/family=$FAMILY" \
