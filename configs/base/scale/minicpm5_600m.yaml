@@ -1,0 +1,26 @@
+# @package _global_
+# MiniCPM5 architecture at ~600M non-embedding params — a parameter-matched
+# sibling of minicpm5_1b for the dense architecture/optimizer ablation cohort.
+#
+# There is no official MiniCPM5-600M release, so this is a pure DEPTH scaling of
+# the official MiniCPM5-1B (https://huggingface.co/openbmb/MiniCPM5-1B): every
+# per-layer hyperparameter (hidden 1536, ffn 4608, heads 16/2, head_dim 128,
+# untied embeddings) is identical to the 1B, only num_layers drops 24 -> 21.
+# This keeps it the cleanest possible control vs the 1B.
+#
+# non_embedding_params = 21 * (attn 7,077,888 + mlp 21,233,664 + norms 3,072)
+#                        + final norm 1,536 = 594,608,640  (~595M).
+base:
+  scale: "minicpm5_600m"
+  non_embedding_params: 594_608_640
+
+  model:
+    num_layers: 21
+    hidden_size: 1536
+    ffn_hidden_size: 4608
+    num_attention_heads: 16
+    num_query_groups: 2
+    head_dim: 128
+    seq_length: 4096
+    max_position_embeddings: 131072
+    tie_embeddings: false
