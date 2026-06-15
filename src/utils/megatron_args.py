@@ -177,6 +177,11 @@ def _model_args(cfg: DictConfig) -> list[str]:
         if model.get("mtp_num_layers", None):
             raise ValueError("MTP is not supported on the mamba/hybrid path")
         _add(args, "--hybrid-layer-pattern", pattern)
+        # mamba_builder raises if args.spec is None ("You must provide a valid
+        # Mamba layer spec via --spec", mamba_builders.py, pin core_v0.17.0).
+        # --spec is nargs='*' (module path + attr); point it at the standard
+        # mamba stack spec so the hybrid path builds without per-run flags.
+        args.extend(["--spec", "megatron.core.models.mamba.mamba_layer_specs", "mamba_stack_spec"])
         mamba = model.get("mamba", {}) or {}
         _add(args, "--mamba-state-dim", mamba.get("state_dim", 128))
         _add(args, "--mamba-head-dim", mamba.get("head_dim", 64))

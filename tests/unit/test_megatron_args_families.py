@@ -98,6 +98,10 @@ def test_hybrid_pattern_and_mamba_dims():
     assert _value(args, "--mamba-state-dim") == "4"
     assert _value(args, "--mamba-head-dim") == "4"
     assert _value(args, "--mamba-num-groups") == "2"
+    # mamba_builder requires a layer spec via --spec (nargs='*': module + attr)
+    idx = args.index("--spec")
+    assert args[idx + 1] == "megatron.core.models.mamba.mamba_layer_specs"
+    assert args[idx + 2] == "mamba_stack_spec"
 
 
 def test_hybrid_pattern_length_mismatch_raises():
