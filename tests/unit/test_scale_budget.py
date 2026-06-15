@@ -28,6 +28,7 @@ BAKEOFF_PAIRS = [
     ("minicpm", "1b_minicpm"),
     ("gemma3", "1b_gemma3"),
     ("deepseek_v3_dense", "1b_deepseek_v3_dense"),
+    ("nemotron_h", "1b_nemotron_h"),
 ]
 
 
@@ -62,10 +63,23 @@ def test_deepseek_v3_dense_is_dense():
 
 
 def test_nemotron_pattern_shape():
+    # 600m: (A+B)*2 = 48 layers, even Mamba/FFN split (§2.1) -> 22 M / 22 - / 4 *.
     model, _ = _merged_model("nemotron_h", "600m_nemotron_h")
     pattern = str(model["hybrid_layer_pattern"])
     assert len(pattern) == int(model["num_layers"]) == 48
-    assert pattern.count("M") == 24
-    assert pattern.count("-") == 20
+    assert pattern.count("M") == 22
+    assert pattern.count("-") == 22
     assert pattern.count("*") == 4
     assert set(pattern) <= {"M", "-", "*"}
+
+
+def test_nemotron_1b_pattern_shape():
+    # 1B: same (A+B) unit tiled 3x = 72 layers, even split -> 33 M / 33 - / 6 *.
+    model, _ = _merged_model("nemotron_h", "1b_nemotron_h")
+    pattern = str(model["hybrid_layer_pattern"])
+    assert len(pattern) == int(model["num_layers"]) == 72
+    assert pattern.count("M") == 33
+    assert pattern.count("-") == 33
+    assert pattern.count("*") == 6
+    assert set(pattern) <= {"M", "-", "*"}
+    assert pattern[0] == "M" and pattern[-1] == "-"  # §2.1: first=Mamba, last=FFN

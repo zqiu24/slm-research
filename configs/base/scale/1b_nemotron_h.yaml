@@ -1,0 +1,22 @@
+# @package _global_
+# Nemotron-H mechanisms realized at the 1B non-embedding budget (arch bake-off;
+# docs/experiments/arch_bakeoff_600m.md). Faithful depth scale-up of
+# 600m_nemotron_h: same hidden 1280, same attention/Mamba dims, the same 24-char
+# (A+B) repeating unit "M-M-M-M-M-M*-M-M-M-M-M*-" tiled 3× (was 2×) -> 72 layers,
+# 33 M / 33 - / 6 *. ffn re-fit 5504 -> 6656 to hit budget. Sized by
+# tools/size_check.py: total ~999.4M (-0.06%); dense (active == total).
+# §2.1 constraints preserved: first=Mamba, last=FFN, each * followed by -,
+# each * preceded by M, even Mamba/FFN split (M == -).
+base:
+  scale: "1b_nemotron_h"
+  non_embedding_params: 1_000_000_000
+  model:
+    num_layers: 72
+    hidden_size: 1280
+    ffn_hidden_size: 6656
+    num_attention_heads: 10
+    num_query_groups: 2            # GQA 5:1 on the attention layers
+    head_dim: 128
+    seq_length: 4096
+    tie_embeddings: true
+    hybrid_layer_pattern: "M-M-M-M-M-M*-M-M-M-M-M*-M-M-M-M-M-M*-M-M-M-M-M*-M-M-M-M-M-M*-M-M-M-M-M*-"
