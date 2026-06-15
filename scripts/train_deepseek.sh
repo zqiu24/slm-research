@@ -14,7 +14,6 @@ python -m launchers.train_megatron \
   "cluster=h100_de" \
   "experiment=optim/adam" \
   "scheduler=wsd" \
-  "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
   "training.global_batch_size=1024" \
   "training.micro_batch_size=4" \

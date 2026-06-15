@@ -102,6 +102,13 @@
   the reference exactly. The 4 deferred perf-only Huawei flags (`--no-rope-fusion`,
   `--manual-gc[-interval]`, `--cross-entropy-fusion-impl native`,
   `--make-vocab-size-divisible-by 3232`) remain intentionally absent (functionally inert).
+- `train_deepseek.sh` now uses the slm-default Transformer Engine path (dropped
+  the `transformer_impl=local` override carried over from the TE-less vendored
+  `poet` env). The GPU smoke proved `local` is unsupported in the native stack:
+  on `h100_de` (TP=4 + sequence-parallel) torch `WrappedTorchNorm` rejects
+  sequence-parallel, and even at TP=1 apex `FusedLayerNorm` rejects RMSNorm. TE
+  (TENorm) handles both, matches the reference, and is proven on this node. slm
+  always emits `--bf16` (never fp8), so POET's weight-swap stays safe.
 - CPU unit tests green (`test_sandwich_norm`, `test_patch_sandwich_norm` incl. the
   POET-patchset compose test, `test_deepseek_v3_mqa_scale`, expanded
   `test_megatron_args`). The 8-GPU `cluster=h100_de` adam + POET GPU smoke is the
