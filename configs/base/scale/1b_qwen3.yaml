@@ -1,0 +1,17 @@
+# @package _global_
+# Budget-matched qwen3 dense rung for the dense-architecture bake-off at the 1B
+# non-embedding budget (docs/experiments/arch_bakeoff_600m.md). Same shared dense
+# GQA shape as 1b_llama3 / 1b_minicpm (hidden 1536, 48 layers, ffn 3328); the
+# family file carries the architectural deltas. Sized by tools/size_check.py.
+base:
+  scale: "1b_qwen3"
+  non_embedding_params: 1_000_000_000
+  model:
+    num_layers: 48
+    hidden_size: 1536
+    ffn_hidden_size: 3328
+    num_attention_heads: 24
+    num_query_groups: 4          # GQA 6:1
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true

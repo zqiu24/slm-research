@@ -27,7 +27,10 @@ base:
   # GPTDataset num_samples, so the token budget scales with the actual model
   # size (the intended tokens-per-param law). Consequence: a one-time dataset
   # index rebuild vs the 300m anchor's cached 23,437,500 samples, since this
-  # gives train_samples = 20*317e6//256 = 24,765,625.
+  # gives train_samples = 20*317e6//256 = 24,765,625. To pin the dataset across
+  # near-scale variants instead, use a fixed-budget regime
+  # (training_regime=fixed_1b etc.) or set training.total_tokens explicitly —
+  # it overrides tokens_per_param.
   non_embedding_params: 317_000_000
 
   model:

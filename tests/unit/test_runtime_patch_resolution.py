@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from omegaconf import OmegaConf
 
-from launchers.pretrain_gpt_slm import _resolve_runtime_patch_names
+from launchers.pretrain_gpt_slm import _ALWAYS_ON_PATCHES, _resolve_runtime_patch_names
 
 
 def test_empty_experiment_patches_still_gets_always_on():
     cfg = OmegaConf.create({"experiment": {"patches": []}})
-    assert _resolve_runtime_patch_names(cfg) == ["wandb_trainable_params"]
+    assert _resolve_runtime_patch_names(cfg) == list(_ALWAYS_ON_PATCHES)
 
 
 def test_experiment_patches_are_kept_and_always_on_appended():
@@ -26,9 +26,11 @@ def test_experiment_patches_are_kept_and_always_on_appended():
 
 def test_always_on_not_duplicated_if_experiment_lists_it():
     cfg = OmegaConf.create({"experiment": {"patches": ["wandb_trainable_params"]}})
-    assert _resolve_runtime_patch_names(cfg) == ["wandb_trainable_params"]
+    names = _resolve_runtime_patch_names(cfg)
+    assert names == list(_ALWAYS_ON_PATCHES)
+    assert names.count("wandb_trainable_params") == 1
 
 
 def test_missing_experiment_block_defaults_to_always_on():
     cfg = OmegaConf.create({})
-    assert _resolve_runtime_patch_names(cfg) == ["wandb_trainable_params"]
+    assert _resolve_runtime_patch_names(cfg) == list(_ALWAYS_ON_PATCHES)

@@ -1,0 +1,30 @@
+# @package _global_
+# Family-level defaults — architectural choices that do not depend on scale.
+# Gemma 3 (text-only). See docs/superpowers/specs/2026-06-14-gemma3-text-family-design.md.
+base:
+  family: gemma3
+  family_version: "3_text_2503"
+  reference: "Gemma 3 (Google, arXiv:2503.19786) — local/global SWA + GeGLU + sandwich norm"
+  model:
+    normalization: "RMSNorm"
+    norm_epsilon: 1.0e-6
+    layernorm_zero_centered: true     # (1+w) RMSNorm -> --apply-layernorm-1p
+    activation: "GeGLU"               # -> --quick-geglu (sigmoid-approx GELU)
+    positional_encoding: "rope"
+    rotary_base: 1000000              # single base (approx; Gemma uses 10k local / 1M global)
+    rotary_scaling: null
+    qk_norm: true                     # -> --qk-layernorm
+    use_sandwich_norm: true           # post-attn + post-ffn norm (sandwich_norm_apply patch)
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    init_method_std: 0.02
+    depth_scaled_init: false
+    attention_backend: "flash"
+    sliding_window:
+      enabled: true
+      window: 1024                    # local sliding window (left context); causal
+      skip_freq: 6                    # int N => (N-1):1 => 5 sliding : 1 global
+  tokenizer:
+    # Descriptive only — the actual tokenizer is fixed by the dataset manifest.
+    nominal_name: "gemma-3"
+    nominal_vocab_size: 262144

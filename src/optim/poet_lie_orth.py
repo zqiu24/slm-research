@@ -39,6 +39,7 @@ class LieOrthMomentum(torch.optim.Optimizer):
         ortho_method: str = "muon",
         ortho_ns_steps: int = 5,
         ortho_use_second_moment: bool = False,
+        nesterov: bool = False,
         distributed: bool = False,
         dp_world_size: int = 1,
         dp_rank: int = 0,
@@ -67,6 +68,13 @@ class LieOrthMomentum(torch.optim.Optimizer):
         self.ortho_method = ortho_method
         self.ortho_ns_steps = int(ortho_ns_steps)
         self.ortho_use_second_moment = bool(ortho_use_second_moment)
+        # Nesterov look-ahead (Muon-style): orthogonalize the look-ahead direction
+        # (1-b1)*g + b1*m instead of the bare first moment m. lie_m is still the same
+        # EMA (m = b1*m + (1-b1)*g), so this matches modern Muon's
+        # `update = grad.lerp(momentum, beta)`. Skew/rotation branch only (the AdamW
+        # branch is untouched). Composes with ortho_use_second_moment (look-ahead is
+        # divided by sqrt(lie_v)) though the default is first-moment-only.
+        self.nesterov = bool(nesterov)
         # DP-sharded orthogonalization (off by default = replicated path). When on and
         # dp_world_size > 1, each rank orthogonalizes only its round-robin slice of
         # oft_R, then one all_reduce(SUM) of the zero-padded update deltas re-syncs.
@@ -164,7 +172,18 @@ class LieOrthMomentum(torch.optim.Optimizer):
                 continue  # inactive side -> no rotation written this step
             st = self.state[p]
             m = st["lie_m"]
-            A_dir = -m / (st["lie_v"].sqrt() + group["eps"]) if self.ortho_use_second_moment else -m
+            if self.nesterov:
+                # Muon-style look-ahead: base = (1-b1)*g + b1*m  (= grad.lerp(m, b1)).
+                # p.grad is fp32 (main_grad accumulator) and DP-identical; .mul() makes
+                # a fresh tensor so neither p.grad nor lie_m is mutated here.
+                base = p.grad.float().mul(1.0 - group["b1"]).add_(m, alpha=group["b1"])
+            else:
+                base = m
+            A_dir = (
+                -base / (st["lie_v"].sqrt() + group["eps"])
+                if self.ortho_use_second_moment
+                else -base
+            )
             bsz = block_size_from_nelems(A_dir.shape[1])
             buckets.setdefault(bsz, []).append((i, A_dir))
 

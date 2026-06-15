@@ -1,0 +1,17 @@
+# @package _global_
+# Fixed token budget: 1B tokens regardless of model size (architecture
+# comparisons at a shared dataset). Pins --train-samples
+# (= total_tokens // seq_length) and hence the GPTDataset cache key, so
+# near-scale ablations at the same seq_length reuse one pre-built dataset and
+# see exactly the same data. Switching the data axis (other tokenizer) still
+# rebuilds into its own runs/_data_cache/<data.name> at this same budget.
+training:
+  tokens_per_param: null                 # disabled; the budget is fixed below
+  total_tokens: 1_000_000_000
+  global_batch_size: 1024                # seqs/step, FROZEN across ladder (was 4M tokens / 4096)
+  micro_batch_size: 32                   # matches ablation_20x (4×B200 activation budget)
+
+checkpointing:
+  save_every_tokens: 2_000_000_000
+  keep_last: 3
+  save_stable_stage_final: true          # required for WSD decay-only reuse

@@ -7,6 +7,7 @@ from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
 
+from src.utils.ladder_math import parse_token_count
 from src.utils.scheduler import scheduler_args
 from src.utils.wandb_naming import wandb_run_name
 
@@ -66,12 +67,18 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--seq-length", model.seq_length)
     _add(args, "--max-position-embeddings", model.get("max_position_embeddings", model.seq_length))
     _add(args, "--position-embedding-type", model.positional_encoding)
-    _add(args, "--rotary-base", model.rotary_base)
-    _add(args, "--rotary-percent", model.get("rotary_percent", 1.0))
+    if str(model.positional_encoding) == "rope":
+        _add(args, "--rotary-base", model.rotary_base)
+        _add(args, "--rotary-percent", model.get("rotary_percent", 1.0))
     _add(args, "--attention-dropout", model.attention_dropout)
     _add(args, "--hidden-dropout", model.hidden_dropout)
     _add(args, "--normalization", model.normalization)
     _add(args, "--norm-epsilon", model.norm_epsilon)
+    # Zero-centered (1+w) RMSNorm (Gemma). --apply-layernorm-1p maps to the
+    # config field layernorm_zero_centered_gamma (transformer_config.py:170
+    # argparse_meta; pin core_v0.17.0).
+    if bool(model.get("layernorm_zero_centered", False)):
+        _add(args, "--apply-layernorm-1p")
     _add(args, "--init-method-std", model.init_method_std)
     # Default `flash` (not `fused`): TE's `fused` backend dispatches to cuDNN's
     # fused attention, which on this cluster's cu13 stack silently falls back
@@ -80,7 +87,18 @@ def _model_args(cfg: DictConfig) -> list[str]:
     # installed and is O(seq) memory, so we force it as the default. Override
     # per-experiment with base.model.attention_backend=auto|fused|local.
     _add(args, "--attention-backend", model.get("attention_backend", "flash"))
-    _add(args, "--swiglu")
+    activation = str(model.get("activation", "SwiGLU"))
+    if activation == "SwiGLU":
+        _add(args, "--swiglu")
+    elif activation == "squared_relu":
+        _add(args, "--squared-relu")
+    elif activation == "GeGLU":
+        # Gemma-style gated GELU. --quick-geglu sets gated_linear_unit + the
+        # sigmoid-approx quick_gelu (arguments.py:1676, pin core_v0.17.0); the
+        # tanh-approx gelu_pytorch_tanh has no native flag (documented approx).
+        _add(args, "--quick-geglu")
+    else:
+        raise ValueError(f"Unsupported model.activation {activation!r}")
     _add(args, "--disable-bias-linear")
     # Sandwich-norm (post-attn / post-MLP norm before the residual add). The
     # architecture is applied by the ``sandwich_norm_apply`` patch; here we only
@@ -101,6 +119,15 @@ def _model_args(cfg: DictConfig) -> list[str]:
     if bool(model.get("qk_norm", False)):
         _add(args, "--qk-layernorm")
 
+    # Local/global sliding-window interleave (Gemma 3-style). Native Megatron
+    # CLI args (arguments.py:2020/2023, pin core_v0.17.0): --window-size parses
+    # "W,0" -> (W,0) via tuple_type; --window-attn-skip-freq takes int N (=
+    # (N-1):1 SWA:full, so 6 -> 5 sliding : 1 global) or a list-expr string.
+    sliding = model.get("sliding_window", {}) or {}
+    if bool(sliding.get("enabled", False)):
+        _add(args, "--window-size", f"{int(sliding.get('window', 1024))},0")
+        _add(args, "--window-attn-skip-freq", sliding.get("skip_freq", 6))
+
     if bool(model.get("multi_latent_attention", False)):
         _add(args, "--multi-latent-attention")
         for key, flag in (
@@ -113,7 +140,9 @@ def _model_args(cfg: DictConfig) -> list[str]:
             ("mscale", "--mscale"),
             ("mscale_all_dim", "--mscale-all-dim"),
         ):
-            _add(args, flag, model[key])
+            val = model.get(key)
+            if val is not None:
+                _add(args, flag, val)
 
     # MTP is independent of MLA (Huawei DeepSeek-3Bv2 uses MTP with MQA).
     if model.get("mtp_num_layers", None) is not None:
@@ -124,6 +153,47 @@ def _model_args(cfg: DictConfig) -> list[str]:
         or model.get("mtp_num_layers", None) is not None
     ):
         _add(args, "--enable-experimental")
+
+    # GatedDeltaNet linear attention (Qwen3-Next-style hybrids). All flags are
+    # native Megatron CLI args auto-generated from TransformerConfig fields
+    # (arguments.py:1655, pin core_v0.17.0); routed in gpt_builders.py via
+    # args.experimental_attention_variant.
+    gdn = model.get("gdn", {}) or {}
+    if bool(gdn.get("enabled", False)):
+        _add(args, "--experimental-attention-variant", "gated_delta_net")
+        _add(args, "--linear-attention-freq", model.linear_attention_freq)
+        _add(args, "--linear-num-key-heads", gdn.num_key_heads)
+        _add(args, "--linear-key-head-dim", gdn.key_head_dim)
+        _add(args, "--linear-num-value-heads", gdn.num_value_heads)
+        _add(args, "--linear-value-head-dim", gdn.value_head_dim)
+        _add(args, "--linear-conv-kernel-dim", gdn.get("conv_kernel_dim", 4))
+        if "--enable-experimental" not in args:
+            _add(args, "--enable-experimental")
+
+    # Hybrid Mamba2 layer stacks (Nemotron-H-style). Megatron derives
+    # num_layers and is_hybrid_model from the pattern; we validate coherence
+    # here so a bad config fails at dry-run, not at rank startup. The mamba
+    # path has no MTP support (pretrain_gpt.py docstring, pin core_v0.17.0).
+    pattern = model.get("hybrid_layer_pattern", None)
+    if pattern is not None:
+        pattern = str(pattern)
+        if len(pattern) != int(model.num_layers):
+            raise ValueError(
+                f"hybrid_layer_pattern length {len(pattern)} != num_layers "
+                f"{int(model.num_layers)}"
+            )
+        if model.get("mtp_num_layers", None):
+            raise ValueError("MTP is not supported on the mamba/hybrid path")
+        _add(args, "--hybrid-layer-pattern", pattern)
+        # mamba_builder raises if args.spec is None ("You must provide a valid
+        # Mamba layer spec via --spec", mamba_builders.py, pin core_v0.17.0).
+        # --spec is nargs='*' (module path + attr); point it at the standard
+        # mamba stack spec so the hybrid path builds without per-run flags.
+        args.extend(["--spec", "megatron.core.models.mamba.mamba_layer_specs", "mamba_stack_spec"])
+        mamba = model.get("mamba", {}) or {}
+        _add(args, "--mamba-state-dim", mamba.get("state_dim", 128))
+        _add(args, "--mamba-head-dim", mamba.get("head_dim", 64))
+        _add(args, "--mamba-num-groups", mamba.get("num_groups", 8))
 
     moe = model.get("moe", {})
     if bool(moe.get("enabled", False)):
@@ -177,9 +247,13 @@ def _training_args(cfg: DictConfig) -> list[str]:
             )
         total_tokens = int(decay_tokens)
     else:
-        total_tokens = int(training.get("total_tokens", 0)) or (
-            int(training.get("tokens_per_param", 20)) * int(cfg.base.non_embedding_params)
-        )
+        explicit_tokens = training.get("total_tokens", None)
+        if explicit_tokens is not None:
+            total_tokens = parse_token_count(explicit_tokens)
+        else:
+            total_tokens = int(training.get("tokens_per_param", 20)) * int(
+                cfg.base.non_embedding_params
+            )
 
     peak_lr = optim.get("lr", optim.get("adam", {}).get("lr", 1.0e-3))
     force_no_warmup = bool(cfg.optim.get("ngpt", {}).get("no_warmup", False))
@@ -432,6 +506,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: first-vs-second moment for the lie_ortho optimizer.
         if poet.get("lie_ortho_use_second_moment", False):
             poet_args.append("--poet-lie-ortho-use-second-moment")
+        # store_true: Muon-style Nesterov look-ahead on the lie_ortho skew direction.
+        if poet.get("lie_ortho_nesterov", False):
+            poet_args.append("--poet-lie-ortho-nesterov")
         if poet.get("lie_ortho_distributed", False):
             poet_args.append("--poet-lie-ortho-distributed")
         # store_true: head-aligned attention rotation (requires unfused q/k/v).
@@ -521,6 +598,19 @@ def _data_args(cfg: DictConfig) -> list[str]:
     return args
 
 
+def _weight_norm_args(training: DictConfig) -> list[str]:
+    """Emit the weight_norm_monitor flags from the `training` config block."""
+    args: list[str] = []
+    _maybe_bool(args, "--log-weight-norms", training.get("log_weight_norms", False))
+    interval = training.get("log_weight_norms_interval", None)
+    if interval is not None:
+        _add(args, "--log-weight-norms-interval", interval)
+    layers = training.get("weight_norm_layers", None)
+    if layers is not None:
+        _add(args, "--weight-norm-layers", layers)
+    return args
+
+
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
     archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
@@ -573,6 +663,7 @@ def _logging_args(cfg: DictConfig) -> list[str]:
     if resume:
         _add(args, "--finetune")
         _add(args, "--override-opt-param-scheduler")
+    args.extend(_weight_norm_args(cfg.training))
     return args
 
 

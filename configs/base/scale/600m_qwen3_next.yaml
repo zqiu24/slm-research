@@ -1,0 +1,23 @@
+# @package _global_
+# Qwen3-Next mechanisms realized at the 600M non-embedding budget
+# (arch bake-off; docs/experiments/arch_bakeoff_600m.md). Sized by
+# tools/size_check.py: total 594.9M (-0.8%), active ~241M (MoE topk=4/16).
+base:
+  scale: "600m_qwen3_next"
+  non_embedding_params: 600_000_000
+  model:
+    num_layers: 24
+    hidden_size: 1024
+    ffn_hidden_size: 2816          # schema-required; unused (all layers MoE)
+    num_attention_heads: 16
+    num_query_groups: 4            # GQA 4:1 on the 6 full-attention layers
+    head_dim: 64
+    seq_length: 4096
+    tie_embeddings: true
+    linear_attention_freq: "([1]*3+[0]*1)*6"
+    moe:
+      num_experts: 16
+      layer_freq: "([1]*24)"
+      ffn_hidden_size: 400
+      shared_expert_intermediate_size: 416
+      router_topk: 4

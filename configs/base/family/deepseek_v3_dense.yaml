@@ -1,0 +1,38 @@
+# @package _global_
+# Dense ablation of the deepseek_v3 family: identical MLA + MTP mechanisms,
+# but the MoE FFN is replaced by a standard dense SwiGLU MLP on every layer
+# (no `moe` block -> num_experts unset -> dense). Isolates the contribution of
+# sparsity: deepseek_v3 vs deepseek_v3_dense differ ONLY in MoE-vs-dense.
+# MLA and MoE are orthogonal in the pin (multi_latent_attention is not gated on
+# num_experts), so this is a native config, not a patch.
+base:
+  family: deepseek_v3_dense
+  family_version: "v3_proxy_dense"
+  reference: "DeepSeek-V3 style MLA + MTP (dense FFN, MoE removed)"
+  model:
+    normalization: "RMSNorm"
+    norm_epsilon: 1.0e-6
+    activation: "SwiGLU"
+    positional_encoding: "rope"
+    rotary_base: 10000
+    rotary_scaling: null
+    qk_norm: true
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    init_method_std: 0.02
+    depth_scaled_init: false
+    attention_backend: "flash"
+    multi_latent_attention: true
+    q_lora_rank: 1536
+    kv_lora_rank: 512
+    qk_head_dim: 128
+    qk_pos_emb_head_dim: 64
+    v_head_dim: 128
+    rotary_scaling_factor: 40
+    mscale: 1.0
+    mscale_all_dim: 1.0
+    mtp_num_layers: 1
+    mtp_loss_scaling_factor: 0.1
+  tokenizer:
+    nominal_name: "deepseek-v3"
+    nominal_vocab_size: 129280

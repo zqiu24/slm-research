@@ -1129,3 +1129,77 @@ def test_mtp_still_emitted_with_mla():
     args = _model_args(OmegaConf.create({"base": {"model": model}}))
     assert "--mtp-num-layers" in args
     assert "--enable-experimental" in args
+
+
+def test_total_tokens_suffix_string_accepted_without_resolve():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=60m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    cfg.training.total_tokens = "1B"  # as a CLI dotlist would leave it
+    args = _args_to_map(build_megatron_args(cfg))
+    # 60m uses seq_length 256: 1B tokens -> 3_906_250 samples
+    assert args["--train-samples"] == str(1_000_000_000 // 256)
+    assert args["--lr-decay-samples"] == str(1_000_000_000 // 256)
+
+
+def test_fixed_total_tokens_pins_train_samples_across_scales_and_data():
+    def args_for(scale: str, data: str) -> dict:
+        cfg = _parse_overrides(
+            [
+                "base/family=llama3",
+                f"base/scale={scale}",
+                "experiment=champion",
+                "training_regime=ablation_20x",
+                "cluster=h800_cn",
+                f"data={data}",
+            ]
+        )
+        cfg.training.total_tokens = 1_000_000_000
+        return _args_to_map(build_megatron_args(cfg))
+
+    a = args_for("60m", "nemotron_cc_v2_llama31_8b")
+    b = args_for("300m", "nemotron_cc_v2_llama31_8b")
+    c = args_for("60m", "nemotron_cc_v2_scratch_qwen3")
+
+    # (a) Same budget, near scales (both seq 256) -> identical sample count,
+    # i.e. identical GPTDataset cache key -> no rebuild between the two.
+    assert a["--train-samples"] == b["--train-samples"] == str(1_000_000_000 // 256)
+    # (b) Different dataset/tokenizer -> rebuild (different path + cache dir),
+    # but the token budget stays exactly as specified.
+    assert c["--train-samples"] == a["--train-samples"]
+    assert c["--data-path"] != a["--data-path"]
+    assert c["--data-cache-path"] != a["--data-cache-path"]
+
+
+def test_weight_norm_args_emits_flags_when_enabled():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _weight_norm_args
+
+    training = OmegaConf.create(
+        {
+            "log_weight_norms": True,
+            "log_weight_norms_interval": 50,
+            "weight_norm_layers": "first,last",
+        }
+    )
+    argv = _weight_norm_args(training)
+    assert "--log-weight-norms" in argv
+    assert argv[argv.index("--log-weight-norms-interval") + 1] == "50"
+    assert argv[argv.index("--weight-norm-layers") + 1] == "first,last"
+
+
+def test_weight_norm_args_omits_flags_by_default():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _weight_norm_args
+
+    assert _weight_norm_args(OmegaConf.create({})) == []
+    # bool false also emits nothing
+    assert _weight_norm_args(OmegaConf.create({"log_weight_norms": False})) == []

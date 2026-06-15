@@ -21,7 +21,7 @@ from src.patches import patch_set_hash
 from src.precision.capability import assert_compatible
 from src.utils.config_diff import diff_from_champion
 from src.utils.git_meta import git_sha, submodule_sha
-from src.utils.ladder_math import total_tokens
+from src.utils.ladder_math import parse_token_count, total_tokens
 from src.utils.parallelism import resolve as resolve_parallelism
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -140,7 +140,12 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
         + int(cfg._derived.lm_head_params)
     )
 
-    # 3. Token count
+    # 3. Token count — precedence: decay-only resume (decay_tokens) > explicit
+    # training.total_tokens (fixed-budget regimes / CLI override; accepts
+    # "500M"/"1B"-style strings) > tokens_per_param * non_embedding_params.
+    # An explicit budget pins --train-samples (= total_tokens // seq_length)
+    # and therefore the GPTDataset cache key, so near-scale architecture
+    # ablations share one pre-built dataset and see the same amount of data.
     if bool(cfg.training.get("resume_from_stable_stage", False)):
         decay_tokens = cfg.training.get("decay_tokens", None)
         if decay_tokens is None:
@@ -149,6 +154,8 @@ def resolve_config(cfg: DictConfig) -> DictConfig:
                 "(e.g. training.decay_tokens=1_200_000_000)"
             )
         cfg.training.total_tokens = int(decay_tokens)
+    elif cfg.training.get("total_tokens", None) is not None:
+        cfg.training.total_tokens = parse_token_count(cfg.training.total_tokens)
     else:
         cfg.training.total_tokens = total_tokens(
             cfg.training.tokens_per_param, int(cfg.base.non_embedding_params)

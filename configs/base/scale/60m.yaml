@@ -12,7 +12,10 @@
 # Rounded to a clean 60_000_000 below (matches the round-label style of the
 # 600m/1_2b/2_4b rungs). NOTE: this is not just a label — total_tokens =
 # tokens_per_param * non_embedding_params (src/utils/megatron_args.py:159) ->
-# --train-samples -> GPTDataset cache key, so the token budget scales with it.
+# --train-samples -> GPTDataset cache key, so the token budget scales
+# with it. To pin the dataset across near-scale variants instead, use a
+# fixed-budget regime (training_regime=fixed_1b etc.) or set
+# training.total_tokens explicitly — it overrides tokens_per_param.
 #
 # IMPORTANT: `scale` below MUST equal this file's stem ("60m"). submit.py's
 # _load_champion_for() reloads configs/base/scale/<base.scale>.yaml by that

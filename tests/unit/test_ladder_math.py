@@ -6,6 +6,7 @@ import pytest
 
 from src.utils.ladder_math import (
     embedding_params,
+    parse_token_count,
     steps_from_tokens,
     total_tokens,
 )
@@ -56,3 +57,29 @@ def test_steps_rejects_zero_batch():
 def test_steps_rejects_zero_seq_length():
     with pytest.raises(ValueError):
         steps_from_tokens(1, seq_length=0, global_batch_size=512)
+
+
+def test_parse_token_count_int_passthrough():
+    assert parse_token_count(500_000_000) == 500_000_000
+
+
+def test_parse_token_count_suffixes():
+    assert parse_token_count("500M") == 500_000_000
+    assert parse_token_count("1B") == 1_000_000_000
+    assert parse_token_count("10B") == 10_000_000_000
+    assert parse_token_count("50b") == 50_000_000_000
+    assert parse_token_count("100B") == 100_000_000_000
+    assert parse_token_count("2.5B") == 2_500_000_000
+    assert parse_token_count("10K") == 10_000
+    assert parse_token_count("1T") == 1_000_000_000_000
+
+
+def test_parse_token_count_plain_strings():
+    assert parse_token_count("1_000_000") == 1_000_000
+    assert parse_token_count("5e9") == 5_000_000_000
+
+
+@pytest.mark.parametrize("bad", ["", "abc", "10Q", "-1B", "B", 0, -5, 0.0])
+def test_parse_token_count_rejects_bad(bad):
+    with pytest.raises(ValueError):
+        parse_token_count(bad)

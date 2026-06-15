@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+### Added — gemma3 (text-only) bake-off family (2026-06-14)
+
+- New `gemma3` family + `600m_gemma3` scale (dense, gpt entrypoint, 599.5M
+  non-embedding): Gemma 3's local/global sliding-window interleave (5 sliding :
+  1 global via `--window-size`/`--window-attn-skip-freq`), GeGLU (`--quick-geglu`),
+  zero-centered RMSNorm (`--apply-layernorm-1p`), QK-norm, and sandwich norm
+  (reuses the existing `sandwich_norm_apply` patch).
+- `megatron_args`: emit `--quick-geglu`, `--apply-layernorm-1p`, and the
+  sliding-window flags. `arch_params`: account GeGLU (gated) and the
+  sandwich-norm term. Pin guard + `scripts/train_bakeoff_600m.sh` extended.
+- Documented approximations: single RoPE base (1M), no √d embedding scale,
+  sigmoid-approx `quick_gelu`. See docs/experiments/arch_bakeoff_600m.md.
+
+### Added — weight-matrix norm monitoring (2026-06-13)
+
+- New `weight_norm_monitor` patch: logs row/column L2-norm summaries (+ per-layer
+  RMS histograms) of the qkv/proj/fc1/fc2 weights for a few layers to W&B,
+  enabling POET vs Muon vs Adam weight-norm comparison without weight decay. It
+  is always registered (`_ALWAYS_ON_PATCHES`) but inert unless
+  `training.log_weight_norms` is set (interval `log_weight_norms_interval`,
+  layers `weight_norm_layers`). Wraps `train_step` as the OUTER wrapper so for
+  POET it reads the post-merge effective weight `W_eff`. Warns once if a POET
+  run's interval is not a multiple of `merge_period` (logs land only on merge
+  boundaries, so the effective cadence is the LCM — easy to silently get sparse
+  or zero logging otherwise).
+
+### Added — architecture-family bake-off infrastructure (2026-06-12)
+
+- `src/utils/arch_params.py` + budget gate (`tests/unit/test_scale_budget.py`):
+  families realize a declared non-embedding budget within ±2% (600M bake-off:
+  deepseek_v3 592.1M, qwen3_next 594.9M, nemotron_h 604.8M); `tools/size_check.py`
+  CLI for sizing new realizations.
+- `megatron_args`: GDN (`--experimental-attention-variant gated_delta_net`),
+  hybrid-mamba, squared-relu, and rope-conditional emission.
+- New `launchers/pretrain_mamba_slm.py` + `base.model.entrypoint` routing
+  (MambaModel path for nemotron_h; no MTP there by pin limitation).
+- New families `qwen3_next`, `nemotron_h`; scales `600m_{deepseek_v3,
+  qwen3_next,nemotron_h}`; `scripts/train_bakeoff_600m.sh`; protocol in
+  `docs/experiments/arch_bakeoff_600m.md`; guide in `docs/adding_a_family.md`.
+- `scripts/run_bakeoff_600m_full.sh`: chains all four full (24B-token) runs
+  sequentially on one node (foreground torchrun blocks per run), tee-logging
+  each family codexlog-style and printing a pass/fail summary.
+- New `configs/training_regime/fixed_12b.yaml` (12B `total_tokens`); the bake-off
+  launcher now defaults to it (`REGIME` env override) instead of `ablation_40x`,
+  so all four families train on the EXACT same token count and share one
+  GPTDataset cache despite their differing `non_embedding_params`.
+- `train_bakeoff_600m.sh` defaults (all overridable via env / trailing override):
+  `REGIME=fixed_12b`, `base.model.seq_length=256` (`SEQ_LENGTH`; cheap iteration —
+  yields `--train-samples 46,875,000`), `training.micro_batch_size=4`
+  (`MICRO_BATCH_SIZE`; null would derive to `min(64,gbs)=64` and OOM at the first
+  forward on 80GB H100).
+- New optional dense ablation: `deepseek_v3_dense` family + `600m_deepseek_v3_dense`
+  scale (MLA + MTP identical to `deepseek_v3`, MoE replaced by a dense SwiGLU FFN
+  6912 → 604.3M, active==total). Wired into `train_bakeoff_600m.sh` and the budget
+  gate; not in the default 4-family sweep (include via `FAMILIES=...`). Isolates
+  the value of sparsity at equal total non-embedding params.
+
+### Added — fixed token budgets (dataset pinning across architectures)
+
+- `training.total_tokens` can now be set explicitly (config or CLI override;
+  `"500M"`/`"1B"`-style strings accepted via `parse_token_count`) and takes
+  precedence over `tokens_per_param * non_embedding_params` (decay-only
+  resume's `decay_tokens` still ranks highest). This pins `--train-samples`
+  and hence the GPTDataset cache key, so near-scale architecture ablations
+  share one pre-built dataset and identical data amounts. New regimes:
+  `training_regime/fixed_{500m,1b,10b,50b,100b}`. Switching the data axis
+  (different tokenizer) still rebuilds into its own `runs/_data_cache/<name>`
+  at the same fixed budget.
+
 ### Added — Megatron-Bridge submodule pin
 
 - Vendored [NVIDIA-NeMo/Megatron-Bridge](https://github.com/NVIDIA-NeMo/Megatron-Bridge)

@@ -60,6 +60,7 @@ def apply() -> None:
         config.poet_lie_ortho_use_second_moment = getattr(
             args, "poet_lie_ortho_use_second_moment", False
         )
+        config.poet_lie_ortho_nesterov = getattr(args, "poet_lie_ortho_nesterov", False)
         config.poet_lie_ortho_distributed = getattr(args, "poet_lie_ortho_distributed", False)
         return config, overrides
 

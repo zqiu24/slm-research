@@ -84,3 +84,53 @@ def test_decay_only_resolves_total_tokens_from_decay_tokens():
     )
     resolve_config(cfg)  # must not raise on tokens_per_param: null
     assert int(cfg.training.total_tokens) == 1_200_000_000
+
+
+def test_explicit_total_tokens_overrides_tokens_per_param():
+    # ablation_20x sets tokens_per_param: 20, but an explicit budget must win,
+    # including human-friendly "10B"-style strings from the CLI dotlist.
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=60m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+            "training.total_tokens=10B",
+        ]
+    )
+    resolve_config(cfg)
+    assert int(cfg.training.total_tokens) == 10_000_000_000
+
+
+def test_default_path_still_uses_tokens_per_param():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=60m",
+            "experiment=champion",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    resolve_config(cfg)
+    # 20 tokens/param * 60M non-embedding params
+    assert int(cfg.training.total_tokens) == 1_200_000_000
+
+
+def test_decay_tokens_still_beats_explicit_total_tokens():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=300m",
+            "scheduler=wsd_decay_only",
+            "experiment=champion",
+            "training_regime=final_wsd_decay_only",
+            "cluster=h800_cn",
+            "training.decay_tokens=1200000000",
+            "training.stable_checkpoint_dir=/tmp/stable_ckpt",
+            "training.total_tokens=10B",
+        ]
+    )
+    resolve_config(cfg)
+    assert int(cfg.training.total_tokens) == 1_200_000_000

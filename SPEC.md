@@ -404,6 +404,11 @@ cfg._derived.total_params = cfg.base.non_embedding_params + emb_params + lm_head
 ```
 
 `total_params` is logged to W&B for reference but does NOT drive ladder math. `training.tokens_per_param * base.non_embedding_params` determines the token count.
+Exception: a regime (or CLI override) may set `training.total_tokens`
+explicitly (`fixed_500m` … `fixed_100b`, or `training.total_tokens=10B`);
+it then takes precedence over `tokens_per_param` so that near-scale
+architecture ablations share one pre-built dataset. `decay_tokens`
+(decay-only resume) still outranks both.
 
 **Embedding and LM head are shape-fixed but not weight-fixed.** Fixing the tokenizer fixes `vocab_size`, which together with per-scale `hidden_size` fixes the dimensions of both layers across all experiments at that scale. But the layers still train from scratch — they have gradients, they're updated by the optimizer, they learn their values during training. "Fixed" means shape-fixed, not frozen.
 
@@ -452,6 +457,7 @@ Example `training_regime/ablation_20x.yaml`:
 # @package _global_
 training:
   tokens_per_param: 20
+  # OR pin the budget exactly: total_tokens: 1_000_000_000 (and tokens_per_param: null)
   # Total tokens computed at launch: tokens_per_param * base.non_embedding_params
   global_batch_size_tokens: 4_194_304   # 4M, FROZEN across ladder
   seq_length: 4096                       # FROZEN across ladder
@@ -514,7 +520,10 @@ On `submit.py` invocation:
 1. **Hydra composes** the six axes (family, scale, experiment, training_regime, cluster, seed) into one resolved `DictConfig`. Family composes first, then scale overrides on top; both are under `base.*`.
 2. **Parallelism derivation**: `parallelism.tp`, `parallelism.pp`, `parallelism.dp` computed from `base.non_embedding_params` and `cluster.*` rules.
 3. **Embedding math**: `_derived.embedding_params`, `_derived.lm_head_params`, `_derived.total_params` computed from `dataset_manifest.vocab_size`, `base.model.hidden_size`, and `base.model.tie_embeddings`.
-4. **Token count derivation**: `training.total_tokens = training.tokens_per_param * base.non_embedding_params`.
+4. **Token count derivation**: decay-only resume uses `training.decay_tokens`;
+   otherwise an explicit `training.total_tokens` (fixed-budget regimes /
+   overrides, `"1B"`-style strings accepted) is used verbatim; otherwise
+   `training.total_tokens = training.tokens_per_param * base.non_embedding_params`.
 5. **Capability check**: `set(experiment.required_capabilities) ⊆ set(cluster.capabilities)`. On mismatch, abort with a clear error listing the missing capabilities.
 6. **TE/CUDA version check**: verify installed versions match `cluster.*_version` pins. Mismatch aborts.
 7. **Dataset manifest check**: verify dataset SHA256 manifest matches `data.expected_manifest_hash`. Mismatch aborts.
@@ -997,9 +1006,12 @@ def submit(overrides: list[str]):
 
     # 1. Derive: parallelism, token counts, embedding math
     cfg.parallelism = resolve_parallelism(cfg.base.non_embedding_params, cfg.cluster)
-    cfg.training.total_tokens = (
-        cfg.training.tokens_per_param * cfg.base.non_embedding_params
-    )
+    if cfg.training.get("total_tokens") is not None:  # explicit fixed budget
+        cfg.training.total_tokens = parse_token_count(cfg.training.total_tokens)
+    else:
+        cfg.training.total_tokens = (
+            cfg.training.tokens_per_param * cfg.base.non_embedding_params
+        )
 
     vocab = read_dataset_manifest(cfg.data.path).vocab_size
     hidden = cfg.base.model.hidden_size

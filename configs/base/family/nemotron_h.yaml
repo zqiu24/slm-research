@@ -1,0 +1,27 @@
+# @package _global_
+# Family-level defaults — architectural choices that do not depend on scale.
+base:
+  family: nemotron_h
+  family_version: "h_2504"
+  reference: "Nemotron-H (NVIDIA, arXiv:2504.03624) — Mamba2/attention/MLP hybrid"
+  model:
+    entrypoint: "mamba"            # builds via MambaModel (pretrain_mamba_slm)
+    normalization: "RMSNorm"
+    norm_epsilon: 1.0e-5
+    activation: "squared_relu"
+    positional_encoding: "none"    # Mamba layers carry position; no RoPE
+    rotary_scaling: null
+    qk_norm: false
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    init_method_std: 0.02
+    depth_scaled_init: false
+    attention_backend: "flash"
+    mamba:
+      state_dim: 128
+      head_dim: 64
+      num_groups: 8
+  tokenizer:
+    # Descriptive only — the actual tokenizer is fixed by the dataset manifest.
+    nominal_name: "llama-3.1"
+    nominal_vocab_size: 128256
