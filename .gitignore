@@ -71,3 +71,6 @@ poet_torch_huawei/**/wandb/
 poet_torch_huawei/**/*.log
 poet_torch_huawei/training_scripts/**/data_cache/
 .claude/
+
+# Reference papers — large PDFs, kept locally only (extract text if needed)
+*.pdf
