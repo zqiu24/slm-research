@@ -77,6 +77,9 @@ def apply() -> None:
         config.ngpt_alpha_init = float(getattr(args, "ngpt_alpha_init", 0.05))
         config.ngpt_sqk_init = float(getattr(args, "ngpt_sqk_init", 1.0))
         config.ngpt_suv_init = float(getattr(args, "ngpt_suv_init", 1.0))
+        # NGPTMLP reads this to build split u/v projections (parity with the
+        # unfused baselines). Attention unfuse is handled by model_unfuse_linears.
+        config.unfuse_fc1 = bool(getattr(args, "unfuse_fc1", False))
         config.ngpt = True  # boolean shortcut for downstream checks
         return config
 

@@ -110,6 +110,7 @@ class NGPTMLP(NGPTMLPBody):
             suv_init_value=float(getattr(config, "ngpt_suv_init", 1.0)),
             suv_init_scaling=1.0,
             dtype=dtype,
+            unfuse=bool(getattr(config, "unfuse_fc1", False)),
         )
 
     def forward(self, hidden_states: torch.Tensor):

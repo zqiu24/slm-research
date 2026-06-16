@@ -120,3 +120,26 @@ def test_ngpt_mlp_body_unfused_param_count_matches_fused():
     # Split names exist; packed name does not.
     assert hasattr(unfused, "linear_fc1_u") and hasattr(unfused, "linear_fc1_v")
     assert not hasattr(unfused, "linear_fc1")
+
+
+def test_ngpt_mlp_reads_unfuse_flag_from_config():
+    """NGPTMLP (the Megatron-instantiable subclass) selects split projections
+    when config.unfuse_fc1 is set."""
+    from src.model.ngpt.mlp import NGPTMLP
+
+    class _Cfg:
+        hidden_size = 16
+        ffn_hidden_size = 64
+        ngpt_base_scale = 1.0 / (16**0.5)
+        ngpt_suv_init = 1.0
+        bf16 = False
+        params_dtype = torch.float32
+
+    fused = NGPTMLP(_Cfg())
+    assert hasattr(fused, "linear_fc1") and not hasattr(fused, "linear_fc1_u")
+
+    cfg_unfused = _Cfg()
+    cfg_unfused.unfuse_fc1 = True
+    unfused = NGPTMLP(cfg_unfused)
+    assert hasattr(unfused, "linear_fc1_u") and hasattr(unfused, "linear_fc1_v")
+    assert not hasattr(unfused, "linear_fc1")
