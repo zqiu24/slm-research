@@ -46,6 +46,9 @@ COMMON=(
   "scheduler=wsd"
   "optim.lr=4e-3"
   "optim.poet.block_count=${BLOCK_COUNT}"
+  # POET reset: re-randomize permutations every 400 steps (config default is -1
+  # = never). Overrides poet_lie_orth_alt.yaml only for this script.
+  "optim.poet.reinit_period=400"
 )
 
 case "${MODE}" in
