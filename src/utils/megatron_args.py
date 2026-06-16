@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -10,6 +11,8 @@ from omegaconf import DictConfig, OmegaConf
 from src.utils.ladder_math import parse_token_count
 from src.utils.scheduler import scheduler_args
 from src.utils.wandb_naming import wandb_run_name
+
+logger = logging.getLogger(__name__)
 
 
 def _truthy(value: Any) -> bool:
@@ -37,9 +40,24 @@ def _model_args(cfg: DictConfig) -> list[str]:
     args: list[str] = []
 
     _add(args, "--use-mcore-models")
-    if model.get("transformer_impl", None) is not None:
-        _add(args, "--transformer-impl", model.transformer_impl)
-        if str(model.transformer_impl) == "local":
+    transformer_impl = model.get("transformer_impl", None)
+    # POET requires the local (unfused) impl: the GPT layer spec is selected
+    # from args.transformer_impl (NOT config.transformer_impl), and POET cannot
+    # replace fused TE LayerNormColumnParallelLinear. Force it here so a POET run
+    # need not pass base.model.transformer_impl=local by hand (the runtime
+    # poet_unfuse_te_impl patch only flips config, which the spec ignores).
+    optim_cfg = cfg.get("optim", None)
+    optim_type = str(optim_cfg.get("type", "")) if optim_cfg is not None else ""
+    if optim_type == "poet" and str(transformer_impl) != "local":
+        if transformer_impl is not None:
+            logger.warning(
+                "POET requires --transformer-impl local; overriding %r -> 'local'",
+                str(transformer_impl),
+            )
+        transformer_impl = "local"
+    if transformer_impl is not None:
+        _add(args, "--transformer-impl", transformer_impl)
+        if str(transformer_impl) == "local":
             # Local impl uses torch.nn.LayerNorm via WrappedTorchNorm, which
             # asserts `not config.persist_layer_norm`. The TE-backed fused
             # persistent layernorm kernel isn't reachable from this path.
@@ -685,6 +703,11 @@ def _logging_args(cfg: DictConfig) -> list[str]:
     if save_enabled:
         _add(args, "--save-interval", cfg.training.get("save_interval", 1_000_000_000))
         _add(args, "--save", f"{archive}/checkpoints")
+    else:
+        # With --save omitted, Megatron's wandb writer would deref
+        # os.path.join(args.save, 'wandb') on a None save dir and crash. Give
+        # wandb its own dir so logging works without writing checkpoints.
+        _add(args, "--wandb-save-dir", f"{archive}/wandb")
     # Only force an entity when one is configured. An empty/null entity lets
     # wandb fall back to the logged-in account's default (personal) namespace,
     # avoiding "entity ... not found" when the configured team is inaccessible.
