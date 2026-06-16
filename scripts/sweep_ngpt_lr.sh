@@ -10,14 +10,17 @@
 # llama3-60m, ablation_40x (40 tpp), seq 256, gbs 1024, mbs 128,
 # transformer_impl=local, tie_embeddings=false, cosine schedule (min_lr 0.1).
 #
-# ONLY optim.lr changes. weight_decay=0.1 to MATCH the adam baseline exactly
-# (so wd is not a variable in the comparison). nGPT's reference uses wd=0, but
-# its per-step row/col weight normalization washes out the decay's magnitude
-# shrink, and the scaling params (sqk/suv/sz/alpha) stay no-decay regardless —
-# so wd=0.1 stays effectively close to the reference while eliminating the
-# confound. Everything else held at the nGPT reference recipe (NOT tuned):
-#   betas [0.9,0.95], eps, no-warmup, and the hypersphere init scales
-#   alpha_init=0.05 / sqk_init=1 / suv_init=1 / sz_init=1 / base_scale=1/sqrt(d).
+# The optimizer hyperparams + schedule are MATCHED to the adam baseline so the
+# ONLY difference is the nGPT architecture + ngpt_adamw normalization:
+#   optim.weight_decay=0.1        (adam's wd; nGPT's per-step row/col normalize
+#                                  washes out the magnitude shrink, scaling
+#                                  params stay no-decay — so this stays close to
+#                                  nGPT's reference wd=0 while removing the confound)
+#   optim.ngpt.no_warmup=false    (use adam's 1% warmup instead of nGPT's none)
+# With these, ngpt vs adam now match on warmup (0.01), betas [0.9,0.95], eps,
+# weight_decay (0.1), cosine decay + min_lr (0.1), seq/gbs/mbs/tokens. The nGPT
+# init scales alpha_init=0.05 / sqk_init=1 / suv_init=1 / sz_init=1 /
+# base_scale=1/sqrt(d) are reference-fixed (not tuned — analogous to betas/eps).
 # nGPT also runs full activation recompute (its default) so it fits at mbs=128;
 # recompute is memory-only and does NOT change the loss, so the val/loss is
 # directly comparable to the adam runs.
@@ -51,9 +54,9 @@ LRS=(0.0005 0.001 0.002 0.003 0.004 0.005); LTAGS=(5 10 20 30 40 50)
 for i in "${!LRS[@]}"; do
   lr="${LRS[$i]}"; lt="${LTAGS[$i]}"
   name="ngpt_lr${lt}"
-  echo "### ${name}: lr=${lr}, weight_decay=0.1 (all else = nGPT reference defaults)"
+  echo "### ${name}: lr=${lr}, wd=0.1, warmup matched to adam"
   codexlog "$name" scripts/train_ngpt_dev.sh \
-    optim.lr="$lr" optim.weight_decay=0.1 experiment.name="$name"
+    optim.lr="$lr" optim.weight_decay=0.1 optim.ngpt.no_warmup=false experiment.name="$name"
 done
 
 echo "=== nGPT LR sweep complete (${#LRS[@]} runs) ==="
