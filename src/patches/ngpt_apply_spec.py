@@ -23,9 +23,30 @@ from __future__ import annotations
 
 import logging
 import math
+import sys
 from typing import Any
 
 from src.patches._registry import register_patch
+
+
+def _rebind_if_stale(module_name: str, attr: str, orig, wrapped) -> None:
+    """Rebind a stale by-value import of a function we just wrapped.
+
+    ``ngpt_apply_spec`` wraps functions on one module that consumers captured
+    by value (``from X import Y``) on another: ``gpt_builder`` (consumed as
+    ``pretrain_gpt.gpt_builder`` by the launcher) and
+    ``core_transformer_config_from_args`` (consumed bare inside
+    ``gpt_builders``). If a patch sorting before us (``model_unfuse_linears``)
+    imported those modules first, the copies are frozen to the originals.
+    Rebind ``module_name.attr`` to ``wrapped`` — but only if it still holds the
+    ``orig`` we wrapped, so we never clobber a different wrapper. No-op (and no
+    import) if the module is not yet loaded; in that ordering the consumer
+    imports after us and binds the wrapped function naturally.
+    """
+    m = sys.modules.get(module_name)
+    if m is not None and getattr(m, attr, None) is orig:
+        setattr(m, attr, wrapped)
+
 
 _TARGET = (
     "gpt_builders.gpt_builder",
@@ -60,6 +81,7 @@ def apply() -> None:
         return config
 
     _ma.core_transformer_config_from_args = _wrapped_cfg
+    _rebind_if_stale("gpt_builders", "core_transformer_config_from_args", _orig_cfg, _wrapped_cfg)
 
     # ---- Wrap GPT model builder ----
     import gpt_builders as _gb  # third_party/Megatron-LM is on sys.path
@@ -101,6 +123,7 @@ def apply() -> None:
         return model
 
     _gb.gpt_builder = _wrapped_builder
+    _rebind_if_stale("pretrain_gpt", "gpt_builder", _orig_builder, _wrapped_builder)
 
 
 # ---------------------------------------------------------------------------
