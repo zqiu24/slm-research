@@ -140,12 +140,20 @@ _NORM_ROLES_BY_SUFFIX: dict[tuple[str, ...], str] = {
     ("embedding", "word_embeddings", "weight"): "rows",
     # LM head row = per-vocab vector -> unit norm along hidden.
     ("output_layer", "weight"): "rows",
-    # Q/K/V projection rows = per-output-channel vectors.
+    # Q/K/V projection rows = per-output-channel vectors (fused).
     ("linear_qkv", "weight"): "rows",
+    # ...and the unfused split (model_unfuse_linears splits linear_qkv).
+    ("linear_q", "weight"): "rows",
+    ("linear_k", "weight"): "rows",
+    ("linear_v", "weight"): "rows",
     # Attention output projection columns = per-input-channel vectors.
     ("linear_proj", "weight"): "cols",
-    # SwiGLU c_fc rows = per-output-channel vectors (gate+up concat).
+    # SwiGLU c_fc rows = per-output-channel vectors (fused gate+up concat).
     ("linear_fc1", "weight"): "rows",
+    # ...and nGPT's unfused MLP split: NGPTMLP builds linear_fc1_u/v when
+    # unfuse_fc1 is set (each row is still a per-output-channel vector).
+    ("linear_fc1_u", "weight"): "rows",
+    ("linear_fc1_v", "weight"): "rows",
     # SwiGLU mlp_c_proj columns = per-input-channel vectors.
     ("linear_fc2", "weight"): "cols",
 }
@@ -176,10 +184,11 @@ def _register_ngpt_norm_roles(model, expected_layers: int) -> None:
         matched_per_role[role] += 1
 
     # Sanity check: detect future Megatron renames or missed weight matrices.
-    # Per-layer matrices: linear_qkv (rows), linear_proj (cols),
-    # linear_fc1 (rows), linear_fc2 (cols) = 4 per layer.
-    # Plus embedding (rows) and output_layer (rows) — counted once under
-    # tying because Megatron's `named_parameters` deduplicates.
+    # Per-layer matrices (fused case): linear_qkv (rows), linear_proj (cols),
+    # linear_fc1 (rows), linear_fc2 (cols) = 4 per layer. Unfusing splits
+    # qkv -> q/k/v and fc1 -> fc1_u/v, giving MORE matches, so the >=4-per-layer
+    # floor below still holds. Plus embedding (rows) and output_layer (rows) —
+    # counted once under tying because Megatron's `named_parameters` dedups.
     n_unique_params = len(role_map)
     per_layer = 4
     embedding_plus_head_min = 1  # at least the embedding; output_layer aliases it under tying
