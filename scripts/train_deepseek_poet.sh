@@ -76,6 +76,7 @@ case "${MODE}" in
       "${COMMON[@]}"
       "cluster=h100_de"
       "training_regime=fixed_10b"
+      "base.model.seq_length=256"
       "training.global_batch_size=1024"
       "training.micro_batch_size=1"
       "training.save_enabled=true"
