@@ -205,6 +205,22 @@ def _unfused_mlp_forward(self, hidden_states, per_token_scale=None, **kwargs):
     return out, None
 
 
+def _unfused_shared_expert_forward(self, hidden_states, **kwargs):
+    """Replacement ``SharedExpertMLP.forward`` for the unfused gate/up path.
+
+    ``SharedExpertMLP`` (megatron/core/transformer/moe/shared_experts.py)
+    returns a BARE tensor (not the ``(output, bias)`` tuple a plain MLP
+    returns): the MoE layer's ``postprocess`` does ``output + shared_expert``
+    on tensors. Reuse the unfused gate/up body, then drop the bias and apply
+    the optional shared-expert sigmoid gate, mirroring the original.
+    """
+    out, _bias = _unfused_mlp_forward(self, hidden_states, **kwargs)
+    if getattr(self, "use_shared_expert_gate", False):
+        logits = torch.nn.functional.linear(hidden_states, self.gate_weight)
+        out = out * torch.nn.functional.sigmoid(logits)
+    return out
+
+
 def _unfuse_one_mlp_fc1(mlp, path, *, linear_types) -> bool:
     fc1 = getattr(mlp, "linear_fc1", None)
     if fc1 is None or not isinstance(fc1, linear_types):
@@ -220,8 +236,17 @@ def _unfuse_one_mlp_fc1(mlp, path, *, linear_types) -> bool:
     mlp.linear_fc1_gate = _make_sub_linear(fc1, gate_rows)
     mlp.linear_fc1_up = _make_sub_linear(fc1, up_rows)
     del mlp.linear_fc1
-    mlp.forward = types.MethodType(_unfused_mlp_forward, mlp)
-    logger.info("[unfuse] %s.linear_fc1 -> gate/up (ffn=%d)", path, ffn)
+    # SharedExpertMLP returns a bare tensor (MoE postprocess adds it as a
+    # tensor); a plain MLP returns (output, bias). Match the right contract.
+    is_shared_expert = hasattr(mlp, "use_shared_expert_gate")
+    fwd = _unfused_shared_expert_forward if is_shared_expert else _unfused_mlp_forward
+    mlp.forward = types.MethodType(fwd, mlp)
+    logger.info(
+        "[unfuse] %s.linear_fc1 -> gate/up (ffn=%d%s)",
+        path,
+        ffn,
+        ", shared-expert" if is_shared_expert else "",
+    )
     return True
 
 
