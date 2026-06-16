@@ -58,3 +58,13 @@ base:
     # fusion-invariant). See docs/superpowers/plans/2026-06-16-ngpt-unfuse.md.
     unfuse_qkv: true
     unfuse_fc1: true
+    # Full activation recompute (every layer): nGPT's hypersphere forward keeps
+    # ~2x the per-layer activations of a plain llama3 layer (per-head justnorm,
+    # two residual blends, suv) and can't free them otherwise, so it OOMs at the
+    # mbs=128 dev/bake-off config that adam/muon run fine. Recompute trades ~1/3
+    # throughput to fit — it does NOT change the result (forward re-runs
+    # identically; verified: tests/unit/test_ngpt_recompute.py + a 60m GPU run).
+    # Override recompute_granularity=null at a smaller mbs that already fits.
+    recompute_granularity: full
+    recompute_method: uniform
+    recompute_num_layers: 1
