@@ -68,6 +68,16 @@ def _model_args(cfg: DictConfig) -> list[str]:
     _add(args, "--hidden-dropout", model.hidden_dropout)
     _add(args, "--normalization", model.normalization)
     _add(args, "--norm-epsilon", model.norm_epsilon)
+    # Activation recompute (off unless set). 'full' wraps each transformer layer
+    # in tensor_parallel.checkpoint, re-running it in backward to free the
+    # per-layer activations (memory <-> compute trade). 'method'/'num-layers'
+    # only apply to 'full'.
+    rg = model.get("recompute_granularity", None)
+    if rg is not None:
+        _add(args, "--recompute-granularity", rg)
+        if str(rg) == "full":
+            _add(args, "--recompute-method", model.get("recompute_method", "uniform"))
+            _add(args, "--recompute-num-layers", model.get("recompute_num_layers", 1))
     # Zero-centered (1+w) RMSNorm (Gemma). --apply-layernorm-1p maps to the
     # config field layernorm_zero_centered_gamma (transformer_config.py:170
     # argparse_meta; pin core_v0.17.0).

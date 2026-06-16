@@ -43,6 +43,30 @@ def _args_to_map(args: list[str]) -> dict[str, str | bool]:
     return out
 
 
+def test_recompute_args_emitted_only_when_set():
+    from src.utils.megatron_args import _model_args
+
+    def emit(extra):
+        cfg = OmegaConf.create({"base": {"model": {**_MIN_MODEL, **extra}}})
+        return _args_to_map(_model_args(cfg))
+
+    # Off by default — no recompute flags.
+    assert "--recompute-granularity" not in emit({})
+
+    # 'full' emits granularity + method + num-layers.
+    full = emit(
+        {"recompute_granularity": "full", "recompute_method": "block", "recompute_num_layers": 2}
+    )
+    assert full["--recompute-granularity"] == "full"
+    assert full["--recompute-method"] == "block"
+    assert full["--recompute-num-layers"] == "2"
+
+    # 'selective' emits granularity only (method/num-layers are full-only).
+    sel = emit({"recompute_granularity": "selective"})
+    assert sel["--recompute-granularity"] == "selective"
+    assert "--recompute-method" not in sel
+
+
 def test_llama3_adam_args_include_dense_gqa_rope_and_data_prefix():
     cfg = _parse_overrides(
         [

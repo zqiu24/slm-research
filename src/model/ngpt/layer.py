@@ -58,10 +58,16 @@ class NGPTTransformerLayer(TransformerLayer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # v1 scope assertion — `forward` skips Megatron's recompute path.
-        assert getattr(self.config, "recompute_granularity", None) is None, (
-            "nGPT v1 does not support --recompute-granularity; override "
-            "expects a single-pass forward."
+        # `forward` is a pure function of its inputs (no dropout — nGPT forces
+        # attention/hidden dropout to 0 — and no in-place state), so Megatron's
+        # 'full' activation recompute (which wraps the whole layer in
+        # tensor_parallel.checkpoint and re-runs it in backward) is safe and
+        # frees the per-layer hypersphere activations. 'selective' (core-
+        # attention-only recompute) is not yet validated against the override.
+        rg = getattr(self.config, "recompute_granularity", None)
+        assert rg in (None, "full"), (
+            f"nGPT supports recompute_granularity in (None, 'full'), got {rg!r}; "
+            "'selective' is not yet validated against the nGPT forward override."
         )
 
         hidden = int(self.config.hidden_size)
