@@ -28,6 +28,7 @@ experiment:
     - model_unfuse_linears
     - poet_optimizer_setup
     - poet_unfuse_te_impl
+    - poet_moe_local_rmsnorm   # local MoE block: final norm FusedLayerNorm -> WrappedTorchNorm under RMSNorm
     - poet_apply_to_model
     - poet_merge_step
     - sandwich_norm_apply     # no-op unless --use-sandwich-norm; owns only gpt_builder (composes w/ POET, see 72778ce)
