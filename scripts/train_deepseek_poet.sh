@@ -70,7 +70,11 @@ case "${MODE}" in
       "$@")
     ;;
   full)
-    # 8-GPU cluster run (data parallel; POET forces TP=1). Checkpoints on.
+    # 8-GPU cluster run. POET's unfuse requires TP=1, but h100_de's tp_size_rules
+    # would assign tp=4 to a 3B model (its tp=1 tier is model_params_lt 3.0e9 and
+    # deepseek_3bv2 is exactly 3.0e9 -> falls through to tp=4 -> unfuse crashes).
+    # Force tp=1 here => pure data parallel across the node's GPUs (dp=8 on 8). SP
+    # off is required by the local-impl WrappedTorchNorm (and is a no-op at tp=1).
     # Budget pinned to fixed_10b (10B tokens) for testing rather than inheriting
     # the repo default ablation_20x (which is 20x*3B = 60B). Override the regime
     # (e.g. training_regime=ablation_20x) or training.total_tokens=... to change.
@@ -79,6 +83,8 @@ case "${MODE}" in
     RUN=(python -m launchers.train_megatron
       "${COMMON[@]}"
       "cluster=h100_de"
+      "parallelism.tp_size_rules=[{model_params_lt: 1.0e15, tp: 1, pp: 1}]"
+      "parallelism.sequence_parallel=false"
       "training_regime=fixed_10b"
       "base.model.seq_length=256"
       "training.global_batch_size=1024"
