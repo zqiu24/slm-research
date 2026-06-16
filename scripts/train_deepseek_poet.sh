@@ -74,14 +74,15 @@ case "${MODE}" in
     # Budget pinned to fixed_10b (10B tokens) for testing rather than inheriting
     # the repo default ablation_20x (which is 20x*3B = 60B). Override the regime
     # (e.g. training_regime=ablation_20x) or training.total_tokens=... to change.
-    # mbs=1 is the safe default; raise it if the per-GPU memory headroom allows.
+    # mbs=4 default (mbs=1 is correctness-safe but very grad-accum-heavy at seq 256;
+    # raise further if per-GPU memory headroom allows -- bc=8 leaves plenty).
     RUN=(python -m launchers.train_megatron
       "${COMMON[@]}"
       "cluster=h100_de"
       "training_regime=fixed_10b"
       "base.model.seq_length=256"
       "training.global_batch_size=1024"
-      "training.micro_batch_size=1"
+      "training.micro_batch_size=4"
       "training.save_enabled=true"
       "optim.min_lr=7e-6"
       "$@")
