@@ -30,6 +30,7 @@ experiment:
     - poet_unfuse_te_impl
     - poet_apply_to_model
     - poet_merge_step
+    - sandwich_norm_apply     # no-op unless --use-sandwich-norm; owns only gpt_builder (composes w/ POET, see 72778ce)
     - training_log_eta
     - wandb_metric_normalize
   required_capabilities: []
