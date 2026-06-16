@@ -68,10 +68,14 @@ case "${MODE}" in
     ;;
   full)
     # 8-GPU cluster run (data parallel; POET forces TP=1). Checkpoints on.
+    # Budget pinned to fixed_10b (10B tokens) for testing rather than inheriting
+    # the repo default ablation_20x (which is 20x*3B = 60B). Override the regime
+    # (e.g. training_regime=ablation_20x) or training.total_tokens=... to change.
     # mbs=1 is the safe default; raise it if the per-GPU memory headroom allows.
     RUN=(python -m launchers.train_megatron
       "${COMMON[@]}"
       "cluster=h100_de"
+      "training_regime=fixed_10b"
       "training.global_batch_size=1024"
       "training.micro_batch_size=1"
       "training.save_enabled=true"
