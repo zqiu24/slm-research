@@ -63,3 +63,60 @@ def test_ngpt_mlp_body_param_count():
     # suv:        2 * n_inner
     expected = (2 * n_inner * n_embd) + (n_embd * n_inner) + (2 * n_inner)
     assert sum(p.numel() for p in body.parameters()) == expected
+
+
+def test_ngpt_mlp_body_unfused_matches_fused():
+    """Splitting linear_fc1 into u/v (and slicing suv) is bit-identical to the
+    packed forward, given the same weights. This is the fairness invariant:
+    fused nGPT == unfused nGPT."""
+    torch.manual_seed(1)
+    n_embd = 16
+    n_inner = 4 * n_embd
+    base_scale = 1.0 / (n_embd**0.5)
+
+    fused = NGPTMLPBody(
+        hidden_size=n_embd,
+        ffn_hidden_size=n_inner,
+        base_scale=base_scale,
+        suv_init_value=1.0,
+        suv_init_scaling=1.0,
+        dtype=torch.float32,
+        unfuse=False,
+    )
+    unfused = NGPTMLPBody(
+        hidden_size=n_embd,
+        ffn_hidden_size=n_inner,
+        base_scale=base_scale,
+        suv_init_value=1.0,
+        suv_init_scaling=1.0,
+        dtype=torch.float32,
+        unfuse=True,
+    )
+    # Copy fused weights into the split projections + shared suv/fc2.
+    unfused.linear_fc1_u.weight.data.copy_(fused.linear_fc1.weight.data[:n_inner])
+    unfused.linear_fc1_v.weight.data.copy_(fused.linear_fc1.weight.data[n_inner:])
+    unfused.linear_fc2.weight.data.copy_(fused.linear_fc2.weight.data)
+    unfused.suv.param.data.copy_(fused.suv.param.data)
+
+    x = torch.randn(2, 5, n_embd)
+    assert torch.allclose(fused(x), unfused(x), atol=1e-6)
+
+
+def test_ngpt_mlp_body_unfused_param_count_matches_fused():
+    n_embd, n_inner = 16, 64
+    kw = dict(
+        hidden_size=n_embd,
+        ffn_hidden_size=n_inner,
+        base_scale=1.0 / (n_embd**0.5),
+        suv_init_value=1.0,
+        suv_init_scaling=1.0,
+        dtype=torch.float32,
+    )
+    fused = NGPTMLPBody(unfuse=False, **kw)
+    unfused = NGPTMLPBody(unfuse=True, **kw)
+    assert sum(p.numel() for p in fused.parameters()) == sum(
+        p.numel() for p in unfused.parameters()
+    )
+    # Split names exist; packed name does not.
+    assert hasattr(unfused, "linear_fc1_u") and hasattr(unfused, "linear_fc1_v")
+    assert not hasattr(unfused, "linear_fc1")

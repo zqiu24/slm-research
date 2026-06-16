@@ -31,20 +31,35 @@ class NGPTMLPBody(nn.Module):
         suv_init_value: float,
         suv_init_scaling: float,
         dtype: torch.dtype = torch.bfloat16,
+        unfuse: bool = False,
     ) -> None:
         super().__init__()
         self.hidden_size = int(hidden_size)
         self.ffn_hidden_size = int(ffn_hidden_size)
         self._n_embd_sqrt = float(self.hidden_size) ** 0.5
+        self.unfuse = bool(unfuse)
 
-        # nGPT reference packs c_fc with 2*ffn_hidden_size columns:
-        # [u_half | v_half]. Same convention here.
-        self.linear_fc1 = nn.Linear(
-            self.hidden_size, 2 * self.ffn_hidden_size, bias=False, dtype=dtype
-        )
+        # nGPT reference packs c_fc with 2*ffn columns: [u_half | v_half].
+        # Unfused: two separate [ffn, hidden] projections holding those halves.
+        # suv stays a single (2*ffn,) vector either way (sliced in forward),
+        # so the param is identical to the fused case and the optimizer's
+        # no-decay grouping (keyed on the module name "suv") is unaffected.
+        if self.unfuse:
+            self.linear_fc1_u = nn.Linear(
+                self.hidden_size, self.ffn_hidden_size, bias=False, dtype=dtype
+            )
+            self.linear_fc1_v = nn.Linear(
+                self.hidden_size, self.ffn_hidden_size, bias=False, dtype=dtype
+            )
+            nn.init.normal_(self.linear_fc1_u.weight, mean=0.0, std=base_scale)
+            nn.init.normal_(self.linear_fc1_v.weight, mean=0.0, std=base_scale)
+        else:
+            self.linear_fc1 = nn.Linear(
+                self.hidden_size, 2 * self.ffn_hidden_size, bias=False, dtype=dtype
+            )
+            nn.init.normal_(self.linear_fc1.weight, mean=0.0, std=base_scale)
+
         self.linear_fc2 = nn.Linear(self.ffn_hidden_size, self.hidden_size, bias=False, dtype=dtype)
-        # init: row-normalized with std=base_scale
-        nn.init.normal_(self.linear_fc1.weight, mean=0.0, std=base_scale)
         nn.init.normal_(self.linear_fc2.weight, mean=0.0, std=base_scale)
 
         self.suv = LearnedScaling(
@@ -54,11 +69,18 @@ class NGPTMLPBody(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        uv = self.linear_fc1(x)
-        # Reference effective suv: param * (init_value/init_scaling) * sqrt(n_embd)
-        suv = (self.suv.scaled_value() * self._n_embd_sqrt).to(uv.dtype)
-        uv = suv * uv
-        u, v = uv.chunk(2, dim=-1)
+        # Reference effective suv: param * (init_value/init_scaling) * sqrt(n_embd).
+        suv = self.suv.scaled_value() * self._n_embd_sqrt
+        ffn = self.ffn_hidden_size
+        if self.unfuse:
+            u = self.linear_fc1_u(x)
+            v = self.linear_fc1_v(x)
+            u = suv[:ffn].to(u.dtype) * u
+            v = suv[ffn:].to(v.dtype) * v
+        else:
+            uv = self.linear_fc1(x)
+            uv = suv.to(uv.dtype) * uv
+            u, v = uv.chunk(2, dim=-1)
         return self.linear_fc2(u * functional.silu(v))
 
 
