@@ -46,17 +46,14 @@ class _FakeSequentialMLP(nn.Module):
         return torch.cat(outs, 0), None
 
 
-def test_walk_installs_grouped_poetx_and_forward_matches():
+def test_walk_installs_grouped_poetx_and_matches_per_expert_subinstances():
     from poet_torch.grouped_poetx_layer import GroupedPOETXLinear
 
     torch.manual_seed(0)
     m = _FakeSequentialMLP().to(torch.float64)
-    ref = _FakeSequentialMLP().to(torch.float64)
-    ref.load_state_dict(m.state_dict())
 
     tokens = torch.randn(9, 8, dtype=torch.float64)
     tpe = torch.tensor([2, 3, 4])
-    ref_out, _ = ref(tokens, tpe, None)
 
     n = replace_linears_with_poet(
         m,
@@ -70,6 +67,20 @@ def test_walk_installs_grouped_poetx_and_forward_matches():
     )
     assert n >= 1
     assert any(isinstance(mod, GroupedPOETXLinear) for mod in m.modules())
-    # oft_R==0 at init -> grouped forward equals the original expert forward.
+
+    # POET re-inits the base weight (normalize + perm bake), so it does NOT preserve
+    # the ORIGINAL expert forward. The meaningful invariant is that the grouped
+    # BATCHED swapped forward equals the per-expert path run through the grouped
+    # module's OWN POETX sub-instances (fc1 -> relu -> fc2).
+    g1 = m._poet_grouped["linear_fc1"]
+    g2 = m._poet_grouped["linear_fc2"]
+    outs = []
+    for e, t in zip(range(len(tpe)), torch.split(tokens, tpe.tolist()), strict=False):
+        h = g1.experts[e](t)
+        h = torch.relu(h)
+        o = g2.experts[e](h)
+        outs.append(o)
+    ref = torch.cat(outs, 0)
+
     out, _ = m(tokens, tpe, None)
-    assert torch.allclose(out, ref_out, atol=1e-9)
+    assert torch.allclose(out, ref, atol=1e-9)

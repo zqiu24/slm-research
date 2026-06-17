@@ -233,14 +233,8 @@ def _install_grouped_poetx(
             dtype=w0.dtype,
         )
         for e in range(num_experts):
-            # Raw copy: grouped experts store W_orig so that at oft_R=0 the grouped
-            # forward (x @ W.T) is numerically identical to the original expert forward.
-            # Weight normalisation (init_type) is deliberately skipped here; the
-            # base-weight scale is owned by the MoE init, not POET.
-            with torch.no_grad():
-                g.experts[e].weight.copy_(
-                    getattr(experts[e], name).weight.to(g.experts[e].weight.dtype)
-                )
+            _copy_and_init_weight(g.experts[e], getattr(experts[e], name), init_type, mup_alpha)
+            g.experts[e].bake_perms_into_weight()
         g.bind_weights()
         grouped_by_role[name] = g
         seq_mlp.add_module(f"grouped_{name}", g)
