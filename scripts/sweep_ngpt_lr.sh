@@ -43,9 +43,10 @@
 #   ngpt_lr90    0.009
 #   ngpt_lr100   0.01
 #
-# Idempotent: a run whose ${LOGDIR}/<name>.log already exists is SKIPPED, so
-# re-running this only launches the not-yet-done lrs (rm a log to force re-run).
-# lr5..lr50 already completed (2026-06-17); re-running launches lr60..lr100.
+# Idempotent: a run is SKIPPED only if its ${LOGDIR}/<name>.log shows it
+# COMPLETED ("[after training is done]"); missing OR crashed/partial runs are
+# (re-)launched. So re-running only does the not-yet-finished lrs (rm a log to
+# force re-run). lr5..lr50 already completed (2026-06-17) -> launches lr60..lr100.
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 LOGDIR=/lustre/home/zqiu/log
@@ -64,8 +65,8 @@ LTAGS=(5 10 20 30 40 50 60 70 80 90 100)
 for i in "${!LRS[@]}"; do
   lr="${LRS[$i]}"; lt="${LTAGS[$i]}"
   name="ngpt_lr${lt}"
-  if [[ -f "${LOGDIR}/${name}.log" ]]; then
-    echo "### ${name}: SKIP (log exists at ${LOGDIR}/${name}.log; rm it to re-run)"
+  if [[ -f "${LOGDIR}/${name}.log" ]] && grep -q "after training is done" "${LOGDIR}/${name}.log"; then
+    echo "### ${name}: SKIP (already completed; rm ${LOGDIR}/${name}.log to re-run)"
     continue
   fi
   echo "### ${name}: lr=${lr}, wd=0.1, warmup matched to adam"

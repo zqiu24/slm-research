@@ -6,8 +6,9 @@
 
 - `scripts/sweep_ngpt_lr.sh`: extend the adam-matched (1% warmup, wd=0.1) lr grid
   up to lr60..lr100 (0.006..0.01) — val loss was still decreasing at lr50 (0.005).
-  Loop now skips any run whose `${LOGDIR}/<name>.log` already exists, so re-running
-  launches only the new lrs (lr5..lr50 already completed 2026-06-17).
+  Loop skips a run only if its `${LOGDIR}/<name>.log` shows completion
+  (`[after training is done]`), so re-running launches only missing/failed lrs
+  (lr5..lr50 done 2026-06-17 -> launches lr60..lr100).
 - New `scripts/sweep_ngpt_lr_reference.sh`: parallel sweep over the same 11 lrs
   (0.0005..0.01) under the canonical NVIDIA/ngpt recipe — no warmup
   (`optim.ngpt.no_warmup=true` → `--lr-warmup-samples 0`) and `weight_decay=0.0` —
