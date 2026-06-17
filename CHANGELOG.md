@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — nGPT lr-sweep extension + reference-recipe sweep (2026-06-17)
+
+- `scripts/sweep_ngpt_lr.sh`: extend the adam-matched (1% warmup, wd=0.1) lr grid
+  up to lr60..lr100 (0.006..0.01) — val loss was still decreasing at lr50 (0.005).
+  Loop now skips any run whose `${LOGDIR}/<name>.log` already exists, so re-running
+  launches only the new lrs (lr5..lr50 already completed 2026-06-17).
+- New `scripts/sweep_ngpt_lr_reference.sh`: parallel sweep over the same 11 lrs
+  (0.0005..0.01) under the canonical NVIDIA/ngpt recipe — no warmup
+  (`optim.ngpt.no_warmup=true` → `--lr-warmup-samples 0`) and `weight_decay=0.0` —
+  as a clean A/B against the warmup+wd=0.1 variant, to test whether the
+  patch-fixed (post-2026-06-17) nGPT trains stably under the reference setting.
+
 ### Added — gemma3 (text-only) bake-off family (2026-06-14)
 
 - New `gemma3` family + `600m_gemma3` scale (dense, gpt entrypoint, 599.5M

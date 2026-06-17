@@ -37,6 +37,15 @@
 #   ngpt_lr30    0.003
 #   ngpt_lr40    0.004
 #   ngpt_lr50    0.005
+#   ngpt_lr60    0.006     high-lr extension (loss still decreasing at lr50)
+#   ngpt_lr70    0.007
+#   ngpt_lr80    0.008
+#   ngpt_lr90    0.009
+#   ngpt_lr100   0.01
+#
+# Idempotent: a run whose ${LOGDIR}/<name>.log already exists is SKIPPED, so
+# re-running this only launches the not-yet-done lrs (rm a log to force re-run).
+# lr5..lr50 already completed (2026-06-17); re-running launches lr60..lr100.
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 LOGDIR=/lustre/home/zqiu/log
@@ -49,11 +58,16 @@ codexlog() {
   echo "<<< END   ${name}  (status ${PIPESTATUS[0]})  $(date '+%F %T')"
 }
 
-LRS=(0.0005 0.001 0.002 0.003 0.004 0.005); LTAGS=(5 10 20 30 40 50)
+LRS=(0.0005 0.001 0.002 0.003 0.004 0.005 0.006 0.007 0.008 0.009 0.01)
+LTAGS=(5 10 20 30 40 50 60 70 80 90 100)
 
 for i in "${!LRS[@]}"; do
   lr="${LRS[$i]}"; lt="${LTAGS[$i]}"
   name="ngpt_lr${lt}"
+  if [[ -f "${LOGDIR}/${name}.log" ]]; then
+    echo "### ${name}: SKIP (log exists at ${LOGDIR}/${name}.log; rm it to re-run)"
+    continue
+  fi
   echo "### ${name}: lr=${lr}, wd=0.1, warmup matched to adam"
   codexlog "$name" scripts/train_ngpt_dev.sh \
     optim.lr="$lr" optim.weight_decay=0.1 optim.ngpt.no_warmup=false experiment.name="$name"
