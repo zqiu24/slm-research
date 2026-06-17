@@ -218,6 +218,14 @@ def _install_grouped_poetx(
             )
         roles.append(name)
 
+    if set(roles) != set(_EXPERT_ROLE_NAMES):
+        raise NotImplementedError(
+            f"[POET] grouped experts currently support exactly the fused roles "
+            f"{_EXPERT_ROLE_NAMES}; found {tuple(roles)}. unfuse_fc1 (gate/up split) "
+            f"role handling and the matching swiglu/probs forward are pending "
+            f"(Task 7 GPU phase)."
+        )
+
     grouped_by_role = {}
     for name in roles:
         w0 = getattr(experts[0], name).weight
@@ -233,7 +241,13 @@ def _install_grouped_poetx(
             dtype=w0.dtype,
         )
         for e in range(num_experts):
-            _copy_and_init_weight(g.experts[e], getattr(experts[e], name), init_type, mup_alpha)
+            child_e = getattr(experts[e], name, None)
+            if child_e is None or tuple(child_e.weight.shape) != (out_f, in_f):
+                raise ValueError(
+                    f"[POET] grouped experts must be homogeneous; expert {e} role "
+                    f"{name} is missing or its weight shape != ({out_f}, {in_f})."
+                )
+            _copy_and_init_weight(g.experts[e], child_e, init_type, mup_alpha)
             g.experts[e].bake_perms_into_weight()
         g.bind_weights()
         grouped_by_role[name] = g
@@ -246,7 +260,9 @@ def _install_grouped_poetx(
 
 def _grouped_sequential_forward(self, permuted_local_hidden_states, tokens_per_expert, *rest):
     """Grouped replacement for SequentialMLP.forward (bf16, non-fp8, num_experts>1).
-    Mirrors the per-expert fc1 -> activation -> fc2 chain through the grouped modules."""
+    Mirrors the per-expert fc1 -> activation -> fc2 chain through the grouped modules.
+    *rest captures stock SequentialMLP's permuted_probs (and any extra args) — intentionally
+    dropped here; probs weighting is part of the deferred Task-7 real-MLP forward reproduction."""
     cfg = getattr(self, "config", None)
     if cfg is not None and (getattr(cfg, "fp8", None) or getattr(cfg, "fp4", None)):
         raise ValueError("[POET] grouped experts do not support fp8/fp4 (target bf16)")
