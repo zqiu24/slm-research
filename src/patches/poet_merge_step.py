@@ -37,12 +37,150 @@ own momentum; it does not yet zero the master value (tracked separately).
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 
 from src.patches._registry import register_patch
 
 _TARGET = ("megatron.training.training.train_step",)
 logger = logging.getLogger(__name__)
+
+
+# ----------------------------------------------------------------------------
+# Profiling (env-gated; pure helpers are CPU-safe and must NOT import megatron)
+# ----------------------------------------------------------------------------
+
+_PROFILE_LEAF_KEYS = ("forward_backward", "optimizer", "merge")
+_PROFILE_ORDER = ("train_step_total", *_PROFILE_LEAF_KEYS)
+
+
+def _profile_target_iteration():
+    """Iteration to profile from POET_PROFILE_STEP, or None if unset/invalid/<=0."""
+    raw = os.environ.get("POET_PROFILE_STEP")
+    if raw is None:
+        return None
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _torch_profile_enabled() -> bool:
+    """True iff POET_PROFILE_TORCH requests the per-op torch.profiler drill-down."""
+    return os.environ.get("POET_PROFILE_TORCH", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _dominant_phase(timings: dict):
+    """Largest leaf component (train_step_total excluded as it is the sum); None if none."""
+    leaves = {k: timings[k] for k in _PROFILE_LEAF_KEYS if k in timings}
+    if not leaves:
+        return None
+    return max(leaves, key=leaves.get)
+
+
+def _format_profile(timings: dict) -> str:
+    """Fixed-order, [POET-PROFILE]-prefixed per-phase timing summary (ms).
+
+    train_step_total is the train_step wall time (forward_backward + optimizer);
+    merge runs AFTER train_step and is reported separately, so it is not part of
+    train_step_total. _dominant_phase therefore compares only the three leaves.
+    """
+    lines = ["[POET-PROFILE] per-phase GPU time (ms):"]
+    for k in _PROFILE_ORDER:
+        if k in timings:
+            lines.append(f"[POET-PROFILE]   {k:<18} {timings[k]:10.2f}")
+    dom = _dominant_phase(timings)
+    if dom is not None:
+        lines.append(f"[POET-PROFILE] dominant component: {dom}")
+    return "\n".join(lines)
+
+
+@contextlib.contextmanager
+def _cuda_timer(timings: dict, key: str, enabled: bool):
+    """Record CUDA-event-bounded GPU time (ms) for the wrapped block into
+    timings[key]. No-op when disabled or CUDA is unavailable."""
+    if not enabled:
+        yield
+        return
+    import torch
+
+    if not torch.cuda.is_available():
+        yield
+        return
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    start.record()
+    try:
+        yield
+    finally:
+        end.record()
+        torch.cuda.synchronize()
+        timings[key] = timings.get(key, 0.0) + start.elapsed_time(end)
+
+
+@contextlib.contextmanager
+def _maybe_wrap_optimizer_step(optimizer, timings: dict, enabled: bool):
+    """Temporarily wrap optimizer.step to record its CUDA time into
+    timings['optimizer'] (the lie_ortho / Adam step). Restores the original step
+    on exit. No-op when disabled, optimizer is None, or CUDA is unavailable."""
+    if not enabled or optimizer is None:
+        yield
+        return
+    import torch
+
+    if not torch.cuda.is_available():
+        yield
+        return
+    orig_step = optimizer.step
+
+    def _timed_step(*a, **k):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        out = orig_step(*a, **k)
+        end.record()
+        torch.cuda.synchronize()
+        timings["optimizer"] = timings.get("optimizer", 0.0) + start.elapsed_time(end)
+        return out
+
+    optimizer.step = _timed_step
+    try:
+        yield
+    finally:
+        optimizer.step = orig_step
+
+
+def _emit_profile(timings: dict, dist) -> None:
+    """Print the per-phase summary on rank 0 only."""
+    if not timings:
+        return
+    is_dist = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if is_dist else 0
+    if rank == 0:
+        print(_format_profile(timings), flush=True)
+
+
+def _run_train_step_torch_profiled(orig, args, kwargs, dist):
+    """Run one train_step under torch.profiler and print the top CUDA ops on
+    rank 0. Reveals whether time is in expert GEMMs (SequentialMLP), Muon NS, or
+    Cayley fold ops."""
+    import torch
+    from torch.profiler import ProfilerActivity, profile
+
+    acts = [ProfilerActivity.CPU]
+    if torch.cuda.is_available():
+        acts.append(ProfilerActivity.CUDA)
+    with profile(activities=acts) as prof:
+        ret = orig(*args, **kwargs)
+    is_dist = dist.is_available() and dist.is_initialized()
+    rank = dist.get_rank() if is_dist else 0
+    if rank == 0:
+        sort_key = "self_cuda_time_total" if torch.cuda.is_available() else "self_cpu_time_total"
+        print("[POET-PROFILE] torch.profiler top ops:", flush=True)
+        print(prof.key_averages().table(sort_by=sort_key, row_limit=25), flush=True)
+    return ret
 
 
 def _merge_decision(iteration: int, merge_period: int, reinit_period: int) -> tuple[bool, bool]:
@@ -98,24 +236,45 @@ def apply() -> None:
             iteration = getattr(opts, "iteration", 0)
         # Seed the active-side signal BEFORE forward so the layer reads this step's side.
         _seed_active_side(iteration)
-        ret = _orig_train_step(*args, **kwargs)
+
+        # Profiling (POET_PROFILE_STEP=<iter>): attribute one iteration's GPU time
+        # across forward+backward / optimizer (lie_ortho) / merge to locate the
+        # throughput bottleneck. POET_PROFILE_TORCH=1 swaps in a torch.profiler
+        # per-op drill-down for that iteration instead of the coarse phase timers.
+        profile = _profile_target_iteration() == int(iteration)
+        optimizer = args[3] if len(args) >= 4 else kwargs.get("optimizer")
+        timings: dict = {}
+
+        if profile and _torch_profile_enabled():
+            ret = _run_train_step_torch_profiled(_orig_train_step, args, kwargs, dist)
+        else:
+            with (
+                _maybe_wrap_optimizer_step(optimizer, timings, profile),
+                _cuda_timer(timings, "train_step_total", profile),
+            ):
+                ret = _orig_train_step(*args, **kwargs)
+            if profile and "train_step_total" in timings and "optimizer" in timings:
+                timings["forward_backward"] = max(
+                    timings["train_step_total"] - timings["optimizer"], 0.0
+                )
+
         merge_period = getattr(opts, "poet_merge_period", 0)
         reinit_period = getattr(opts, "poet_reinit_period", 0)
         folding, do_reinit = _merge_decision(iteration, merge_period, reinit_period)
-        if not folding:
-            return ret
         model = args[2] if len(args) >= 3 else kwargs.get("model")
-        if model is None:
+        if folding and model is None:
             logger.warning("[POET] merge step skipped: model not found in train_step args")
-            return ret
-        _run_merge(model, dist, iteration, reinit_perm=do_reinit)
-        # Megatron-Adam path (default): reset momentum ONLY when Ψ is resampled
-        # (do_reinit) — otherwise momentum persists across the per-step fold. The
-        # master VALUE is zeroed every fold regardless (inside _reset_vanilla_oft_state).
-        if not getattr(opts, "poet_use_poet_adam", False):
-            optimizer = args[3] if len(args) >= 4 else kwargs.get("optimizer")
-            if optimizer is not None:
-                _reset_vanilla_oft_state(optimizer, model, iteration, reset_moments=do_reinit)
+        elif folding:
+            with _cuda_timer(timings, "merge", profile):
+                _run_merge(model, dist, iteration, reinit_perm=do_reinit)
+                # Megatron-Adam path (default): reset momentum ONLY when Ψ is
+                # resampled (do_reinit); the master VALUE is zeroed every fold
+                # inside _reset_vanilla_oft_state regardless.
+                if not getattr(opts, "poet_use_poet_adam", False) and optimizer is not None:
+                    _reset_vanilla_oft_state(optimizer, model, iteration, reset_moments=do_reinit)
+
+        if profile:
+            _emit_profile(timings, dist)
         return ret
 
     _mt.train_step = _wrapped

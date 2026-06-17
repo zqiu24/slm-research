@@ -232,3 +232,49 @@ def test_reset_vanilla_oft_state_never_clobbers_lie_buffers():
     assert torch.count_nonzero(master.data) == 0  # master value zeroed
     assert torch.count_nonzero(torch_opt.state[master]["lie_m"]) == 12  # lie_m intact
     assert torch.count_nonzero(torch_opt.state[master]["lie_v"]) == 2  # lie_v intact
+
+
+def test_wrapped_train_step_preserves_merge_behavior(monkeypatch):
+    """With profiling OFF, the rewritten train_step wrapper must call _run_merge
+    exactly when _merge_decision folds -- i.e. byte-for-byte the pre-profiler
+    behavior. Inject a fake megatron.training carrying get_args + train_step."""
+    import sys
+    import types
+
+    from src.patches import poet_merge_step as pms
+
+    calls = {"merge": 0, "orig": 0}
+
+    class _Args:
+        poet = True
+        poet_merge_period = 1
+        poet_reinit_period = -1
+        poet_use_poet_adam = True  # skip the optimizer-reset branch (no real optimizer)
+        iteration = 0
+
+    def _orig_train_step(*a, **k):
+        calls["orig"] += 1
+        return {"lm loss": 1.0}
+
+    mt = types.SimpleNamespace(train_step=_orig_train_step)
+    fake_pkg = types.SimpleNamespace(get_args=lambda: _Args(), training=mt)
+    monkeypatch.setitem(sys.modules, "megatron", types.SimpleNamespace(training=fake_pkg))
+    monkeypatch.setitem(sys.modules, "megatron.training", fake_pkg)
+    monkeypatch.setitem(sys.modules, "megatron.training.training", mt)
+    monkeypatch.setattr(
+        pms, "_run_merge", lambda *a, **k: calls.__setitem__("merge", calls["merge"] + 1)
+    )
+    monkeypatch.delenv("POET_PROFILE_STEP", raising=False)
+
+    pms.apply()  # register_patch returns apply unchanged -> body runs, installs _wrapped on mt.train_step
+
+    # train_step(forward_step_func, data_iterator, model, optimizer,
+    #            opt_param_scheduler, config, forward_backward_func, iteration)
+    out = mt.train_step(None, None, ["model"], None, None, None, None, 5)
+    assert out == {"lm loss": 1.0}  # return value passed through unchanged
+    assert calls["orig"] == 1
+    assert calls["merge"] == 1  # merge_period=1 -> folds at iteration 5
+
+    calls["merge"] = 0
+    mt.train_step(None, None, ["model"], None, None, None, None, 0)
+    assert calls["merge"] == 0  # iteration 0 never folds
