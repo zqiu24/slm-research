@@ -176,6 +176,98 @@ def _fused_layernorm_linear_types() -> tuple[type, ...]:
     return out
 
 
+def _megatron_sequential_mlp_types() -> tuple[type, ...]:
+    """Discover Megatron SequentialMLP type; empty tuple if Megatron isn't importable.
+
+    We catch ``Exception`` (not just ``ImportError``) because Megatron's
+    top-level import eagerly loads ``transformer_engine``, which raises
+    ``OSError: libcublas.so.12`` on CPU-only nodes.
+    """
+    try:
+        from megatron.core.transformer.moe.experts import SequentialMLP
+    except Exception:
+        return ()
+    return (SequentialMLP,)
+
+
+_EXPERT_ROLE_NAMES = ("linear_fc1", "linear_fc2")  # extend if unfuse adds segment names
+
+
+def _install_grouped_poetx(
+    seq_mlp, *, block_count, alternating, alternate_every, init_type, mup_alpha
+):
+    """Replace a SequentialMLP's per-expert POETX linears with one GroupedPOETXLinear
+    per role, and swap its forward to run the grouped path. Returns #roles grouped."""
+    from poet_torch.grouped_poetx_layer import GroupedPOETXLinear
+
+    experts = list(seq_mlp.local_experts)
+    num_experts = len(experts)
+    # Discover POET-targetable roles on expert 0 (linears divisible by block_count).
+    roles = []
+    for name, child in experts[0].named_children():
+        w = getattr(child, "weight", None)
+        if w is None or w.dim() != 2:
+            continue
+        if getattr(child, "bias", None) is not None and child.bias.numel() > 0:
+            raise ValueError(f"[POET] grouped experts require bias-free linears; {name} has bias")
+        out_f, in_f = w.shape
+        if in_f % block_count or out_f % block_count:
+            raise ValueError(
+                f"[POET] grouped expert role {name} dims ({out_f},{in_f}) not divisible "
+                f"by block_count={block_count}"
+            )
+        roles.append(name)
+
+    grouped_by_role = {}
+    for name in roles:
+        w0 = getattr(experts[0], name).weight
+        out_f, in_f = w0.shape
+        g = GroupedPOETXLinear(
+            num_experts,
+            in_f,
+            out_f,
+            block_count=block_count,
+            alternating=alternating,
+            alternate_every=alternate_every,
+            device=w0.device,
+            dtype=w0.dtype,
+        )
+        for e in range(num_experts):
+            # Raw copy: grouped experts store W_orig so that at oft_R=0 the grouped
+            # forward (x @ W.T) is numerically identical to the original expert forward.
+            # Weight normalisation (init_type) is deliberately skipped here; the
+            # base-weight scale is owned by the MoE init, not POET.
+            with torch.no_grad():
+                g.experts[e].weight.copy_(
+                    getattr(experts[e], name).weight.to(g.experts[e].weight.dtype)
+                )
+        g.bind_weights()
+        grouped_by_role[name] = g
+        seq_mlp.add_module(f"grouped_{name}", g)
+
+    seq_mlp._poet_grouped = grouped_by_role
+    seq_mlp.forward = _grouped_sequential_forward.__get__(seq_mlp, type(seq_mlp))
+    return len(roles)
+
+
+def _grouped_sequential_forward(self, permuted_local_hidden_states, tokens_per_expert, *rest):
+    """Grouped replacement for SequentialMLP.forward (bf16, non-fp8, num_experts>1).
+    Mirrors the per-expert fc1 -> activation -> fc2 chain through the grouped modules."""
+    cfg = getattr(self, "config", None)
+    if cfg is not None and (getattr(cfg, "fp8", None) or getattr(cfg, "fp4", None)):
+        raise ValueError("[POET] grouped experts do not support fp8/fp4 (target bf16)")
+    g1 = self._poet_grouped["linear_fc1"]
+    g2 = self._poet_grouped["linear_fc2"]
+    h = g1(permuted_local_hidden_states, tokens_per_expert)
+    h = (
+        self.local_experts[0].activation_func(h)
+        if hasattr(self.local_experts[0], "activation_func")
+        else torch.nn.functional.relu(h)
+    )
+    out = g2(h, tokens_per_expert)
+    return out, None
+
+
 def replace_linears_with_poet(
     model: nn.Module,
     *,
@@ -198,6 +290,8 @@ def replace_linears_with_poet(
     single_step_x_alternating: bool = False,
     lie_alternating: bool = False,
     alternate_every: int = 1,
+    group_experts: bool = False,
+    extra_grouped_types: Iterable[type] = (),
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
     :class:`POETMegatronLinear`.
@@ -212,7 +306,8 @@ def replace_linears_with_poet(
     """
     fused = _fused_layernorm_linear_types()
     linear_types: tuple[type, ...] = _megatron_linear_types() + tuple(extra_linear_types)
-    if not linear_types:
+    grouped_types: tuple[type, ...] = tuple(extra_grouped_types) + _megatron_sequential_mlp_types()
+    if not linear_types and not (group_experts and grouped_types):
         raise RuntimeError(
             "No replaceable linear types found. Pass "
             "extra_linear_types=(nn.Linear,) for tests, or make sure "
@@ -409,9 +504,35 @@ def replace_linears_with_poet(
                 )
                 setattr(parent, name, wrapper)
                 replaced += 1
+            elif (
+                group_experts
+                and single_step_x
+                and grouped_types
+                and isinstance(child, grouped_types)
+            ):
+                replaced += _install_grouped_poetx(
+                    child,
+                    block_count=block_count,
+                    alternating=lie_alternating,
+                    alternate_every=alternate_every,
+                    init_type=init_type,
+                    mup_alpha=mup_alpha,
+                )
             else:
                 _walk(child, full)
 
-    _walk(model)
+    # Handle the edge case where the model root itself is a grouped type
+    # (common in unit tests that pass SequentialMLP directly).
+    if group_experts and single_step_x and grouped_types and isinstance(model, grouped_types):
+        replaced += _install_grouped_poetx(
+            model,
+            block_count=block_count,
+            alternating=lie_alternating,
+            alternate_every=alternate_every,
+            init_type=init_type,
+            mup_alpha=mup_alpha,
+        )
+    else:
+        _walk(model)
     logger.info("[POET] replaced %d, skipped %d", replaced, skipped)
     return replaced
