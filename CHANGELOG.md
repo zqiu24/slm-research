@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added — Adam + Muon optimizer baselines for DeepSeek-3Bv2 (2026-06-17)
+
+- New `scripts/train_deepseek_adam.sh` and `scripts/train_deepseek_muon.sh`:
+  optimizer-only counterparts to `train_deepseek_poet.sh`. Same model
+  (`deepseek_v3_mqa` / `deepseek_3bv2`, MQA + sandwich-norm, 64-expert MoE),
+  scheduler (`wsd`), data, token budget (`fixed_10b`), batch (gbs 1024 / mbs 4),
+  seq length (256), and parallelism (tp=1, SP off, `transformer_impl=local`);
+  the only change is the optimizer (`experiment=optim/adam` @ lr 8.6e-4, and
+  `experiment=optim/muon_hybrid` @ the config's muon/adam lrs).
+- Verified via `launchers.train_megatron --dry-run`: the resolved Megatron args
+  differ from the POET run only in the optimizer flags and per-optimizer LR
+  (AdamW also enables the distributed optimizer / grad+param overlap, which POET
+  cannot under its TP=1 full-replication unfuse); model / data / scheduler /
+  `--train-samples` / `--tensor-model-parallel-size` are byte-identical.
+
 ### Added — nGPT lr-sweep extension + reference-recipe sweep (2026-06-17)
 
 - `scripts/sweep_ngpt_lr.sh`: extend the adam-matched (1% warmup, wd=0.1) lr grid
