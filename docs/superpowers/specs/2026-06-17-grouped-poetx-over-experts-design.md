@@ -82,8 +82,8 @@ This mirrors the surgery the walk already performs (in-place module replacement,
 One responsibility: own all `E` experts' rotation state for a single linear role and expose a batched forward.
 
 - Parameters / buffers:
-  - `weight: Parameter[E, out, in]`, `requires_grad=False` — stacked forward-frame `Wx`.
-  - `oft_R_in: Parameter[E, r_in, n_in]`, `oft_R_out: Parameter[E, r_out, n_out]`, `requires_grad=True` — names **must** contain `oft_R`.
+  - `weight: Parameter[E, out, in]`, `requires_grad=False` — the only **stacked** state (forward-frame `Wx`).
+  - `oft_R_in: ParameterList` of `E` tensors `[r_in, n_in]`; `oft_R_out: ParameterList` of `E` tensors `[r_out, n_out]`, `requires_grad=True` — names **must** contain `oft_R`. **Kept as E separate 2-D params** (not a 3-D param) so the optimizer + merge see them exactly as today (see §8). The forward stacks them transiently with `torch.stack`; autograd splits the stacked grad back to the E leaves.
   - per-expert `perm_in/out`, `perm_*_inv`, block index buffers; `block_size_in/out`, `r_in/r_out`; `alternating: bool`, `alternate_every: int`.
 - Methods:
   - `forward(concat_tokens, tokens_per_expert) -> concat_out` — calls `GroupedPOETXFunction.apply(...)`.
@@ -125,11 +125,15 @@ Bit-identical per expert to today's per-layer fold. Merge is the cheap ~2.6% —
 
 ---
 
-## 8. Optimizer / DDP integration
+## 8. Optimizer / DDP integration — resolved
 
-- Stacked `oft_R` params retain the `oft_R` substring, so the optimizer per-group LR glob ([poet_optimizer_setup.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_optimizer_setup.py)) and the merge-reset filter `_reset_vanilla_oft_state` ([poet_merge_step.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_merge_step.py)) catch them unchanged.
-- The walk runs **pre-DDP**, so stacked `oft_R` lands in the DDP grad buffer.
-- **Open verification (#1 before building):** the champion optimizer is distributed `lie_ortho` (Muon-NS on the rotation). Its per-tensor orthogonalization must treat the new leading `E` axis as a batch dimension. Confirm `lie_ortho` already batches a leading axis, or extend it. This is the single highest-risk integration point and is the first thing the implementation plan verifies.
+The earlier "#1 risk" (does `lie_ortho` handle a stacked `E` axis?) is **resolved by construction**: don't stack `oft_R`.
+
+- Reading [`LieOrthMomentum._skew_update_buffer`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth.py#L150): the optimizer assumes each skew param is **2-D `(n_blocks, n_elems)`** — `block_size_from_nelems(A_dir.shape[1])` reads `n_elems` from the last axis, `vec_to_skew(A_cat, bsz)` expects 2-D, and it **already concatenates** all skew params sharing a block size into one Newton-Schulz call (`buckets`/`A_cat = torch.cat(..., dim=0)`). A stacked 3-D `oft_R` would break all three.
+- Therefore `GroupedPOETXLinear` keeps **E separate 2-D `oft_R` params**, identical in shape/name/count to the per-expert `POETXLinear`s they replace. The optimizer and merge see **no change** — and the experts' skew updates are *already* batched inside the optimizer's NS.
+- Only the frozen **weight** is stacked (a `[E,out,in]` buffer, `requires_grad=False`, no optimizer concern). The forward stacks `oft_R` transiently via `torch.stack`; the stacked grad from `GroupedPOETXFunction` flows back through the `stack` op to each leaf param's `.grad` (2-D), exactly what the optimizer expects.
+- Names retain the `oft_R` substring, so the optimizer per-group LR glob ([poet_optimizer_setup.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_optimizer_setup.py)) and the merge-reset filter `_reset_vanilla_oft_state` ([poet_merge_step.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_merge_step.py#L322)) catch them unchanged. The walk runs **pre-DDP**, so `oft_R` lands in the DDP grad buffer.
+- A guard test (plan Task 7) pins the optimizer's 2-D assumption so a future stacked-param refactor can't silently regress it.
 
 ---
 
@@ -175,7 +179,7 @@ fp32 exact; bf16 ≤ 1e-5. Pure-torch, CPU-only — no GPU needed. No silent ski
 
 ## 12. Implementation sequencing (de-risk order)
 
-1. **Verify `lie_ortho` leading-axis batching** (§8). Blocks everything; cheap to check.
+1. **Pin the optimizer's 2-D `oft_R` assumption** (§8) with a guard test, so the "keep E separate params" decision is enforced.
 2. `GroupedPOETXFunction` with **block-sparse `M`**, single-expert path — parity vs `POETXSingleStepFunction` (FLOP cut, no batching yet).
 3. **Batch over experts** — `bmm` over `[E·n_blocks, …]`; parity vs `E` independent functions.
 4. `GroupedPOETXLinear` module + batched merge — parity (forward/backward/merge).
@@ -186,7 +190,7 @@ fp32 exact; bf16 ≤ 1e-5. Pure-torch, CPU-only — no GPU needed. No silent ski
 
 ## 13. Risks & open questions
 
-- **`lie_ortho` stacked-axis** (§8) — highest risk; verify first.
+- **`lie_ortho` stacked-axis** (§8) — **resolved** by keeping `oft_R` as E separate 2-D params; pinned by a guard test (Task 7).
 - **`unfuse_fc1` role enumeration** — the grouped install must stack the correct set of per-expert linear roles (fc1/fc2, or gate/up/fc2 under unfuse). Enumerate from the wrapped linears, don't hard-code.
 - **`SequentialMLP.forward` fidelity** — probs application, quantization padding, `num_local_experts==1` branch. Target bf16/non-fp8; assert the rest out of scope rather than silently mishandle.
 - **Win is conditional** (§9) — block-sparse is a guaranteed FLOP cut; the batched-`bmm` launch cut only helps if the block-GEMMs are launch/occupancy-bound. The profile decides.
