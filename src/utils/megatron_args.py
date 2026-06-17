@@ -371,6 +371,20 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
 
     if kind == "poet":
         poet = optim.poet
+        # POET wraps per-module ColumnParallelLinear / RowParallelLinear. Grouped-GEMM
+        # experts are batched weight1/weight2 Parameters (GroupedMLP / TEGroupedMLP),
+        # NOT linear modules -- POET's module walk silently skips them, so every routed
+        # expert would train as a dense Adam weight with zero orbit and no warning. Only
+        # grouped_gemm=false (SequentialMLP, per-expert linear modules) lets POET reach
+        # the experts. Fail fast rather than silently degrade.
+        _moe = cfg.get("base", {}).get("model", {}).get("moe", {}) or {}
+        if bool(_moe.get("enabled", False)) and bool(_moe.get("grouped_gemm", False)):
+            raise ValueError(
+                "[POET] optim.type=poet is incompatible with base.model.moe.grouped_gemm=true: "
+                "grouped-GEMM experts are batched parameters POET cannot wrap, so they would "
+                "be silently skipped (trained as dense Adam weights, no orbit). Set "
+                "base.model.moe.grouped_gemm=false (SequentialMLP) to POET-ise the experts."
+            )
         if poet.get("head_aligned_attn", False) and not bool(
             cfg.get("base", {}).get("model", {}).get("unfuse_qkv", False)
         ):

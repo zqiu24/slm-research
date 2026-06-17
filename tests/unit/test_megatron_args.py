@@ -1264,3 +1264,73 @@ def test_weight_norm_args_omits_flags_by_default():
     assert _weight_norm_args(OmegaConf.create({})) == []
     # bool false also emits nothing
     assert _weight_norm_args(OmegaConf.create({"log_weight_norms": False})) == []
+
+
+def _poet_moe_cfg(grouped_gemm: bool):
+    """Minimal cfg exercising the POET arg-builder with an MoE model block.
+
+    The poet sub-keys mirror test_poet_argv_includes_cache_mode (the minimal set
+    _optimizer_args needs to complete). base.model.moe drives the new guard.
+    """
+    return OmegaConf.create(
+        {
+            "base": {"model": {"moe": {"enabled": True, "grouped_gemm": grouped_gemm}}},
+            "optim": {
+                "type": "poet",
+                "lr": 3e-4,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.95],
+                "eps": 1e-8,
+                "poet": {
+                    "block_size": 256,
+                    "cache_mode": "none",
+                    "init_type": "normalized",
+                    "mup_alpha": 1.0,
+                    "merge_period": 1,
+                    "scale": 1.0,
+                },
+            },
+        }
+    )
+
+
+def test_poet_rejects_grouped_gemm_experts():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    with pytest.raises(ValueError, match="grouped_gemm"):
+        _optimizer_args(_poet_moe_cfg(grouped_gemm=True))
+
+
+def test_poet_allows_sequential_experts():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_moe_cfg(grouped_gemm=False))
+    assert "--poet" in args  # arg build completes, no raise
+
+
+def test_poet_guard_inert_without_moe():
+    # No base.model.moe block at all -> guard must not fire (dense POET path).
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "poet",
+                "lr": 3e-4,
+                "weight_decay": 0.1,
+                "betas": [0.9, 0.95],
+                "eps": 1e-8,
+                "poet": {
+                    "block_size": 256,
+                    "cache_mode": "none",
+                    "init_type": "normalized",
+                    "mup_alpha": 1.0,
+                    "merge_period": 1,
+                    "scale": 1.0,
+                },
+            }
+        }
+    )
+    assert "--poet" in _optimizer_args(cfg)
