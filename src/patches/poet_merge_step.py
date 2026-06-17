@@ -477,6 +477,14 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
                 continue
             pls.append(pl)
 
+    from poet_torch.grouped_poetx_layer import GroupedPOETXLinear
+
+    grouped = []
+    for m in chunks:
+        for _, mod in m.named_modules():
+            if isinstance(mod, GroupedPOETXLinear):
+                grouped.append(mod)
+
     # Escape hatches (debugging only): force the legacy rank-0 + broadcast path,
     # and/or disable Cayley batching.
     force_broadcast = os.environ.get("POET_FORCE_MERGE_BROADCAST") == "1"
@@ -499,9 +507,14 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
             for pl in pls:
                 for buf in (pl.perm_in, pl.perm_in_inv, pl.perm_out, pl.perm_out_inv):
                     dist.broadcast(buf, src=0)
+            for g in grouped:
+                for ex in g.experts:
+                    for buf in (ex.perm_in, ex.perm_in_inv, ex.perm_out, ex.perm_out_inv):
+                        dist.broadcast(buf, src=0)
             _perms_synced = True
         with torch.no_grad():
             _merge_layers(pls, reinit_perm=False, disable_batch=disable_batch)
+            _merge_grouped(grouped, reinit_perm=False)
         # Debug gate (off by default): verify the no-broadcast replicate fold keeps
         # every DP rank's frozen W bit-identical. Acceptance is drift == 0.0 every
         # step; non-zero means a non-deterministic kernel or desynced perms.
@@ -525,6 +538,7 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
     with torch.no_grad():
         if rank == 0:
             _merge_layers(pls, reinit_perm=reinit_perm, disable_batch=disable_batch)
+            _merge_grouped(grouped, reinit_perm=reinit_perm)
         if is_dist:
             for pl in pls:
                 for buf in (
@@ -537,9 +551,39 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
                     pl.perm_out_inv,
                 ):
                     dist.broadcast(buf, src=0)
+            for g in grouped:
+                for ex in g.experts:
+                    for buf in (
+                        ex.oft_R_in.data,
+                        ex.oft_R_out.data,
+                        ex.weight.data,
+                        ex.perm_in,
+                        ex.perm_in_inv,
+                        ex.perm_out,
+                        ex.perm_out_inv,
+                    ):
+                        dist.broadcast(buf, src=0)
+                dist.broadcast(g.weight.data, src=0)
     for pl in pls:
         if hasattr(pl, "_invalidate_R_cache"):
             pl._invalidate_R_cache()
+
+
+def _merge_grouped(grouped, reinit_perm: bool, cayley_fn=None) -> None:
+    """Fold every GroupedPOETXLinear by delegating to its per-expert POETXLinears
+    (verified path). alternating modules fold only the active side. cayley_fn defaults
+    to the Triton op in production; CPU tests inject the pure-torch cayley_batch."""
+    from poet_torch.alt_state import active_side
+
+    for g in grouped:
+        if getattr(g, "alternating", False):
+            g._fold_active_side(
+                active_side(g.experts[0].alternate_every),
+                reinit_perm=reinit_perm,
+                cayley_fn=cayley_fn,
+            )
+        else:
+            g.merge_then_reinitialize(reinit_perm=reinit_perm)
 
 
 def _merge_layers(pls, reinit_perm: bool, disable_batch: bool) -> None:
