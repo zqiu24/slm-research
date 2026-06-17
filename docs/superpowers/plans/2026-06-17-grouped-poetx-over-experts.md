@@ -27,8 +27,8 @@ Design spec: [2026-06-17-grouped-poetx-over-experts-design.md](/lustre/fast/fast
 
 | File | Responsibility | Change |
 |------|----------------|--------|
-| `third_party/poet_torch/poet_torch/grouped_poetx_ops.py` | `_grouped_blockdiag_skew_vecs` (block-sparse batched M) + `GroupedPOETXFunction` | **Create** |
-| `third_party/poet_torch/poet_torch/grouped_poetx_layer.py` | `GroupedPOETXLinear` (E POETXLinear holders + 3-D weight buffer + batched forward + merge delegation) | **Create** |
+| `third_party/poet_torch/grouped_poetx_ops.py` | `_grouped_blockdiag_skew_vecs` (block-sparse batched M) + `GroupedPOETXFunction` | **Create** |
+| `third_party/poet_torch/grouped_poetx_layer.py` | `GroupedPOETXLinear` (E POETXLinear holders + 3-D weight buffer + batched forward + merge delegation) | **Create** |
 | `third_party/poet_torch/tests_poet/test_grouped_poetx.py` | CPU parity: helper, Function, module (fwd/bwd/merge) | **Create** |
 | `src/optim/poet_layers.py` | `SequentialMLP` detection + grouped install + `SequentialMLP.forward` swap; `group_experts` param | **Modify** |
 | `tests/optim/test_grouped_expert_wrap.py` | walk wraps a fake SequentialMLP; forward parity; 2-D path untouched | **Create** |
@@ -107,7 +107,7 @@ git commit -m "test(poet): pin LieOrthMomentum 2-D oft_R contract for grouped ex
 The core FLOP+launch win. Pure torch, CPU. Computes only the block-diagonal of the conjugated `M`, batched over `(experts × blocks)`.
 
 **Files:**
-- Create: `third_party/poet_torch/poet_torch/grouped_poetx_ops.py`
+- Create: `third_party/poet_torch/grouped_poetx_ops.py`
 - Test: `third_party/poet_torch/tests_poet/test_grouped_poetx.py`
 
 **Interfaces:**
@@ -158,7 +158,7 @@ Expected: FAIL — `ModuleNotFoundError: poet_torch.grouped_poetx_ops`.
 - [ ] **Step 3: Implement the helper**
 
 ```python
-# third_party/poet_torch/poet_torch/grouped_poetx_ops.py
+# third_party/poet_torch/grouped_poetx_ops.py
 """Block-sparse, expert-batched POETX rotation gradients (forward-frame, oft_R=0).
 
 Replaces the per-expert pair of full [d,d] M GEMMs in POETXSingleStepFunction.backward
@@ -210,7 +210,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add third_party/poet_torch/poet_torch/grouped_poetx_ops.py third_party/poet_torch/tests_poet/test_grouped_poetx.py
+git add third_party/poet_torch/grouped_poetx_ops.py third_party/poet_torch/tests_poet/test_grouped_poetx.py
 git commit -m "feat(poet): block-sparse expert-batched POETX rotation gradient"
 ```
 
@@ -221,7 +221,7 @@ git commit -m "feat(poet): block-sparse expert-batched POETX rotation gradient"
 Wraps Task 2 in one `autograd.Function` spanning all experts for a single linear role.
 
 **Files:**
-- Modify: `third_party/poet_torch/poet_torch/grouped_poetx_ops.py`
+- Modify: `third_party/poet_torch/grouped_poetx_ops.py`
 - Test: `third_party/poet_torch/tests_poet/test_grouped_poetx.py`
 
 **Interfaces:**
@@ -325,7 +325,7 @@ Expected: PASS (both tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add third_party/poet_torch/poet_torch/grouped_poetx_ops.py third_party/poet_torch/tests_poet/test_grouped_poetx.py
+git add third_party/poet_torch/grouped_poetx_ops.py third_party/poet_torch/tests_poet/test_grouped_poetx.py
 git commit -m "feat(poet): GroupedPOETXFunction — batched all-experts POETX forward/backward"
 ```
 
@@ -336,7 +336,7 @@ git commit -m "feat(poet): GroupedPOETXFunction — batched all-experts POETX fo
 Owns `E` `POETXLinear` sub-instances (verified merge + per-expert `oft_R` params + perms) aliased to one `[E,out,in]` weight buffer; batched forward via Task 3; merge delegates per expert.
 
 **Files:**
-- Create: `third_party/poet_torch/poet_torch/grouped_poetx_layer.py`
+- Create: `third_party/poet_torch/grouped_poetx_layer.py`
 - Test: `third_party/poet_torch/tests_poet/test_grouped_poetx.py`
 
 **Interfaces:**
@@ -416,7 +416,7 @@ Expected: FAIL — `grouped_poetx_layer` undefined.
 - [ ] **Step 3: Implement the module**
 
 ```python
-# third_party/poet_torch/poet_torch/grouped_poetx_layer.py
+# third_party/poet_torch/grouped_poetx_layer.py
 """GroupedPOETXLinear: E experts' POETX rotation batched over the expert axis.
 
 Owns E POETXLinear sub-instances (each holding its own 2-D oft_R params + perms + the
@@ -501,7 +501,7 @@ Expected: PASS (all tests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add third_party/poet_torch/poet_torch/grouped_poetx_layer.py third_party/poet_torch/tests_poet/test_grouped_poetx.py
+git add third_party/poet_torch/grouped_poetx_layer.py third_party/poet_torch/tests_poet/test_grouped_poetx.py
 git commit -m "feat(poet): GroupedPOETXLinear — per-expert POETX over a batched weight buffer"
 ```
 
