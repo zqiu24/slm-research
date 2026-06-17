@@ -1,0 +1,77 @@
+# @package _global_
+# poet_lie_orth_alt_grouped: grouped POETX over MoE experts.
+# Identical to the poet_lie_orth_alt champion (integrated alternating POETX,
+# lie_ortho, both-momenta path) but with group_experts=true: all E experts in
+# each MoE layer share a single batched GroupedPOETXLinear rather than E
+# independent POETXLinear layers. The batched backward exploits the block-sparse
+# grad structure for a throughput win on the expert GEMM / M ops.
+# NOTE: group_experts is ORTHOGONAL to moe.grouped_gemm — grouped_gemm must
+# stay false (the existing guard rejects the poet+grouped_gemm combination).
+# See docs/superpowers/plans/2026-06-17-poet-moe-guard-and-profiler.md
+#     docs/experiments/poet_lie_orth_alt_grouped.md
+experiment:
+  name: poet_lie_orth_alt_grouped
+  family: optim
+  description: |
+    Grouped POETX over MoE experts: all E experts per MoE layer share a single
+    batched GroupedPOETXLinear (TaskSpec Tasks 2-6). Identical optimizer recipe
+    to the poet_lie_orth_alt champion (lie_ortho, lie_alternating, POETX
+    forward-frame, both-momenta). The win target is throughput: the batched
+    block-sparse backward replaces E independent M-builds with one; merge stays
+    the verified per-expert Cayley fold (cheap 2.6%). group_experts is orthogonal
+    to moe.grouped_gemm (which is kept false per the existing POET guard).
+  references:
+    - "POET"
+    - "Muon"
+    - "Pion"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_moe_local_rmsnorm   # local MoE block: final norm FusedLayerNorm -> WrappedTorchNorm under RMSNorm
+    - poet_apply_to_model
+    - poet_merge_step
+    - sandwich_norm_apply     # no-op unless --use-sandwich-norm; owns only gpt_builder (composes w/ POET, see 72778ce)
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 3.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1
+    reinit_period: -1
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_ortho
+    lie_b1: 0.9
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: elementwise
+    lie_ortho_c: 8
+    lie_ortho_method: muon
+    lie_ortho_ns_steps: 5
+    lie_ortho_use_second_moment: false
+    lie_ortho_distributed: true
+    head_aligned_attn: false
+    single_step_fast: true               # forward-frame POETX path
+    single_step_x: true                  # forward-frame POETX path
+    single_step_x_alternating: false     # integrated both-momenta path (NOT true-single-side)
+    lie_alternating: true                # write one side/step, both momenta fresh
+    lie_alternate_every: 1
+    train_output_rotation: true
+    group_experts: true                  # grouped POETX: E experts share one batched layer
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

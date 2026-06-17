@@ -124,6 +124,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # True single-side alternating POETX (dedicated AlternatingPOETXLinear subclass).
     # Requires --poet-single-step-x; trains one rotation side per step.
     group.add_argument("--poet-single-step-x-alternating", action="store_true")
+    # Group MoE experts into a single batched POETX layer (grouped POETX).
+    # Orthogonal to moe.grouped_gemm; requires SequentialMLP experts (not grouped-gemm).
+    group.add_argument("--poet-group-experts", action="store_true")
     # Architectural unfusing of fused linears (optimizer-agnostic). Applied by
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")

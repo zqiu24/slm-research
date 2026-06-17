@@ -571,6 +571,9 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: dedicated true-single-side alternating POETX layer.
         if poet.get("single_step_x_alternating", False):
             poet_args.append("--poet-single-step-x-alternating")
+        # store_true: group MoE experts into a single batched POETX layer.
+        if poet.get("group_experts", False):
+            poet_args.append("--poet-group-experts")
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":
