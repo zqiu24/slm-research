@@ -14,6 +14,12 @@ experiment:
   patches:
     - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
     - sandwich_norm_apply     # no-op unless base.model.use_sandwich_norm
+    # Generic local-impl fix: the MoE decoder block hardcodes its final norm to
+    # FusedLayerNorm, which asserts on RMSNorm. Swap it to WrappedTorchNorm.
+    # No-op on the TE path, non-MoE models, or LayerNorm — needed when an MoE +
+    # RMSNorm model runs under base.model.transformer_impl=local (e.g. the
+    # deepseek_3bv2 muon baseline that mirrors the POET run's local forward path).
+    - poet_moe_local_rmsnorm
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
     - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
   required_capabilities: []

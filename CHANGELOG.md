@@ -16,6 +16,12 @@
   (AdamW also enables the distributed optimizer / grad+param overlap, which POET
   cannot under its TP=1 full-replication unfuse); model / data / scheduler /
   `--train-samples` / `--tensor-model-parallel-size` are byte-identical.
+- Fix: added the (generic) `poet_moe_local_rmsnorm` patch to `optim/adam` and
+  `optim/muon_hybrid`. Under `transformer_impl=local` the MoE decoder block
+  hardcodes its final norm to `FusedLayerNorm`, which asserts on `RMSNorm`
+  (`(RMSNorm) is not supported in FusedLayerNorm`) — the baselines crashed at
+  model build. The patch swaps it to `WrappedTorchNorm` and is a no-op on the
+  TE path / non-MoE / LayerNorm.
 
 ### Added — nGPT lr-sweep extension + reference-recipe sweep (2026-06-17)
 
