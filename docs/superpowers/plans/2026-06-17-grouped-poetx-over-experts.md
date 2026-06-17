@@ -13,7 +13,7 @@ Design spec: [2026-06-17-grouped-poetx-over-experts-design.md](/lustre/fast/fast
 ## Global Constraints
 
 - **Test interpreter:** run all pytest with `/lustre/fast/fast/zqiu/slm_env/.venv/bin/python -m pytest` (Python 3.12). The harness default `python` is 3.10 and lacks torch/omegaconf.
-- **CPU-only for Tasks 1–6.** Every new numerical unit (helper, Function, module, merge) is pure-torch and tested without CUDA/megatron. Do NOT import megatron at module load in any new file.
+- **CPU-tested for Tasks 1–6, with one caveat.** Tasks 1–3 (guard, block-sparse helper, `GroupedPOETXFunction` forward/backward) are pure-torch and fully CPU-safe — validated bit-exact on CPU. The **merge fold** (Tasks 4–5) calls POET's Cayley, which defaults to a **Triton op that raises "0 active drivers" on a CPU-only node**; merge-parity tests therefore MUST inject the pure-torch `cayley_batch` via `cayley_fn=` (the same pattern as [`_build_R_batched`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_merge_step.py#L404)). Do NOT import megatron at module load in any new file.
 - **POETX champion path only.** Forward-frame `single_step_x` + `lie_alternating` both-momenta (`POETXLinear(alternating=True)`), `merge_period=1`, `oft_R≡0` regime. Natural-frame `POETLinear` is out of scope.
 - **`oft_R` stays E separate 2-D params** `[n_blocks, n_elems]` — the optimizer ([poet_lie_orth.py:150](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth.py#L150)) assumes 2-D and already batches across params; only the frozen weight is stacked 3-D. Param names MUST contain `oft_R`.
 - **No silent skips / no silent wrong:** non-divisible dims raise; per-expert bias raises (bias support is a follow-up); fp8/fp4 expert path raises (target bf16).
@@ -395,13 +395,15 @@ def test_grouped_module_matches_independent_poetx_linears():
         assert torch.allclose(g.experts[e].oft_R_in.grad, refs[e].oft_R_in.grad, atol=1e-9)
         assert torch.allclose(g.experts[e].oft_R_out.grad, refs[e].oft_R_out.grad, atol=1e-9)
 
-    # merge parity (active-only fold; alternating=True)
+    # merge parity (active-only fold; alternating=True). Inject pure-torch cayley so
+    # the fold runs on the CPU dev box (the default Triton op raises "0 active drivers").
     from poet_torch.alt_state import active_side
+    from poet_torch.poet_layer import cayley_batch
     active = active_side(1)
     w_before = g.weight.clone()
-    g._fold_active_side(active, reinit_perm=False)
+    g._fold_active_side(active, reinit_perm=False, cayley_fn=cayley_batch)
     for e in range(E):
-        refs[e]._fold_active_side(active, reinit_perm=False)
+        refs[e]._fold_active_side(active, reinit_perm=False, cayley_fn=cayley_batch)
         assert torch.allclose(g.weight[e], refs[e].weight, atol=1e-9)
     assert not torch.allclose(g.weight, w_before)        # something actually folded
 ```
@@ -484,9 +486,11 @@ class GroupedPOETXLinear(nn.Module):
             ex.merge_then_reinitialize(reinit_perm=reinit_perm)
 
     @torch.no_grad()
-    def _fold_active_side(self, active, reinit_perm=False):
+    def _fold_active_side(self, active, reinit_perm=False, cayley_fn=None):
+        # cayley_fn defaults to the Triton op (GPU); CPU tests inject pure-torch
+        # cayley_batch — same pattern as POETXLinear._fold_active_side / _build_R_batched.
         for ex in self.experts:
-            ex._fold_active_side(active, reinit_perm=reinit_perm)
+            ex._fold_active_side(active, reinit_perm=reinit_perm, cayley_fn=cayley_fn)
 ```
 
 - [ ] **Step 4: Run to verify it passes**
@@ -537,9 +541,11 @@ def test_merge_grouped_folds_and_zeros_active_side():
         ex.oft_R_in.data.normal_(std=0.1)
         ex.oft_R_out.data.normal_(std=0.1)
 
-    # effective weight via a forward at the current oft_R, captured before merge
+    # effective weight via a forward at the current oft_R, captured before merge.
+    # Inject pure-torch cayley so the fold runs on CPU (default Triton op needs a GPU).
+    from poet_torch.poet_layer import cayley_batch
     w_before = g.weight.clone()
-    _merge_grouped([g], reinit_perm=False)
+    _merge_grouped([g], reinit_perm=False, cayley_fn=cayley_batch)
     # active side folded into weight; folded side's oft_R zeroed; weight changed.
     assert not torch.allclose(g.weight, w_before)
     from poet_torch.alt_state import active_side
@@ -559,18 +565,21 @@ Expected: FAIL — `_merge_grouped` undefined.
 Add this module-level helper to `src/patches/poet_merge_step.py` (near `_merge_layers`, ~line 545; CPU-safe, no megatron import):
 
 ```python
-def _merge_grouped(grouped, reinit_perm: bool) -> None:
+def _merge_grouped(grouped, reinit_perm: bool, cayley_fn=None) -> None:
     """Fold every GroupedPOETXLinear by delegating to its per-expert POETXLinears
-    (verified path). alternating modules fold only the active side."""
+    (verified path). alternating modules fold only the active side. cayley_fn defaults
+    to the Triton op in production; CPU tests inject the pure-torch cayley_batch."""
     from poet_torch.alt_state import active_side
 
     for g in grouped:
         if getattr(g, "alternating", False):
             g._fold_active_side(active_side(g.experts[0].alternate_every),
-                                reinit_perm=reinit_perm)
+                                reinit_perm=reinit_perm, cayley_fn=cayley_fn)
         else:
             g.merge_then_reinitialize(reinit_perm=reinit_perm)
 ```
+
+(The `_run_merge` call sites use the default `cayley_fn=None` → the Triton op on GPU, exactly like the existing 2-D fold.)
 
 In `_run_merge` ([poet_merge_step.py:455](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_merge_step.py#L455)), after building `pls` (the loop at ~line 471), collect grouped modules:
 
@@ -928,3 +937,5 @@ Acceptance: grouped TFLOP/s materially > the 4.2 baseline; lm-loss trajectory wi
 - **No silent skips/wrong:** non-divisible dims, per-expert bias, and fp8/fp4 all raise (Tasks 4/6). Don't add fallbacks.
 - **Forward is unchanged cost.** The win is entirely the batched block-sparse backward; the merge stays the verified per-expert fold (the cheap 2.6%). Don't "optimize" the merge.
 - **Riskiest edit is Task 6's `SequentialMLP.forward` swap** — the CPU test fixes the wiring, but the real activation/probs/`unfuse_fc1` reproduction must be confirmed against the live `MLP` before the GPU smoke.
+- **Confirm the experts are bias-free** in `deepseek_v3_mqa` (`add_bias_linear=false`) before Task 6 — the grouped install raises on per-expert bias (no silent-wrong), so a bias-carrying config would hard-fail rather than apply. If experts ever carry bias, the `M_out` bias term from [POETXSingleStepFunction](/lustre/fast/fast/zqiu/slm-research/third_party/poet_torch/poetx_ops.py#L59) must be added to `GroupedPOETXFunction` first.
+- **Validated on CPU during planning:** Task 2 block-sparse math (bit-exact vs per-expert, incl. asymmetric `in≠out`), Task 3 `GroupedPOETXFunction` (forward + `grad_oft_R` bit-exact, `torch.stack` grad-routing to leaf params), and the `cayley_fn` injection that makes the Task 4–5 fold CPU-runnable.
