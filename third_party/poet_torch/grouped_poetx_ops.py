@@ -39,3 +39,42 @@ def _grouped_blockdiag_skew_vecs(G, Wx, perm_in_inv, perm_out_inv,
     skew_out = M_out - M_out.transpose(-1, -2)
     grad_out = (2.0 * skew_out[:, ro, co]).reshape(E, nb_out, -1).to(Wx.dtype)
     return grad_in, grad_out
+
+
+class GroupedPOETXFunction(torch.autograd.Function):
+    """Forward-frame, all-experts POETX. Forward: ragged per-expert bare GEMM. Backward:
+    plain grad_x + Adam-equivalent G, then the block-sparse expert-batched rotation grad.
+    Bias is unsupported (experts are bias-free); pass bias-free weights only."""
+
+    @staticmethod
+    def forward(ctx, concat_x, oft_in, oft_out, Wx,
+                perm_in_inv, perm_out_inv, rows_in, cols_in, rows_out, cols_out,
+                bs_in, bs_out, sizes):
+        E = len(sizes)
+        x_list = torch.split(concat_x, list(sizes), dim=0)
+        y = torch.cat([x_list[e] @ Wx[e].t() for e in range(E)], dim=0)
+        ctx.save_for_backward(concat_x, Wx, perm_in_inv, perm_out_inv,
+                              rows_in, cols_in, rows_out, cols_out)
+        ctx.sizes = tuple(sizes)
+        ctx.bs_in, ctx.bs_out = bs_in, bs_out
+        return y
+
+    @staticmethod
+    def backward(ctx, grad_y):
+        (concat_x, Wx, perm_in_inv, perm_out_inv,
+         rows_in, cols_in, rows_out, cols_out) = ctx.saved_tensors
+        sizes, bs_in, bs_out = ctx.sizes, ctx.bs_in, ctx.bs_out
+        E, out_f, in_f = Wx.shape
+        x_list = torch.split(concat_x, list(sizes), dim=0)
+        gy_list = torch.split(grad_y, list(sizes), dim=0)
+        grad_x = torch.cat([gy_list[e] @ Wx[e] for e in range(E)], dim=0)
+        G = torch.stack([
+            x_list[e].reshape(-1, in_f).t() @ gy_list[e].reshape(-1, out_f)
+            for e in range(E)
+        ])                                                            # [E, in, out]
+        grad_in, grad_out = _grouped_blockdiag_skew_vecs(
+            G, Wx, perm_in_inv, perm_out_inv, bs_in, bs_out,
+            rows_in, cols_in, rows_out, cols_out)
+        # 13 inputs -> 13 returns (grads for concat_x/oft_in/oft_out, then 10 None).
+        return (grad_x, grad_in, grad_out,
+                None, None, None, None, None, None, None, None, None, None)
