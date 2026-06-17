@@ -528,6 +528,16 @@ def _run_merge(model, dist, iteration: int, reinit_perm: bool = True) -> None:
                     f"[POET] merge cross-rank drift (rank-vs-0): {drift.item():.2e}",
                     flush=True,
                 )
+        if os.environ.get("POET_CHECK_MERGE_SYNC") == "1" and is_dist and grouped:
+            wg = grouped[0].weight.data.clone()
+            refg = wg.clone()
+            dist.broadcast(refg, src=0)
+            driftg = (wg - refg).abs().max()
+            if rank == 0:
+                print(
+                    f"[POET] grouped merge cross-rank drift (rank-vs-0): {driftg.item():.2e}",
+                    flush=True,
+                )
         for pl in pls:
             if hasattr(pl, "_invalidate_R_cache"):
                 pl._invalidate_R_cache()

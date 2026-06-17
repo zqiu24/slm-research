@@ -8,7 +8,8 @@ POETX, lie_ortho, both-momenta, head-OFF, lr 3e-3, c=8, distributed) but with
 batched `GroupedPOETXLinear` (Tasks 2–6 of the grouped-POETX plan) rather than E
 independent `POETXLinear` layers.
 
-- **Design + plan:** `docs/superpowers/plans/2026-06-17-poet-moe-guard-and-profiler.md`
+- **Design + plan:** `docs/superpowers/plans/2026-06-17-grouped-poetx-over-experts.md`
+- **Design spec:** `docs/superpowers/specs/2026-06-17-grouped-poetx-over-experts-design.md`
 - **Baseline:** `poet_lie_orth_alt` (per-expert POETX, val/loss ≈ 3.47–3.55 range)
 - **Throughput target:** batched block-sparse backward replaces E independent
   M-builds with one; merge stays the verified per-expert Cayley fold (2.6%

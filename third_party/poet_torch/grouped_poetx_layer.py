@@ -31,7 +31,7 @@ class GroupedPOETXLinear(nn.Module):
         e0 = self.experts[0]
         self.alternating = bool(alternating)
         self.block_size_in, self.block_size_out = e0.block_size_in, e0.block_size_out
-        self.block_size = e0.block_size_in                     # merge "is-active" guard
+        self.block_size = e0.block_size_in                     # merge "is-active" guard; symmetric-blocks only
         self.register_buffer(
             "weight", torch.empty(self.E, out_features, in_features, device=device, dtype=dtype)
         )
@@ -60,7 +60,10 @@ class GroupedPOETXLinear(nn.Module):
             self.block_size_in, self.block_size_out, sizes)
 
     def effective_weight(self):
-        return self.weight                                    # oft_R==0 -> R==I -> Wx==weight
+        # Returns the frozen base weight buffer. Valid as the effective weight only in the
+        # oft_R≡0 (merge_period=1) regime this module runs in: with R=I the effective
+        # weight equals the stored forward-frame weight exactly.
+        return self.weight
 
     @torch.no_grad()
     def merge_then_reinitialize(self, reinit_perm=True):

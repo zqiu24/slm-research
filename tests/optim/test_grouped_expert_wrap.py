@@ -84,3 +84,11 @@ def test_walk_installs_grouped_poetx_and_matches_per_expert_subinstances():
 
     out, _ = m(tokens, tpe, None)
     assert torch.allclose(out, ref, atol=1e-9)
+
+    # No orphaned trainable expert linears survive outside the grouped modules.
+    survivors = [
+        n
+        for n, p in m.named_parameters()
+        if p.requires_grad and ("linear_fc1" in n or "linear_fc2" in n) and "grouped_" not in n
+    ]
+    assert not survivors, f"orphaned trainable expert linears: {survivors}"

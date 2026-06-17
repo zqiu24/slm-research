@@ -253,6 +253,16 @@ def _install_grouped_poetx(
         grouped_by_role[name] = g
         seq_mlp.add_module(f"grouped_{name}", g)
 
+    # The original per-expert linears are now dead weight: their storage was copied
+    # into the grouped buffer (bind_weights) and they are off the forward graph. Delete
+    # them so they aren't left as orphaned trainable params (DDP grad-buffer + optimizer
+    # state for the largest MoE tensors) -- mirroring the standard path, which REPLACES
+    # the wrapped linear via setattr. The expert MLP module stays (the swapped forward
+    # reads local_experts[0].activation_func); only its fc linears are removed.
+    for e in range(num_experts):
+        for name in roles:
+            delattr(experts[e], name)
+
     seq_mlp._poet_grouped = grouped_by_role
     seq_mlp.forward = _grouped_sequential_forward.__get__(seq_mlp, type(seq_mlp))
     return len(roles)
