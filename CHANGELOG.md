@@ -2,26 +2,36 @@
 
 ## Unreleased
 
-### Added — Nemotron-H dev launcher (2026-06-18)
+### Added — Nemotron-H dev launcher + tiny 60m hybrid scale (2026-06-18)
 
+- New `configs/base/scale/60m_nemotron_h.yaml`: tiny dev/smoke realization of
+  Nemotron-H (hybrid Mamba2/attention/MLP) at the 60M non-embedding budget — the
+  hybrid sibling of `60m.yaml` (same hidden 512 / ffn 1536 / head_dim 64 / seq
+  256). 29-layer `14 M / 14 - / 1 *` pattern honoring the §2.1 constraints
+  (first=Mamba, last=FFN, each `*` preceded by M and followed by `-`, even
+  Mamba/FFN split); `tools/size_check.py` reports 60.1M (+0.21% vs budget).
 - New `scripts/train_nemotron_dev.sh`: dev launcher for the Nemotron-H family
-  (`base/family=nemotron_h`, the Mamba2/attention/MLP hybrid, arXiv:2504.03624),
-  modeled on `train_ngpt_dev.sh` (auto-source CUDA env, inject scale+regime
-  defaults, `SLM_DRYRUN_PRINT` dry-run, dev wandb `slm-zeju-dev`, `experiment=
-  optim/adam`, `training_regime=ablation_40x`, any `"$@"` override wins). The
-  first positional arg selects the scale rung (`600m` → `600m_nemotron_h`,
-  `1b` → `1b_nemotron_h`; default 600m), since the bake-off is the only place
-  these scales were wired up.
+  (`base/family=nemotron_h`, arXiv:2504.03624), modeled on `train_ngpt_dev.sh`
+  (auto-source CUDA env, inject scale+regime defaults, `SLM_DRYRUN_PRINT`
+  dry-run, dev wandb `slm-zeju-dev`, `experiment=optim/adam`,
+  `training_regime=ablation_40x`, gbs 1024, any `"$@"` override wins). First
+  positional arg selects the rung (`60m`/`600m`/`1b`); **defaults to 60m**, so it
+  lines up with the other dev launchers (`train_adam_dev.sh` /
+  `train_muon_dev.sh` / `train_ngpt_dev.sh`).
 - Deliberately diverges from the llama3 dev template on the hybrid Mamba path:
   drops `transformer_impl=local` (the mamba stack spec is built from TE layers;
   unset → Megatron's `transformer_engine` default, matching
   `train_bakeoff_600m.sh`), drops the forced `tie_embeddings=false` (nemotron
-  scale configs tie embeddings), and uses `micro_batch_size=4` instead of 128
-  (128 OOMs the 600M hybrid at seq 4096 on 80GB). Rejects `--backend torchtitan`
-  (AdamW-only, no Mamba).
-- Verified all paths via `SLM_DRYRUN_PRINT=1`: 600m/1b scale selection, trailing
-  Hydra overrides last-winning (e.g. `seq_length=8192`, `micro_batch_size=2`),
-  passthrough with no scale token, and exit-2 on unknown scale / torchtitan.
+  scale configs tie embeddings), and uses a scale-dependent micro-batch — 60m →
+  128 (matches the llama3 dev launchers at seq 256), 600m/1b → 4 (128 OOMs the
+  larger hybrids at seq 4096). `seq_length` is left to each scale config
+  (60m → 256, 600m/1b → 4096). Rejects `--backend torchtitan` (AdamW-only).
+- Verified: `tools/size_check.py` (60.1M, +0.21%), all 31
+  `tests/unit/test_scale_budget.py` pass, the real `launchers.train_megatron
+  --dry-run` resolves the 60m hybrid (routes to `pretrain_mamba_slm`, emits
+  `--hybrid-layer-pattern` + `--spec ... mamba_stack_spec` + mamba dims), and the
+  script's `SLM_DRYRUN_PRINT=1` paths for 60m/600m/1b scale + mbs selection,
+  override last-winning, passthrough, and exit-2 on unknown scale / torchtitan.
 
 ### Added — nGPT-with-Muon and nGPT-with-POET dev launchers (2026-06-18)
 
@@ -51,6 +61,18 @@
   Verified both new experiments resolve via `launchers.train_megatron --dry-run`
   with no `PatchConflict`: muon emits `--ngpt` + `--slm-optimizer muon_kimi`
   (no `ngpt_adamw`); poet emits `--ngpt` + `--poet` + `--poet-merge-period 0`.
+- GPU smoke (1× GPU, `cluster.gpus_per_node=1`): **nGPT+Muon trains** — lm loss
+  decreasing monotonically (12→5.76 by iter 100), 0 nan / 0 skipped. **nGPT+POET**
+  builds correctly (72 linears POET-ised, `oft_R` in the grad buffer, nGPT
+  `sqk`/`suv`/`sz` intact) but crashed at optimizer construction: the launcher
+  emitted `--use-distributed-optimizer` (cluster sets `distributed_optimizer=true`
+  and `_distributed_optimizer_supported` marks the stock-Adam POET path
+  supported), which `get_megatron_poet_optimizer` rejects unconditionally. Fix:
+  `train_ngpt_dev_poet.sh` now forces `parallelism.distributed_optimizer=false`
+  (definitively correct for `ngpt_poet`, whose distributed-opt support would need
+  the dropped `poet_merge_step` momentum reset). NB: the plain `optim/poet`
+  stock-Adam path (`q_optimizer=adam`) has the same latent launcher/optimizer
+  inconsistency on any `distributed_optimizer=true` cluster — not fixed here.
 
 ### Added — Adam + Muon optimizer baselines for DeepSeek-3Bv2 (2026-06-17)
 

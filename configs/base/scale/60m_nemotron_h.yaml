@@ -1,0 +1,31 @@
+# @package _global_
+# Tiny dev/smoke realization of Nemotron-H (Mamba2/attention/MLP hybrid,
+# arXiv:2504.03624) at the 60M non-embedding budget — the hybrid sibling of
+# 60m.yaml, for fast iteration and consistency with the dev launchers
+# (train_adam_dev.sh / train_muon_dev.sh / train_ngpt_dev.sh all default to the
+# 60m rung). Reuses 60m.yaml's hidden=512 / ffn=1536 / head_dim=64 / seq=256 so
+# dev runs sit at the same scale; only the mixer mix (hybrid Mamba) differs.
+#
+# Non-embedding params (computed by src/utils/arch_params.py; verify with
+# tools/size_check.py base/family=nemotron_h base/scale=60m_nemotron_h):
+# squared_relu MLP = 2*h*ffn, Mamba2 mixer from the family dims (state 128,
+# head 64, groups 8, expand 2). Pattern = 14 M / 14 - / 1 * over 29 layers
+# -> ~60.1M (+0.2% vs the 60_000_000 budget).
+#
+# §2.1 pattern constraints (cf. 600m_nemotron_h.yaml): a) first=Mamba,
+# b) last=FFN, c) each * immediately followed by -, d) M directly precedes
+# each *, even Mamba/FFN split (M == -). One attention layer (vs 600m's four)
+# keeps the tiny budget while still exercising all three layer types.
+base:
+  scale: "60m_nemotron_h"
+  non_embedding_params: 60_000_000
+  model:
+    num_layers: 29
+    hidden_size: 512
+    ffn_hidden_size: 1536
+    num_attention_heads: 8
+    num_query_groups: 8            # MHA at this scale (matches 60m.yaml)
+    head_dim: 64
+    seq_length: 256                # dev/smoke context length (matches 60m.yaml)
+    tie_embeddings: true           # faithful to nemotron 600m/1b (which tie)
+    hybrid_layer_pattern: "M-M-M-M-M-M-M*-M-M-M-M-M-M-M-"
