@@ -1,0 +1,83 @@
+# @package _global_
+# pgpt — nGPT architecture with the explicit per-step weight projection REMOVED,
+# co-trained with POET. Distinct from arch/ngpt_poet (which keeps vanilla nGPT's
+# per-step renorm). See docs/superpowers/specs/2026-06-18-pgpt-design.md.
+#
+# Why no per-step all-weight renorm: POET parametrizes each trained linear as
+# A·W_base·B (block-orthogonal A,B), preserving each matrix's singular spectrum
+# exactly; the hidden state stays on the sphere via the runtime residual-blend /
+# Q-K justnorms. The two sphere matrices POET does NOT wrap (token embedding +
+# lm_head) keep a targeted per-step renorm via pgpt_optimizer_setup's hook.
+#
+# Distributed optimizer must be OFF (POET's optimizer builder rejects it). The
+# launcher enforces this for any POET run: _distributed_optimizer_supported()
+# returns False for optim.type=poet, so --use-distributed-optimizer is never
+# emitted (see src/utils/megatron_args.py; regression-guarded by tests). No
+# explicit parallelism.distributed_optimizer override is needed.
+experiment:
+  name: pgpt
+  family: arch
+  kind: pgpt
+  description: |
+    nGPT hypersphere architecture minus the per-step weight projection, trained
+    with POET. 2D linears become POETLinear (frozen base + block-orthogonal delta
+    oft_R). No per-step all-weight renorm; embedding+lm_head get a targeted renorm.
+  references:
+    - "Loshchilov et al. 2024 (arXiv:2410.01131)"
+    - "POET"
+  patches:
+    - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
+    - poet_apply_to_model     # replace 2D linears with POETLinear (post-build)
+    - poet_optimizer_setup    # route the POET optimizer (oft_R via Megatron-Adam)
+    - poet_merge_step         # POET periodic merge (available; inert at merge_period=0)
+    - pgpt_apply_spec         # pgpt layer spec + init normalize + post-step role map
+    - pgpt_optimizer_setup    # no-WD scaling groups + embedding/lm_head renorm hook
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 15.0e-4
+  weight_decay: 0.0          # scaling params also zero-WD via pgpt_optimizer_setup
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  ngpt:                      # pgpt reuses the nGPT scaling-vector inits
+    alpha_init: 0.05
+    sqk_init: 1.0
+    suv_init: 1.0
+    sz_init: 1.0
+    no_warmup: true
+  # Same POET recipe as arch/ngpt_poet (pgpt IS ngpt_poet minus the per-step
+  # renorm), so the full builder key set is required: _poet_args reads
+  # block_count, init_type, mup_alpha, merge_period and scale as mandatory.
+  poet:
+    block_count: 1           # one orthogonal block per side (decoupled in/out)
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 0          # v1 default: no merge. Flip >0 to enable merges.
+    scale: 0.5               # LR multiplier for the oft_R (POET linear) group
+    use_poet_adam: false     # stock Megatron-Adam path (oft_R in the DDP grad buffer)
+    parameterization: cayley
+    q_optimizer: adam
+    lie_ortho_distributed: true
+    muon_theta: 0.1
+    muon_ns_steps: 5
+    muon_momentum: 0.95
+    head_aligned_attn: true  # rotate q/k/v/o per attention head (needs unfuse_qkv=true)
+    train_output_rotation: true
+
+# Disable QK layernorm + dropout (conflict with the hypersphere forward); force MHA.
+base:
+  model:
+    qk_norm: false
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    num_query_groups: ${base.model.num_attention_heads}
+    transformer_impl: local
+    unfuse_qkv: true
+    unfuse_fc1: true
+    recompute_granularity: full
+    recompute_method: uniform
+    recompute_num_layers: 1
