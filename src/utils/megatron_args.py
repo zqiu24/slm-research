@@ -637,6 +637,34 @@ def _ngpt_arch_args(cfg: DictConfig) -> list[str]:
     return _sequence(arch)
 
 
+def _pgpt_arch_args(cfg: DictConfig) -> list[str]:
+    """pgpt architecture CLI flags (mirror of _ngpt_arch_args, keyed on kind=='pgpt').
+
+    pgpt reuses nGPT's architecture flags and config fields (the forked pgpt model
+    reads config.ngpt_* exactly like nGPT). Emitting them here, keyed on
+    experiment.kind=='pgpt' (NOT optim.type, which is 'poet'), keeps the optimizer
+    branch free to supply the POET flags. No-op when pgpt is not requested.
+    """
+    experiment = cfg.get("experiment", {}) or {}
+    if str(experiment.get("kind", "")) != "pgpt":
+        return []
+    ng = (cfg.get("optim", {}) or {}).get("ngpt", {}) or {}
+    arch = [
+        "--ngpt",
+        "--ngpt-alpha-init",
+        float(ng.get("alpha_init", 0.05)),
+        "--ngpt-sqk-init",
+        float(ng.get("sqk_init", 1.0)),
+        "--ngpt-suv-init",
+        float(ng.get("suv_init", 1.0)),
+        "--ngpt-sz-init",
+        float(ng.get("sz_init", 1.0)),
+    ]
+    if bool(ng.get("no_warmup", True)):
+        arch.append("--ngpt-no-warmup")
+    return _sequence(arch)
+
+
 def _distributed_optimizer_supported(cfg: DictConfig) -> bool:
     """Whether Megatron's sharded distributed optimizer can drive this optimizer.
 
@@ -773,6 +801,7 @@ def build_megatron_args(cfg: DictConfig) -> list[str]:
     args.extend(_training_args(cfg))
     args.extend(_optimizer_args(cfg))
     args.extend(_ngpt_arch_args(cfg))
+    args.extend(_pgpt_arch_args(cfg))
     args.extend(_parallel_args(cfg))
     args.extend(_data_args(cfg))
     args.extend(_logging_args(cfg))
