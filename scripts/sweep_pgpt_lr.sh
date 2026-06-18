@@ -23,7 +23,7 @@
 # => rotation-group LR = lr*scale = 0.002 CONSTANT, eff∠ = 0.016 CONSTANT across
 # all cells; ONLY the dense LR varies. (Method = POET_dev.md SS2.6 G.)
 #
-# HELD — lie_ortho CHAMPION rotation + nGPT-champion schedule (NOT swept):
+# HELD — lie_ortho CHAMPION rotation + POET-champion schedule (NOT swept):
 #   optim.poet.q_optimizer=lie_ortho         Muon-orthogonalized Lie-momentum
 #   optim.poet.lie_ortho_method=muon         quintic Newton-Schulz band (~5 steps)
 #   optim.poet.lie_ortho_c=8                  nominal per-plane angle multiplier
@@ -32,13 +32,14 @@
 #   optim.poet.lie_alternating=true           alternate written side, both momenta
 #   optim.poet.lie_alternate_every=1            fresh (the champion's win)
 #   optim.poet.lie_ortho_distributed=true     shard NS across DP (identical result)
-#   optim.weight_decay=0.1                     nGPT/POET champion wd
-#   optim.ngpt.no_warmup=false                 1% warmup ON (nGPT champion)
-#   scheduler=cosine                           min_lr_ratio 0.1 — nGPT champion floor
-# NOTE: with scheduler=cosine the rotation group_lr (hence eff∠) anneals to a 0.1
-# floor, not cosine_poet's 0.01 — so the lr=4e-3 cell is the champion ROTATION
-# under the nGPT schedule, not byte-identical to ghsu7t8y. Flip scheduler=cosine_poet
-# for pure POET-schedule isolation.
+#   optim.weight_decay=0.1                     POET champion wd
+#   optim.ngpt.no_warmup=false                 1% warmup ON
+#   scheduler=cosine_poet                      min_lr_ratio 0.01 — POET champion floor
+# Same schedule as sweep_pgpt_orth_angle.sh (cosine_poet, 0.01 floor), so A and B
+# differ ONLY in the swept axis (A = dense lr, B = rotation angle). The rotation
+# group_lr (hence eff∠) anneals on the 0.01 floor, matching ghsu7t8y; the lr=4e-3
+# cell is the champion ROTATION RECIPE applied to the pgpt arch. (A still keeps
+# warmup ON via no_warmup=false; B leaves pgpt's no_warmup=true default = warmup OFF.)
 #
 #   name          dense lr   scale (=0.002/lr)   eff∠ (=lr*scale*8)
 #   pgpt_lr10     0.001      2.0                 0.016
@@ -70,8 +71,8 @@ codexlog() {
   echo "<<< END   ${name}  (status ${PIPESTATUS[0]})  $(date '+%F %T')"
 }
 
-# lie_ortho champion rotation + nGPT-champion schedule, held across all 10 cells:
-HELD="optim.weight_decay=0.1 optim.ngpt.no_warmup=false scheduler=cosine \
+# lie_ortho champion rotation + POET-champion schedule, held across all 10 cells:
+HELD="optim.weight_decay=0.1 optim.ngpt.no_warmup=false scheduler=cosine_poet \
 optim.poet.q_optimizer=lie_ortho optim.poet.lie_ortho_method=muon \
 optim.poet.lie_ortho_c=8 optim.poet.merge_period=1 \
 optim.poet.head_aligned_attn=false \
