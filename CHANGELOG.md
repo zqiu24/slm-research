@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added — nGPT-with-Muon and nGPT-with-POET dev launchers (2026-06-18)
+
+- New `scripts/train_ngpt_dev_muon.sh` and `scripts/train_ngpt_dev_poet.sh`:
+  the nGPT hypersphere architecture trained with the Muon (`muon_kimi`) and POET
+  optimizers instead of nGPT's native `ngpt_adamw`. Mirror `train_ngpt_dev.sh`
+  (llama3 60m, 40x regime, gbs 1024 / mbs 128, `transformer_impl=local`, untied
+  embeddings, dev wandb) so the architecture-vs-optimizer ablation is directly
+  comparable; the POET launcher additionally defaults `scheduler=cosine_poet`.
+- New `configs/experiments/arch/ngpt_muon.yaml` and `.../ngpt_poet.yaml`: the
+  combined nGPT-arch + optimizer experiments. Each keeps the nGPT architecture
+  patches (`ngpt_apply_spec`, `ngpt_normalize_step`) and swaps only the optimizer
+  setup, since `ngpt_optimizer_setup` / `muon_kimi_optimizer_setup` /
+  `poet_optimizer_setup` all target `get_megatron_optimizer` (the registry
+  forbids listing two). `ngpt_poet` runs POET in the `merge_period=0` no-merge
+  regime and omits `poet_unfuse_te_impl` (no-op at `local` impl) and
+  `poet_merge_step` (collides with `ngpt_normalize_step` on `train_step`).
+  POET-on-nGPT is EXPERIMENTAL — needs a GPU smoke before the loss is trusted.
+- Decoupled the nGPT *architecture* CLI flags from the optimizer type in
+  `src/utils/megatron_args.py`: `--ngpt` and the scaling-vector inits are now
+  emitted by `_ngpt_arch_args`, keyed on `experiment.kind=='ngpt'` rather than
+  on the `ngpt_adamw` optimizer branch. Without this, swapping `optim.type` would
+  silently drop `--ngpt` and train a plain (non-nGPT) model. The `ngpt_adamw`
+  path is byte-identical (it still has `experiment.kind=='ngpt'`).
+- Tests: `tests/unit/test_ngpt_megatron_args.py` now asserts `--ngpt` is emitted
+  with a non-nGPT optimizer (muon) and absent without `experiment.kind=='ngpt'`.
+  Verified both new experiments resolve via `launchers.train_megatron --dry-run`
+  with no `PatchConflict`: muon emits `--ngpt` + `--slm-optimizer muon_kimi`
+  (no `ngpt_adamw`); poet emits `--ngpt` + `--poet` + `--poet-merge-period 0`.
+
 ### Added — Adam + Muon optimizer baselines for DeepSeek-3Bv2 (2026-06-17)
 
 - New `scripts/train_deepseek_adam.sh` and `scripts/train_deepseek_muon.sh`:

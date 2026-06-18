@@ -577,22 +577,18 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         return _sequence(poet_args)
 
     if kind == "ngpt_adamw":
-        ng = optim.get("ngpt", {})
+        # The nGPT *architecture* flags (--ngpt, --ngpt-*-init, --ngpt-no-warmup)
+        # are emitted by _ngpt_arch_args, keyed on experiment.kind=='ngpt' rather
+        # than on this optimizer type, so the nGPT architecture can be trained
+        # with a different optimizer (muon_kimi, poet) by swapping optim.type
+        # while keeping experiment.kind=='ngpt'. This branch emits only the
+        # AdamW optimizer flags.
         return _sequence(
             [
                 "--optimizer",
                 "adam",
                 "--slm-optimizer",
                 "ngpt_adamw",
-                "--ngpt",
-                "--ngpt-alpha-init",
-                float(ng.get("alpha_init", 0.05)),
-                "--ngpt-sqk-init",
-                float(ng.get("sqk_init", 1.0)),
-                "--ngpt-suv-init",
-                float(ng.get("suv_init", 1.0)),
-                "--ngpt-sz-init",
-                float(ng.get("sz_init", 1.0)),
                 "--adam-beta1",
                 optim.betas[0],
                 "--adam-beta2",
@@ -600,10 +596,45 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 "--adam-eps",
                 optim.eps,
             ]
-            + (["--ngpt-no-warmup"] if bool(ng.get("no_warmup", True)) else [])
         )
 
     raise ValueError(f"Unsupported optimizer type {kind!r}")
+
+
+def _ngpt_arch_args(cfg: DictConfig) -> list[str]:
+    """nGPT *architecture* CLI flags, decoupled from the optimizer type.
+
+    The nGPT hypersphere architecture is requested via ``experiment.kind ==
+    'ngpt'``, NOT via ``optim.type``. Emitting ``--ngpt`` and the scaling-vector
+    inits here -- instead of inside the ``ngpt_adamw`` optimizer branch -- lets
+    the nGPT architecture be combined with a non-nGPT optimizer (``muon_kimi``,
+    ``poet``, ...): the optimizer branch supplies the optimizer flags and this
+    helper supplies the architecture flags. Without this split, swapping
+    ``optim.type`` away from ``ngpt_adamw`` would silently drop ``--ngpt`` and
+    train a plain (non-nGPT) model.
+
+    The scaling-vector init values live under ``optim.ngpt.*`` (architecture
+    hyperparameters that ride along with the optimizer block). When the nGPT
+    architecture is not requested this is a no-op (returns ``[]``).
+    """
+    experiment = cfg.get("experiment", {}) or {}
+    if str(experiment.get("kind", "")) != "ngpt":
+        return []
+    ng = (cfg.get("optim", {}) or {}).get("ngpt", {}) or {}
+    arch = [
+        "--ngpt",
+        "--ngpt-alpha-init",
+        float(ng.get("alpha_init", 0.05)),
+        "--ngpt-sqk-init",
+        float(ng.get("sqk_init", 1.0)),
+        "--ngpt-suv-init",
+        float(ng.get("suv_init", 1.0)),
+        "--ngpt-sz-init",
+        float(ng.get("sz_init", 1.0)),
+    ]
+    if bool(ng.get("no_warmup", True)):
+        arch.append("--ngpt-no-warmup")
+    return _sequence(arch)
 
 
 def _distributed_optimizer_supported(cfg: DictConfig) -> bool:
@@ -744,6 +775,7 @@ def build_megatron_args(cfg: DictConfig) -> list[str]:
     args.extend(_model_args(cfg))
     args.extend(_training_args(cfg))
     args.extend(_optimizer_args(cfg))
+    args.extend(_ngpt_arch_args(cfg))
     args.extend(_parallel_args(cfg))
     args.extend(_data_args(cfg))
     args.extend(_logging_args(cfg))

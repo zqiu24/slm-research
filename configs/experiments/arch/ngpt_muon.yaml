@@ -1,0 +1,94 @@
+# @package _global_
+# nGPT architecture (hypersphere transformer) trained with the vendored
+# Kimi/Moonlight Muon optimizer instead of nGPT's own ngpt_adamw. This is the
+# architecture-vs-optimizer ablation: same hypersphere model as
+# experiments/arch/ngpt.yaml, but the per-step weight update is Muon (2D weights
+# orthogonalised via Newton-Schulz, internal AdamW on the rest) rather than
+# AdamW-on-the-sphere.
+#
+# How the combination is wired (see src/utils/megatron_args.py):
+#   * The nGPT *architecture* (--ngpt + scaling-vector inits, the per-step L2
+#     projection, the nGPT layer spec) is keyed on experiment.kind=='ngpt', NOT
+#     on optim.type. So selecting optim.type=muon_kimi here keeps the full
+#     hypersphere architecture while swapping only the optimizer.
+#   * The patch list keeps the nGPT architecture patches (ngpt_apply_spec,
+#     ngpt_normalize_step) but replaces ngpt_optimizer_setup with
+#     muon_kimi_optimizer_setup. ngpt_optimizer_setup and muon_kimi_optimizer_setup
+#     both target megatron...get_megatron_optimizer, so the patch registry forbids
+#     listing both -- the Muon optimizer-setup wins. (Net effect: nGPT's
+#     scaling-vector zero-WD bucketing is dropped; weight_decay=0.0 below keeps
+#     every param at zero WD instead, which matches the nGPT regime.)
+#
+# Single-GPU dev, comparable to scripts/train_ngpt_dev.sh on the same llama3
+# 60m backbone. LR below is the muon_kimi baseline (1e-3); the nGPT+Muon combo
+# almost certainly wants its own sweep (the nGPT recipe uses lr=15e-4 for
+# AdamW-on-sphere, which is not meaningful for Muon's RMS-scaled update).
+experiment:
+  name: ngpt_muon
+  family: arch
+  kind: ngpt
+  description: |
+    nGPT hypersphere architecture trained with Kimi/Moonlight Muon. Every
+    attention/MLP/embedding matrix lives on the unit hypersphere (per-step L2
+    projection); Q/K are L2-normalized per head; output logits carry a learnable
+    per-vocab scale sz. The optimizer is Muon on 2D weights (Newton-Schulz
+    orthogonalisation + RMS scaling) with internal AdamW on embeddings, norms,
+    biases and the LM head -- replacing nGPT's native AdamW-on-the-sphere. Probes
+    whether nGPT's gains come from the architecture or from its optimizer.
+  references:
+    - "Loshchilov et al. 2024 (arXiv:2410.01131)"
+    - "Moonlight paper arXiv:2502.16982"
+    - "Keller Jordan Muon (github.com/KellerJordan/Muon)"
+  patches:
+    - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
+    - ngpt_apply_spec         # nGPT layer spec + hypersphere weight-norm registration
+    - ngpt_normalize_step     # per-step L2 projection onto the hypersphere
+    - muon_kimi_optimizer_setup  # Muon optimizer (replaces ngpt_optimizer_setup)
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
+  required_capabilities: []
+
+# Muon optimizer (mirrors experiments/optim/muon_kimi.yaml) PLUS the nGPT
+# scaling-vector init values, which the --ngpt arch args read from optim.ngpt.*.
+optim:
+  type: muon_kimi
+  lr: 1.0e-3                  # muon_kimi baseline; sweep for the nGPT+Muon combo
+  weight_decay: 0.0          # nGPT regime: no WD on any param (scaling vectors
+                             # are not zero-WD bucketed once ngpt_optimizer_setup
+                             # is dropped, so keep global WD at 0).
+  muon_momentum: 0.95
+  muon_use_nesterov: true
+  muon_num_ns_steps: 5
+  adam:
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+  # nGPT architecture init values (read by the --ngpt arch args, not the muon
+  # optimizer). Same as experiments/arch/ngpt.yaml.
+  ngpt:
+    alpha_init: 0.05         # attn_alpha / mlp_alpha init_value
+    sqk_init: 1.0
+    suv_init: 1.0
+    sz_init: 1.0
+    no_warmup: true          # nGPT reference trains without warmup
+
+# nGPT architecture model settings (copied from experiments/arch/ngpt.yaml --
+# experiment files are loaded standalone, so the nGPT base.model overrides must
+# be repeated here). Keep in sync with arch/ngpt.yaml.
+base:
+  model:
+    qk_norm: false
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    # MHA only (sqk is applied identically to Q and K; the reference nGPT is
+    # MHA-only). Force num_query_groups == num_attention_heads.
+    num_query_groups: ${base.model.num_attention_heads}
+    unfuse_qkv: true
+    unfuse_fc1: true
+    # Full activation recompute: nGPT's hypersphere forward keeps ~2x the
+    # per-layer activations of a plain llama3 layer and OOMs at the dev
+    # mbs=128 config otherwise. Recompute trades ~1/3 throughput to fit and
+    # does NOT change the result. Override recompute_granularity=null at a
+    # smaller mbs that already fits.
+    recompute_granularity: full
+    recompute_method: uniform
+    recompute_num_layers: 1

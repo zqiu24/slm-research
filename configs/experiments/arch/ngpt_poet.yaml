@@ -1,0 +1,110 @@
+# @package _global_
+# nGPT architecture (hypersphere transformer) trained with POET (Parameter-
+# Efficient Orthogonal Training) instead of nGPT's own ngpt_adamw. Same
+# hypersphere model as experiments/arch/ngpt.yaml, but each 2D linear is
+# POET-ised (frozen base weight + trained block-orthogonal delta oft_R).
+#
+# EXPERIMENTAL -- needs a GPU smoke before trusting the loss. POET re-wraps the
+# nGPT linears (poet_apply_to_model runs after the nGPT model is built), and the
+# interaction between POET's frozen-base + orthogonal-delta and nGPT's per-step
+# L2 hypersphere projection / weight-norm registration / sqk-suv-sz scaling is
+# not yet validated. Rotations preserve row norms (so an orthogonal delta is in
+# principle compatible with unit-norm rows), but the patch *ordering* and the
+# weight-norm role map have bitten nGPT before -- verify "[nGPT] applied spec"
+# AND POET orbit logs both appear, and that ortho_err stays bounded.
+#
+# How the combination is wired (see src/utils/megatron_args.py + the patch
+# registry, which forbids two patches sharing one target):
+#   * nGPT architecture is keyed on experiment.kind=='ngpt' (NOT optim.type), so
+#     optim.type=poet keeps the full hypersphere architecture.
+#   * Two POET patches are intentionally OMITTED to avoid target collisions with
+#     the nGPT architecture patches:
+#       - poet_unfuse_te_impl: wraps core_transformer_config_from_args (collides
+#         with ngpt_apply_spec). It only flips transformer_engine->local, which
+#         is a no-op here because base.model.transformer_impl is forced to local
+#         below.
+#       - poet_merge_step: wraps train_step (collides with ngpt_normalize_step).
+#         It only fires when merge_period>0, so we run POET in the merge_period=0
+#         ("no-reset") regime: oft_R is trained continuously and never folded.
+#         (If periodic merge is later wanted on nGPT, it needs a single combined
+#         train_step patch that does both normalize and merge.)
+#     sandwich_norm_apply is also dropped (it would collide with ngpt_apply_spec
+#     on gpt_builder; it is a no-op unless --use-sandwich-norm anyway).
+#
+# Single-GPU dev, comparable to scripts/train_ngpt_dev.sh on the same llama3 60m
+# backbone. Pairs with scripts/train_ngpt_dev_poet.sh.
+experiment:
+  name: ngpt_poet
+  family: arch
+  kind: ngpt
+  description: |
+    nGPT hypersphere architecture trained with POET. 2D linears are replaced by
+    POETLinear (frozen base + block-orthogonal delta oft_R); only oft_R is
+    trained (stock Megatron-Adam, LR scaled by optim.poet.scale). Runs in the
+    no-merge (merge_period=0) regime because the periodic-merge patch collides
+    with nGPT's per-step normalize on train_step. Probes whether nGPT's gains
+    survive an orthogonal-delta parameterisation of the hypersphere weights.
+  references:
+    - "Loshchilov et al. 2024 (arXiv:2410.01131)"
+    - "POET"
+  patches:
+    - model_unfuse_linears    # unfuse fused qkv/fc1 at build time (pre-DDP)
+    - ngpt_apply_spec         # nGPT layer spec + hypersphere weight-norm registration
+    - ngpt_normalize_step     # per-step L2 projection onto the hypersphere
+    - poet_apply_to_model     # replace 2D linears with POETLinear (post-build)
+    - poet_optimizer_setup    # route the POET optimizer (oft_R via Megatron-Adam)
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
+  required_capabilities: []
+
+# POET optimizer (mirrors experiments/optim/poet.yaml) PLUS the nGPT scaling-
+# vector init values, which the --ngpt arch args read from optim.ngpt.*.
+optim:
+  type: poet
+  lr: 1.0e-3                 # base LR for nonlinear (Adam-side) params
+  weight_decay: 0.0          # nGPT regime (train_poet_dev.sh also uses 0.0)
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1           # one orthogonal block per side (decoupled in/out)
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 0          # NO periodic merge -- see header (train_step conflict)
+    scale: 0.5               # LR multiplier for the oft_R (POET linear) group
+    use_poet_adam: false     # stock Megatron-Adam path (oft_R in the DDP grad buffer)
+    parameterization: cayley
+    q_optimizer: adam
+    lie_ortho_distributed: true
+    muon_theta: 0.1
+    muon_ns_steps: 5
+    muon_momentum: 0.95
+    head_aligned_attn: true  # rotate q/k/v/o per attention head (needs unfuse_qkv=true)
+    train_output_rotation: true
+  # nGPT architecture init values (read by the --ngpt arch args, not POET).
+  ngpt:
+    alpha_init: 0.05
+    sqk_init: 1.0
+    suv_init: 1.0
+    sz_init: 1.0
+    no_warmup: true
+
+# nGPT architecture model settings (copied from experiments/arch/ngpt.yaml --
+# experiment files load standalone, so repeat them here; keep in sync).
+base:
+  model:
+    # POET cannot replace fused TE LayerNormColumnParallelLinear modules and the
+    # auto-unfuse patch (poet_unfuse_te_impl) is omitted to avoid a target clash
+    # with ngpt_apply_spec, so pin the impl to local explicitly here.
+    transformer_impl: local
+    qk_norm: false
+    attention_dropout: 0.0
+    hidden_dropout: 0.0
+    num_query_groups: ${base.model.num_attention_heads}   # MHA only
+    unfuse_qkv: true
+    unfuse_fc1: true
+    # Full activation recompute (see arch/ngpt.yaml): nGPT's hypersphere forward
+    # OOMs at the dev mbs otherwise; recompute does not change the result.
+    recompute_granularity: full
+    recompute_method: uniform
+    recompute_num_layers: 1

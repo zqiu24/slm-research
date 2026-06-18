@@ -113,3 +113,53 @@ def test_disable_bias_linear_still_present():
     """nGPT relies on disable-bias-linear (default in _model_args). Sanity check."""
     args = build_megatron_args(_ngpt_cfg())
     assert "--disable-bias-linear" in args
+
+
+def _muon_optim():
+    """muon_kimi optimizer block (mirrors configs/experiments/optim/muon_kimi.yaml),
+    plus the nGPT scaling-vector init sub-block that rides along with the arch."""
+    return OmegaConf.create(
+        {
+            "type": "muon_kimi",
+            "lr": 1e-3,
+            "weight_decay": 0.0,
+            "muon_momentum": 0.95,
+            "muon_use_nesterov": True,
+            "muon_num_ns_steps": 5,
+            "adam": {"betas": [0.9, 0.95], "eps": 1e-8},
+            "ngpt": {
+                "alpha_init": 0.05,
+                "sqk_init": 1.0,
+                "suv_init": 1.0,
+                "sz_init": 1.0,
+                "no_warmup": True,
+            },
+        }
+    )
+
+
+def test_ngpt_arch_emitted_with_non_ngpt_optimizer():
+    """The nGPT architecture (--ngpt) is keyed on experiment.kind=='ngpt', NOT on
+    optim.type: selecting a muon optimizer must keep the hypersphere arch flags
+    while emitting the muon optimizer (not ngpt_adamw)."""
+    cfg = _ngpt_cfg()
+    cfg.optim = _muon_optim()
+    args = build_megatron_args(cfg)
+    # Architecture flags still present.
+    assert "--ngpt" in args
+    for flag in ("--ngpt-alpha-init", "--ngpt-sqk-init", "--ngpt-suv-init", "--ngpt-sz-init"):
+        assert flag in args, f"missing arch flag: {flag}"
+    # Optimizer is muon_kimi, not ngpt_adamw.
+    assert "muon_kimi" in args
+    assert "ngpt_adamw" not in args
+
+
+def test_ngpt_flag_absent_without_ngpt_kind():
+    """A plain (non-nGPT) experiment must NOT emit --ngpt even with a muon
+    optimizer; the architecture is gated solely on experiment.kind."""
+    cfg = _ngpt_cfg()
+    cfg.experiment = OmegaConf.create({"name": "muon_kimi", "family": "optim"})
+    cfg.optim = _muon_optim()
+    args = build_megatron_args(cfg)
+    assert "--ngpt" not in args
+    assert "--ngpt-alpha-init" not in args
