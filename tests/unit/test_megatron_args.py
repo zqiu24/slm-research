@@ -129,12 +129,25 @@ def test_muon_args_use_megatron_muon_and_disable_dist_optimizer_overlap():
     assert amap["--muon-momentum"] == "0.95"
 
 
-def test_poet_default_path_emits_distributed_optimizer_under_dist_cluster():
-    # The default POET path (use_poet_adam=false, q_optimizer=adam) runs stock
-    # Megatron Adam on oft_R in the DDP grad buffer, which supports the sharded
-    # distributed optimizer — so it must emit it when the cluster requests one
-    # (matches the Huawei DeepSeek-3Bv2 reference, which sets it).
+def test_poet_default_path_omits_distributed_optimizer_under_dist_cluster():
+    # POET's optimizer builder (src/optim/poet.py get_megatron_poet_optimizer)
+    # rejects the Megatron distributed optimizer UNCONDITIONALLY on every path
+    # (the raise precedes the stock-Adam / POETAdam / Lie / Muon builders). So the
+    # launcher must NOT request one even when the cluster sets
+    # distributed_optimizer=true, else the flag is emitted but the optimizer build
+    # hard-crashes ("POET optimizer does not support distributed optimizer").
+    # Regression guard for that launcher/optimizer agreement.
     cfg = _parse_overrides(["experiment=optim/poet", "cluster=h100_de"])
+    args = build_megatron_args(cfg)
+    assert "--use-distributed-optimizer" not in args
+    assert "--overlap-grad-reduce" not in args
+    assert "--overlap-param-gather" not in args
+
+
+def test_adamw_emits_distributed_optimizer_under_dist_cluster():
+    # adamw is the stock Megatron path and DOES drive the sharded distributed
+    # optimizer; the poet fix above must not have disabled it for adamw.
+    cfg = _parse_overrides(["experiment=optim/adam", "cluster=h100_de"])
     args = build_megatron_args(cfg)
     assert "--use-distributed-optimizer" in args
     assert "--overlap-grad-reduce" in args

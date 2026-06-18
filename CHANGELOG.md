@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Fixed — POET never requests the Megatron distributed optimizer (2026-06-18)
+
+- `_distributed_optimizer_supported` (`src/utils/megatron_args.py`) now returns
+  `False` for `optim.type=poet` on every path. It previously returned `True` for
+  the stock-Adam path (`use_poet_adam=false`, `q_optimizer=adam`) on the belief
+  that the vanilla builder honors `config.use_distributed_optimizer` — but
+  `get_megatron_poet_optimizer` (`src/optim/poet.py`) raises *"POET optimizer does
+  not support distributed optimizer"* unconditionally, before any builder runs.
+  The launcher therefore emitted `--use-distributed-optimizer` for a POET run on
+  a `distributed_optimizer=true` cluster (e.g. `h100_de`), which then hard-crashed
+  at optimizer construction. Surfaced by the `arch/ngpt_poet` GPU smoke; also
+  fixes the plain `optim/poet` stock-Adam path under any such cluster.
+- Removed the now-redundant `parallelism.distributed_optimizer=false` override
+  from `scripts/train_ngpt_dev_poet.sh` (the launcher fix covers it).
+- Tests: `test_poet_default_path_omits_distributed_optimizer_under_dist_cluster`
+  flips to assert the flag is *absent* (was asserting present); added
+  `test_adamw_emits_distributed_optimizer_under_dist_cluster` so the fix can't
+  silently disable the distributed optimizer for adamw. Verified via `--dry-run`:
+  `optim/poet`→omits, `optim/adam`→emits, `optim/poet q_optimizer=lie_ortho`→omits.
+
 ### Added — Nemotron-H dev launcher + tiny 60m hybrid scale (2026-06-18)
 
 - New `configs/base/scale/60m_nemotron_h.yaml`: tiny dev/smoke realization of

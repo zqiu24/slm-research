@@ -641,25 +641,22 @@ def _distributed_optimizer_supported(cfg: DictConfig) -> bool:
     """Whether Megatron's sharded distributed optimizer can drive this optimizer.
 
     - ``adamw``: yes (stock Megatron path).
-    - ``poet``: yes ONLY on the default stock-Megatron-Adam path
-      (``use_poet_adam=false`` and ``q_optimizer=adam``). On that path POET's
-      trainable ``oft_R`` is a normal param in the DDP grad buffer stepped by
-      Megatron's own builder (``src/optim/poet.py`` ``_get_stock_megatron_optimizer``,
-      which respects ``config.use_distributed_optimizer``), and the
-      ``poet_merge_step`` momentum reset already handles the sharded-master
-      layout. The POETAdam / Muon-on-Q / Lie paths build their own optimizer and
-      explicitly reject the distributed optimizer, so they must keep it off.
+    - ``poet``: no, on EVERY path. ``get_megatron_poet_optimizer``
+      (``src/optim/poet.py``) raises ``"POET optimizer does not support
+      distributed optimizer"`` before it builds anything -- the guard precedes the
+      stock-Megatron-Adam (``_build_vanilla_poet_optimizer``), custom-POETAdam,
+      and Lie/Muon-on-Q builders alike. Sharding POET would require the
+      ``poet_merge_step`` fold + Adam-momentum reset to be sharded-master aware,
+      which it is not. So the launcher must never request one for POET: otherwise
+      the flag is emitted but the optimizer build hard-crashes at first step.
+      (This previously returned True for the stock-Adam path on the belief that
+      the vanilla builder honors ``config.use_distributed_optimizer``; the
+      unconditional guard makes that unreachable, and a real run crashes.)
     - everything else (``muon``, ``ngpt``, ...): no.
     """
-    kind = cfg.optim.type
-    if kind == "adamw":
-        return True
-    if kind == "poet":
-        poet = cfg.optim.get("poet", {})
-        return (not bool(poet.get("use_poet_adam", False))) and (
-            str(poet.get("q_optimizer", "adam")) == "adam"
-        )
-    return False
+    # Only stock AdamW drives Megatron's sharded distributed optimizer; POET
+    # (and muon/ngpt) build/route their own optimizer and reject it.
+    return cfg.optim.type == "adamw"
 
 
 def _parallel_args(cfg: DictConfig) -> list[str]:
