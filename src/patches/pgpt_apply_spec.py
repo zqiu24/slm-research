@@ -55,6 +55,20 @@ _TARGET = (
 logger = logging.getLogger(__name__)
 
 
+def _require_poet(args) -> None:
+    """pgpt is POET-required (spec §4.5): fail fast at build if ``args.poet`` is unset.
+
+    Module-level (not buried in the build closure) so it is unit-testable without a
+    full Megatron build.
+    """
+    if not getattr(args, "poet", False):
+        raise RuntimeError(
+            "pgpt is POET-required: experiment 'arch/pgpt' must run with "
+            "optim.type=poet (so --poet is set). Got args.poet=False. "
+            "Use scripts/train_pgpt_dev.sh or set optim.type=poet."
+        )
+
+
 @register_patch(name="pgpt_apply_spec", targets=_TARGET)
 def apply() -> None:
     # ---- Wrap config builder ----
@@ -97,12 +111,7 @@ def apply() -> None:
     def _wrapped_builder(args, *a, **kw):
         if not getattr(args, "ngpt", False):
             return _orig_builder(args, *a, **kw)
-        if not getattr(args, "poet", False):
-            raise RuntimeError(
-                "pgpt is POET-required: experiment 'arch/pgpt' must run with "
-                "optim.type=poet (so --poet is set). Got args.poet=False. "
-                "Use scripts/train_pgpt_dev.sh or set optim.type=poet."
-            )
+        _require_poet(args)
         from megatron.core.transformer.transformer_config import TransformerConfig
 
         original_get_spec = _gb._get_transformer_layer_spec

@@ -1,9 +1,43 @@
 """pgpt renorm hook: embedding+lm_head rows go unit-norm; other matrices untouched."""
 
+import types
+
 import torch
 import torch.nn as nn
 
-from src.patches.pgpt_optimizer_setup import _install_renorm_step
+from src.patches.pgpt_optimizer_setup import _install_renorm_step, _unwrapped_chunks
+
+
+class _Wrap:
+    """Mimics Float16Module/DDP: holds ``.module``, no ``__getattr__`` delegation."""
+
+    def __init__(self, inner):
+        self.module = inner
+
+
+def _peel(m):
+    """Pure stand-in for ``megatron.core.utils.unwrap_model``."""
+    while hasattr(m, "module"):
+        m = m.module
+    return m
+
+
+def test_unwrapped_chunks_reaches_inner_role_map():
+    # Regression (review HIGH finding): the role map lives on the inner GPTModel,
+    # but setup_model_and_optimizer hands back DDP(Float16Module(GPTModel)) and the
+    # wrappers do not delegate attribute access — so a direct read silently misses
+    # it and the renorm hook never installs. _unwrapped_chunks must peel first.
+    inner = types.SimpleNamespace(_pgpt_post_step_norm_role_map={"p": "rows"})
+    wrapped = _Wrap(_Wrap(inner))
+    assert getattr(wrapped, "_pgpt_post_step_norm_role_map", None) is None  # the bug
+    cores = _unwrapped_chunks([wrapped], unwrap=_peel)  # the fix
+    assert getattr(cores[0], "_pgpt_post_step_norm_role_map", None) == {"p": "rows"}
+
+
+def test_unwrapped_chunks_accepts_single_or_list():
+    inner = types.SimpleNamespace(_pgpt_post_step_norm_role_map={"p": "rows"})
+    assert _unwrapped_chunks(_Wrap(inner), unwrap=_peel)[0] is inner
+    assert _unwrapped_chunks([_Wrap(inner)], unwrap=_peel)[0] is inner
 
 
 class _FakeOpt:

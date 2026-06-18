@@ -46,6 +46,23 @@ def classify_pgpt_scaling_params(model) -> list:
     return out
 
 
+def _unwrapped_chunks(model, unwrap=None) -> list:
+    """Peel DDP/FSDP/Float16Module off each chunk so the inner GPTModel is visible.
+
+    ``setup_model_and_optimizer`` returns the *wrapped* model (under bf16 — which
+    POET requires — each chunk is ``DDP(Float16Module(GPTModel))``). The
+    ``_pgpt_post_step_norm_role_map`` / ``_ngpt_sz`` markers are plain attributes
+    set on the inner ``GPTModel`` at ``gpt_builder`` time, and those wrappers do
+    NOT delegate attribute access (no ``__getattr__`` to ``.module``), so reading
+    them off the wrapped chunk silently returns ``None``. Unwrap first. ``unwrap``
+    is injectable for CPU unit tests; production uses Megatron's ``unwrap_model``.
+    """
+    if unwrap is None:
+        from megatron.core.utils import unwrap_model as unwrap
+    chunks = model if isinstance(model, list | tuple) else [model]
+    return [unwrap(m) for m in chunks]
+
+
 def _install_renorm_step(optimizer, role_maps) -> None:
     """Monkey-patch ``optimizer.step`` to re-project embedding+lm_head after each step."""
     from src.model.pgpt.normalize import normalize_module_matrices
@@ -78,12 +95,15 @@ def apply() -> None:
         if not getattr(get_args(), "ngpt", False):
             return model, optimizer, opt_param_scheduler
 
-        chunks = model if isinstance(model, list | tuple) else [model]
+        # Unwrap DDP/Float16Module so the inner-GPTModel markers are visible
+        # (the wrappers do not delegate attribute access — see _unwrapped_chunks).
+        cores = _unwrapped_chunks(model)
 
-        # (a) zero-WD for scaling params
+        # (a) zero-WD for scaling params (belt-and-suspenders; config also sets
+        # the global weight_decay to 0 — the actual guarantee for the scaling vecs)
         scaling_ids: set[int] = set()
-        for m in chunks:
-            scaling_ids.update(id(p) for p in classify_pgpt_scaling_params(m))
+        for core in cores:
+            scaling_ids.update(id(p) for p in classify_pgpt_scaling_params(core))
         inner = getattr(optimizer, "optimizer", None) or optimizer
         for group in getattr(inner, "param_groups", []):
             if any(id(p) in scaling_ids for p in group["params"]):
@@ -91,7 +111,7 @@ def apply() -> None:
 
         # (b) targeted per-step renorm of embedding + lm_head
         role_maps = [
-            rm for rm in (getattr(m, "_pgpt_post_step_norm_role_map", None) for m in chunks) if rm
+            rm for rm in (getattr(c, "_pgpt_post_step_norm_role_map", None) for c in cores) if rm
         ]
         _install_renorm_step(optimizer, role_maps)
 

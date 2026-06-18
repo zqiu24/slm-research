@@ -1,6 +1,20 @@
-"""pgpt_apply_spec: post-step role matcher + registration."""
+"""pgpt_apply_spec: post-step role matcher + registration + POET-required guard."""
 
 import importlib
+import types
+
+import pytest
+
+
+def test_require_poet_enforces_poet():
+    # spec §4.5 / §6: pgpt build must fail fast when args.poet is unset.
+    from src.patches.pgpt_apply_spec import _require_poet
+
+    with pytest.raises(RuntimeError, match="POET-required"):
+        _require_poet(types.SimpleNamespace(ngpt=True, poet=False))
+    with pytest.raises(RuntimeError):
+        _require_poet(types.SimpleNamespace(ngpt=True))  # attr missing -> also raises
+    _require_poet(types.SimpleNamespace(ngpt=True, poet=True))  # poet set -> no raise
 
 
 def test_post_step_role_matches_embedding_and_lm_head():
