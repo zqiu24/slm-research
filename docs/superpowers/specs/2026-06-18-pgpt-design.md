@@ -83,6 +83,28 @@ two matrices** (see §4.4). Justification for not simply dropping them: it is th
 most faithful-to-nGPT option and cheap; it preserves nGPT's "embedding and vocab
 rows are unit vectors" property where POET cannot.
 
+### 2.5 pgpt is a distinct architecture — NOT `ngpt_poet`
+
+There is a pre-existing experiment
+[`configs/experiments/arch/ngpt_poet.yaml`](../../../configs/experiments/arch/ngpt_poet.yaml)
+that trains **vanilla nGPT with POET**. It is a different thing and pgpt is not
+derived from it:
+
+- `ngpt_poet` keeps the **vanilla nGPT base model** — it retains `ngpt_normalize_step`
+  and projects *every* weight matrix back onto the sphere every step. Because that
+  patch occupies `train_step`, `ngpt_poet` is **forced to omit `poet_merge_step`**
+  and runs POET in the `merge_period=0` no-merge regime (`oft_R` never folds into
+  `W_base`).
+- **pgpt removes the explicit weight normalization from the model itself.** The
+  trained weights are no longer constrained to the unit sphere; pgpt relies on
+  POET's orthogonal geometry + the runtime activation `justnorm`s instead. This
+  makes pgpt a new base model, not "nGPT-with-POET-bolted-on".
+
+A practical consequence of dropping the per-step all-weight renorm: `train_step` is
+free, so pgpt **can include `poet_merge_step`** (merges available) — something
+`ngpt_poet` structurally cannot do. pgpt is built as its own fork and does not
+reference `ngpt_poet`'s config, patches, or model code.
+
 ## 3. Locked decisions
 
 | # | Decision | Choice |
@@ -91,6 +113,7 @@ rows are unit vectors" property where POET cannot.
 | 2 | POET coupling | **POET-required** — fail fast at spec-build if `args.poet` is false |
 | 3 | Embedding + lm_head | **Targeted per-step renorm** for just those two, via an optimizer post-step hook (not a `train_step` wrap) |
 | 4 | Code structure | **Full fork** into `src/model/pgpt/`; zero runtime dependency on nGPT |
+| 5 | POET merge regime | Include `poet_merge_step` in the patch set (no collision — `train_step` is free); default the v1 config to `merge_period=0`, with `merge_period>0` available as a one-line config flip (the capability `ngpt_poet` lacks) |
 
 ## 4. Architecture
 
@@ -201,6 +224,39 @@ patches:
 ```
 
 (plus the POET `--poet-*` CLI args supplied by the dev script / optim config.)
+
+**Intentionally OMITTED POET/arch patches** (each would collide with `pgpt_apply_spec`
+on a build-time symbol; each is a no-op under pgpt's config anyway):
+
+- `poet_unfuse_te_impl` — wraps `core_transformer_config_from_args` (collides with
+  `pgpt_apply_spec`). Only flips `transformer_engine → local`; a no-op because
+  `base.model.transformer_impl` is pinned to `local`.
+- `sandwich_norm_apply` — wraps `gpt_builder` (collides with `pgpt_apply_spec`). A
+  no-op unless `--use-sandwich-norm`.
+
+**Distributed optimizer must be OFF.** POET's optimizer builder rejects Megatron's
+distributed optimizer on its custom paths. The dev script passes
+`parallelism.distributed_optimizer=false` last (the cluster config sets it after the
+experiment YAML, so the override cannot live in `pgpt.yaml`), mirroring
+[`scripts/train_ngpt_dev_poet.sh`](../../../scripts/train_ngpt_dev_poet.sh).
+
+### 5.1 Flag wiring
+
+pgpt reuses nGPT's architecture CLI flags and config fields (per §4.1, to minimize
+the fork's diff):
+
+- `experiment.kind: pgpt` triggers a **new** `_pgpt_arch_args(cfg)` helper in
+  [`src/utils/megatron_args.py`](../../../src/utils/megatron_args.py) — a mirror of
+  the existing `_ngpt_arch_args`, gated on `kind == "pgpt"` — that emits `--ngpt`
+  plus the scaling-vector inits (`--ngpt-alpha-init`, `--ngpt-sqk-init`,
+  `--ngpt-suv-init`, `--ngpt-sz-init`, `--ngpt-no-warmup`) read from `optim.ngpt.*`.
+  This does **not** modify `_ngpt_arch_args`; it adds a sibling and one call line.
+- `optim.type: poet` emits `--poet` + the `--poet-*` flags (existing POET branch).
+- pgpt's patches therefore see `args.ngpt == True` (architecture gate, reused) and
+  `args.poet == True` (POET gate). `pgpt_apply_spec` / `pgpt_optimizer_setup` gate
+  their behavior on `args.ngpt`; `pgpt_apply_spec` additionally asserts `args.poet`
+  (§4.5). They are only ever *applied* on pgpt runs because the experiment lists
+  the `pgpt_*` patches (not the `ngpt_*` ones).
 
 Collision analysis (the registry refuses two patches that declare the same target):
 
