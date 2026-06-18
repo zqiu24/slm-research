@@ -24,6 +24,9 @@
 #   optim.poet.lie_alternate_every=1           momenta fresh (the champion's win)
 #   optim.poet.lie_ortho_distributed=true    shard NS across DP (identical result)
 #   optim.weight_decay=0.1                    POET champion wd
+#   optim.ngpt.no_warmup=false                1% warmup ON (matches nGPT/adam/muon
+#                                             champions + sweep_pgpt_lr.sh; pgpt's
+#                                             default is no_warmup=true = warmup OFF)
 #   scheduler=cosine_poet                     min_lr_ratio 0.01 (POET floor;
 #                                             pgpt's default, passed explicitly)
 #
@@ -73,7 +76,7 @@ codexlog() {
 }
 
 # lie_ortho champion stack, held across every cell (NOT swept):
-HELD="optim.weight_decay=0.1 scheduler=cosine_poet \
+HELD="optim.weight_decay=0.1 optim.ngpt.no_warmup=false scheduler=cosine_poet \
 optim.poet.q_optimizer=lie_ortho optim.poet.lie_ortho_method=muon \
 optim.poet.scale=0.5 optim.poet.lie_ortho_c=8 optim.poet.merge_period=1 \
 optim.poet.head_aligned_attn=false \
