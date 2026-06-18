@@ -1,43 +1,56 @@
 #!/usr/bin/env bash
-# pgpt LEARNING-RATE sweep — nGPT-anchored recipe (10 runs).
+# pgpt DENSE-LR sweep — best-POET rotation, angle DECOUPLED (10 runs).
 #
 # Run on one node (sequential runs, each grabs the whole node and blocks):
 #   bash scripts/sweep_pgpt_lr.sh
 #
 # WHAT pgpt IS: the nGPT hypersphere architecture with the explicit per-step
-# weight projection REMOVED, trained with POET (frozen base + block-orthogonal
-# delta oft_R). See configs/experiments/arch/pgpt.yaml.
+# weight projection REMOVED, trained with POET. See configs/experiments/arch/pgpt.yaml.
 #
-# PURPOSE: find pgpt's lr optimum on the SAME knob + cohort the nGPT lr sweep
-# used (scripts/sweep_ngpt_lr.sh), so pgpt-vs-nGPT is directly comparable at each
-# lr. Launcher = train_pgpt_dev.sh (llama3-60m, ablation_40x = 40 tpp, seq 256,
-# gbs 1024, mbs 128, transformer_impl=local, tie_embeddings=false).
+# PURPOSE: does pgpt want a HOT dense Adam LR like nGPT (whose optimum was 1e-2)
+# WHEN the rotation already uses the best-POET recipe? This holds the lie_ortho
+# CHAMPION rotation (cos_lr4_s50_c8 / W&B ghsu7t8y, val 3.5231) FIXED and sweeps
+# only the dense AdamW LR (embeddings / norms / nGPT scaling params). Sibling
+# scripts/sweep_pgpt_orth_angle.sh sweeps the rotation ANGLE instead.
 #
-# HELD at the nGPT CHAMPION recipe (ngpt_lr100 / W&B 5zycv3p5, val 3.4583) so the
-# ONLY axis is lr. These OVERRIDE pgpt's own defaults (wd 0 / no_warmup /
-# cosine_poet) to match nGPT exactly:
-#   optim.weight_decay=0.1        nGPT champion wd (scaling params stay zero-WD
-#                                 via pgpt_optimizer_setup)
-#   optim.ngpt.no_warmup=false    turn ON the 1% warmup (matches nGPT/adam)
-#   scheduler=cosine              min_lr_ratio 0.1 — nGPT champion floor
-#                                 (overrides pgpt's cosine_poet 0.01 floor)
-# The POET rotation path stays at pgpt's defaults (q_optimizer=adam, Cayley,
-# head-aligned, merge_period=0); optim.lr ALSO scales the rotation group's LR via
-# the fixed poet.scale=0.5, so this sweep moves dense AND rotation magnitude
-# together (the same coupling the POET grid used). The POET-recipe axis is swept
-# separately by scripts/sweep_pgpt_orth_angle.sh.
+# DECOUPLING (the point): optim.lr is BOTH the dense AdamW LR and (via poet.scale)
+# the rotation-group LR, and for lie_ortho the per-plane angle is
+#   eff∠ = optim.lr * scale * lie_ortho_c.
+# A naive lr sweep at fixed scale would drag eff∠ from 0.004 to 0.04 and the hot
+# cells would diverge on the ANGLE, not the dense LR. So we pin eff∠ at the
+# champion 0.016 by setting per cell
+#   scale = 0.016 / (lr * c) = 0.002 / lr      (c = 8)
+# => rotation-group LR = lr*scale = 0.002 CONSTANT, eff∠ = 0.016 CONSTANT across
+# all cells; ONLY the dense LR varies. (Method = POET_dev.md SS2.6 G.)
 #
-#   name          lr      rotation-LR (= lr*0.5)
-#   pgpt_lr10     0.001   0.0005
-#   pgpt_lr20     0.002   0.001
-#   pgpt_lr30     0.003   0.0015
-#   pgpt_lr40     0.004   0.002
-#   pgpt_lr50     0.005   0.0025
-#   pgpt_lr60     0.006   0.003
-#   pgpt_lr70     0.007   0.0035
-#   pgpt_lr80     0.008   0.004
-#   pgpt_lr90     0.009   0.0045
-#   pgpt_lr100    0.01    0.005     (nGPT's own optimum lr)
+# HELD — lie_ortho CHAMPION rotation + nGPT-champion schedule (NOT swept):
+#   optim.poet.q_optimizer=lie_ortho         Muon-orthogonalized Lie-momentum
+#   optim.poet.lie_ortho_method=muon         quintic Newton-Schulz band (~5 steps)
+#   optim.poet.lie_ortho_c=8                  nominal per-plane angle multiplier
+#   optim.poet.merge_period=1                 single-step merge (champion setting)
+#   optim.poet.head_aligned_attn=false        HEAD-OFF (champion was head-off)
+#   optim.poet.lie_alternating=true           alternate written side, both momenta
+#   optim.poet.lie_alternate_every=1            fresh (the champion's win)
+#   optim.poet.lie_ortho_distributed=true     shard NS across DP (identical result)
+#   optim.weight_decay=0.1                     nGPT/POET champion wd
+#   optim.ngpt.no_warmup=false                 1% warmup ON (nGPT champion)
+#   scheduler=cosine                           min_lr_ratio 0.1 — nGPT champion floor
+# NOTE: with scheduler=cosine the rotation group_lr (hence eff∠) anneals to a 0.1
+# floor, not cosine_poet's 0.01 — so the lr=4e-3 cell is the champion ROTATION
+# under the nGPT schedule, not byte-identical to ghsu7t8y. Flip scheduler=cosine_poet
+# for pure POET-schedule isolation.
+#
+#   name          dense lr   scale (=0.002/lr)   eff∠ (=lr*scale*8)
+#   pgpt_lr10     0.001      2.0                 0.016
+#   pgpt_lr20     0.002      1.0                 0.016
+#   pgpt_lr30     0.003      0.667               0.016
+#   pgpt_lr40     0.004      0.5                 0.016   (= champion rotation recipe)
+#   pgpt_lr50     0.005      0.4                 0.016
+#   pgpt_lr60     0.006      0.333               0.016
+#   pgpt_lr70     0.007      0.286               0.016
+#   pgpt_lr80     0.008      0.25                0.016
+#   pgpt_lr90     0.009      0.222               0.016
+#   pgpt_lr100    0.01       0.2                 0.016   (nGPT's own optimum dense lr)
 #
 # Idempotent: a run is SKIPPED only if its ${LOGDIR}/<name>.log shows it
 # COMPLETED ("after training is done"); missing/crashed/partial runs are
@@ -57,22 +70,29 @@ codexlog() {
   echo "<<< END   ${name}  (status ${PIPESTATUS[0]})  $(date '+%F %T')"
 }
 
-# nGPT champion recipe, held across all 10 cells (NOT swept):
-HELD="optim.weight_decay=0.1 optim.ngpt.no_warmup=false scheduler=cosine"
+# lie_ortho champion rotation + nGPT-champion schedule, held across all 10 cells:
+HELD="optim.weight_decay=0.1 optim.ngpt.no_warmup=false scheduler=cosine \
+optim.poet.q_optimizer=lie_ortho optim.poet.lie_ortho_method=muon \
+optim.poet.lie_ortho_c=8 optim.poet.merge_period=1 \
+optim.poet.head_aligned_attn=false \
+optim.poet.lie_alternating=true optim.poet.lie_alternate_every=1 \
+optim.poet.lie_ortho_distributed=true"
 
 LRS=(0.001 0.002 0.003 0.004 0.005 0.006 0.007 0.008 0.009 0.01)
 LTAGS=(10 20 30 40 50 60 70 80 90 100)
 
 for i in "${!LRS[@]}"; do
   lr="${LRS[$i]}"; lt="${LTAGS[$i]}"
+  # Hold eff∠ = lr*scale*8 = 0.016  =>  scale = 0.002/lr (rotation group_lr = 0.002).
+  scale=$(awk -v l="$lr" 'BEGIN{printf "%.6g", 0.002/l}')
   name="pgpt_lr${lt}"
   if [[ -f "${LOGDIR}/${name}.log" ]] && grep -q "after training is done" "${LOGDIR}/${name}.log"; then
     echo "### ${name}: SKIP (already completed; rm ${LOGDIR}/${name}.log to re-run)"
     continue
   fi
-  echo "### ${name}: lr=${lr}  (nGPT recipe: wd 0.1, warmup on, cosine min_lr 0.1)"
+  echo "### ${name}: dense_lr=${lr} scale=${scale}  (eff∠=0.016 held; lie_ortho champion rotation)"
   codexlog "$name" scripts/train_pgpt_dev.sh $HELD \
-    optim.lr="$lr" experiment.name="$name"
+    optim.lr="$lr" optim.poet.scale="$scale" experiment.name="$name"
 done
 
-echo "=== pgpt LR sweep complete (${#LRS[@]} runs) ==="
+echo "=== pgpt DENSE-LR sweep complete (${#LRS[@]} runs, eff∠ held at 0.016) ==="
