@@ -31,6 +31,15 @@
 #     sandwich_norm_apply is also dropped (it would collide with ngpt_apply_spec
 #     on gpt_builder; it is a no-op unless --use-sandwich-norm anyway).
 #
+# Requires the Megatron distributed optimizer OFF: POET's optimizer builder
+# rejects it unconditionally, and the merge_period=0 regime here has no
+# poet_merge_step to handle the sharded-master layout. Because the cluster config
+# (which sets parallelism.distributed_optimizer) is merged AFTER this experiment
+# YAML, the override cannot live here -- scripts/train_ngpt_dev_poet.sh passes
+# parallelism.distributed_optimizer=false (applied last). Set it yourself if you
+# launch this experiment without that script on a distributed_optimizer=true
+# cluster.
+#
 # Single-GPU dev, comparable to scripts/train_ngpt_dev.sh on the same llama3 60m
 # backbone. Pairs with scripts/train_ngpt_dev_poet.sh.
 experiment:

@@ -95,6 +95,16 @@ if [[ "${USER_SET_SCHED}" == "no" ]]; then
   SCHED_ARGS=("scheduler=cosine_poet")
 fi
 
+# Force the distributed optimizer OFF. POET's optimizer builder rejects the
+# Megatron distributed optimizer unconditionally (src/optim/poet.py
+# get_megatron_poet_optimizer), yet the launcher would otherwise emit
+# --use-distributed-optimizer here because cluster=h100_de sets
+# parallelism.distributed_optimizer=true and the stock-Adam POET path is marked
+# "supported". For ngpt_poet it is doubly wrong: the documented distributed-
+# optimizer support relies on the poet_merge_step momentum reset handling the
+# sharded master, and ngpt_poet drops poet_merge_step (merge_period=0). The
+# cluster config is merged AFTER the experiment YAML, so this override must live
+# here (applied last) rather than in configs/experiments/arch/ngpt_poet.yaml.
 RUN=(python -m launchers.train_megatron \
   "base/family=${FAMILY}" \
   "${SCALE_ARGS[@]}" \
@@ -107,6 +117,7 @@ RUN=(python -m launchers.train_megatron \
   "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
   "base.model.tie_embeddings=false" \
+  "parallelism.distributed_optimizer=false" \
   "wandb.project=slm-zeju-dev" \
   "$@")
 if [[ "${SLM_DRYRUN_PRINT:-0}" == "1" ]]; then
