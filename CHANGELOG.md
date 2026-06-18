@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added — Nemotron-H Muon dev launcher (2026-06-18)
+
+- New `scripts/train_nemotron_dev_muon.sh`: the Nemotron-H hybrid trained with the
+  vendored Kimi/Moonlight Muon optimizer (`experiment=optim/muon_kimi`) instead of
+  Adam. Mirrors `train_nemotron_dev.sh` line-for-line except the experiment, so the
+  Adam-vs-Muon ablation is comparable on the same hybrid backbone (60m default,
+  scale-dependent mbs, TE impl, tied embeddings, `ablation_40x`, gbs 1024, dev
+  wandb). Unlike POET, `muon_kimi` does not require `transformer_impl=local` (no
+  impl gating — it splits the fused linears via `model_unfuse_linears` +
+  `--unfuse-qkv`/`--unfuse-fc1`), so the mamba-mandatory TE impl is kept.
+- EXPERIMENTAL — Muon on the hybrid Mamba path is unvalidated; whether Muon
+  meaningfully covers the TE attention layers and the Mamba mixer in/out
+  projections needs a GPU smoke before the loss is trusted. `muon_kimi` is
+  single-process (raises on TP/PP), so tp=pp=1 (the dev scales already are).
+- Verified via the real `launchers.train_megatron --dry-run`: resolves with no
+  `PatchConflict`, routes to `pretrain_mamba_slm`, and emits `--slm-optimizer
+  muon_kimi` + `--muon-*` alongside `--unfuse-qkv`/`--unfuse-fc1` +
+  `--hybrid-layer-pattern` + `--spec ... mamba_stack_spec`.
+
 ### Fixed — POET never requests the Megatron distributed optimizer (2026-06-18)
 
 - `_distributed_optimizer_supported` (`src/utils/megatron_args.py`) now returns
