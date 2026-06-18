@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added — Nemotron-H dev launcher (2026-06-18)
+
+- New `scripts/train_nemotron_dev.sh`: dev launcher for the Nemotron-H family
+  (`base/family=nemotron_h`, the Mamba2/attention/MLP hybrid, arXiv:2504.03624),
+  modeled on `train_ngpt_dev.sh` (auto-source CUDA env, inject scale+regime
+  defaults, `SLM_DRYRUN_PRINT` dry-run, dev wandb `slm-zeju-dev`, `experiment=
+  optim/adam`, `training_regime=ablation_40x`, any `"$@"` override wins). The
+  first positional arg selects the scale rung (`600m` → `600m_nemotron_h`,
+  `1b` → `1b_nemotron_h`; default 600m), since the bake-off is the only place
+  these scales were wired up.
+- Deliberately diverges from the llama3 dev template on the hybrid Mamba path:
+  drops `transformer_impl=local` (the mamba stack spec is built from TE layers;
+  unset → Megatron's `transformer_engine` default, matching
+  `train_bakeoff_600m.sh`), drops the forced `tie_embeddings=false` (nemotron
+  scale configs tie embeddings), and uses `micro_batch_size=4` instead of 128
+  (128 OOMs the 600M hybrid at seq 4096 on 80GB). Rejects `--backend torchtitan`
+  (AdamW-only, no Mamba).
+- Verified all paths via `SLM_DRYRUN_PRINT=1`: 600m/1b scale selection, trailing
+  Hydra overrides last-winning (e.g. `seq_length=8192`, `micro_batch_size=2`),
+  passthrough with no scale token, and exit-2 on unknown scale / torchtitan.
+
 ### Added — nGPT-with-Muon and nGPT-with-POET dev launchers (2026-06-18)
 
 - New `scripts/train_ngpt_dev_muon.sh` and `scripts/train_ngpt_dev_poet.sh`:
