@@ -107,13 +107,18 @@ def should_log(iteration: int, interval: int, *, poet: bool, merge_period: int) 
 
 
 def _summary(vec) -> dict:
-    """mean/std/min/max of a 1-D tensor as Python floats."""
-    n = vec.numel()
+    """Mean of a 1-D tensor as a Python float.
+
+    Only the mean is logged: min/max/std are commented out to cut W&B metric
+    volume 4x (one scalar per kind instead of four). The per-layer RMS histogram
+    still captures the full distribution shape, so the spread is not lost.
+    """
+    # n = vec.numel()
     return {
         "mean": vec.mean().item(),
-        "std": vec.std(unbiased=False).item() if n > 1 else 0.0,
-        "min": vec.min().item(),
-        "max": vec.max().item(),
+        # "std": vec.std(unbiased=False).item() if n > 1 else 0.0,
+        # "min": vec.min().item(),
+        # "max": vec.max().item(),
     }
 
 

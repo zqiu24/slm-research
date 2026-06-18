@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed — weight_norm_monitor logs mean only (2026-06-18)
+
+- `_summary` in `src/patches/weight_norm_monitor.py` now emits only the `mean`
+  of each row/col(-RMS) norm vector; `min`/`max`/`std` are commented out to cut
+  W&B scalar volume 4x per matrix. The per-layer RMS histograms still capture the
+  full distribution, so spread is not lost. W&B keys reduce to
+  `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean`. Tests updated.
+
 ### Added — Nemotron-H Muon dev launcher (2026-06-18)
 
 - New `scripts/train_nemotron_dev_muon.sh`: the Nemotron-H hybrid trained with the
