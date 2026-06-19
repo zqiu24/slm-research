@@ -1,6 +1,14 @@
 """The shared active-side signal: one iteration int, read by layer/optimizer/merge."""
 
+import pytest
 from poet_torch import alt_state
+
+
+@pytest.fixture(autouse=True)
+def _reset_fixed_side():
+    alt_state.set_fixed_side(None)
+    yield
+    alt_state.set_fixed_side(None)
 
 
 def test_default_iteration_is_zero():
@@ -26,3 +34,27 @@ def test_alternate_every_below_one_is_treated_as_one():
     alt_state.set_iteration(1)
     assert alt_state.active_side(0) == "in"
     assert alt_state.active_side(-5) == "in"
+
+
+def test_fixed_side_pins_active_side_regardless_of_iteration():
+    alt_state.set_fixed_side("in")
+    for it in (0, 1, 2, 3, 100):
+        alt_state.set_iteration(it)
+        assert alt_state.active_side(1) == "in"
+    alt_state.set_fixed_side("out")
+    for it in (0, 1, 2, 3, 100):
+        alt_state.set_iteration(it)
+        assert alt_state.active_side(1) == "out"
+
+
+def test_clearing_fixed_side_restores_toggle():
+    alt_state.set_fixed_side("in")
+    alt_state.set_fixed_side(None)
+    for it, expected in [(0, "out"), (1, "in"), (2, "out")]:
+        alt_state.set_iteration(it)
+        assert alt_state.active_side(1) == expected
+
+
+def test_set_fixed_side_rejects_invalid():
+    with pytest.raises(ValueError, match="fixed_side"):
+        alt_state.set_fixed_side("left")
