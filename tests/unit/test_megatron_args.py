@@ -1347,3 +1347,70 @@ def test_poet_guard_inert_without_moe():
         }
     )
     assert "--poet" in _optimizer_args(cfg)
+
+
+def _one_sided_cfg(side):
+    return _poet_cfg(
+        {
+            "block_count": 1,
+            "merge_period": 1,
+            "parameterization": "cayley",
+            "q_optimizer": "lie_ortho",
+            "single_step_fast": True,
+            "single_step_x": True,
+            "single_step_x_alternating": False,
+            "lie_alternating": False,
+            "train_output_rotation": True,
+            "single_step_x_one_sided": side,
+        }
+    )
+
+
+def test_one_sided_emits_flag_when_valid():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_one_sided_cfg("in"))
+    assert "--poet-single-step-x-one-sided" in args
+    assert args[args.index("--poet-single-step-x-one-sided") + 1] == "in"
+
+
+def test_one_sided_omitted_when_unset():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {"block_count": 1, "merge_period": 1, "single_step_x": True, "q_optimizer": "lie_ortho"}
+        )
+    )
+    assert "--poet-single-step-x-one-sided" not in args
+
+
+def test_one_sided_requires_single_step_x():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = _one_sided_cfg("in")
+    cfg.optim.poet.single_step_x = False
+    with pytest.raises(ValueError, match="single_step_x_one_sided"):
+        _optimizer_args(cfg)
+
+
+def test_one_sided_mutually_exclusive_with_alternating():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = _one_sided_cfg("out")
+    cfg.optim.poet.single_step_x_alternating = True
+    with pytest.raises(ValueError, match="single_step_x_one_sided"):
+        _optimizer_args(cfg)
+
+
+def test_one_sided_rejects_bad_value():
+    import pytest
+
+    from src.utils.megatron_args import _optimizer_args
+
+    with pytest.raises(ValueError, match="single_step_x_one_sided"):
+        _optimizer_args(_one_sided_cfg("left"))

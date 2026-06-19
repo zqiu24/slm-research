@@ -124,6 +124,11 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # True single-side alternating POETX (dedicated AlternatingPOETXLinear subclass).
     # Requires --poet-single-step-x; trains one rotation side per step.
     group.add_argument("--poet-single-step-x-alternating", action="store_true")
+    # Pure one-sided POETX: train ONE fixed rotation side for the whole run.
+    # "in" = InOnlyPOETXLinear (only oft_R_in), "out" = OutOnlyPOETXLinear (only
+    # oft_R_out). Requires --poet-single-step-x; mutually exclusive with the
+    # alternating layer. Default (absent) = off.
+    group.add_argument("--poet-single-step-x-one-sided", choices=["in", "out"], default=None)
     # Group MoE experts into a single batched POETX layer (grouped POETX).
     # Orthogonal to moe.grouped_gemm; requires SequentialMLP experts (not grouped-gemm).
     group.add_argument("--poet-group-experts", action="store_true")

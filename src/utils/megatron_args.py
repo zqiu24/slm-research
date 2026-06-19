@@ -470,6 +470,44 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                     "optim.poet.single_step_x_alternating is mutually exclusive with "
                     "lie_alternating (pick one alternating path, not both)."
                 )
+        one_sided = poet.get("single_step_x_one_sided", None)
+        if one_sided is not None:
+            if one_sided not in ("in", "out"):
+                raise ValueError(
+                    f"optim.poet.single_step_x_one_sided must be 'in' or 'out', got {one_sided!r}."
+                )
+            if not poet.get("single_step_x", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_one_sided requires single_step_x=true "
+                    "(the one-sided layer is a POETX subclass)."
+                )
+            if merge_period != 1:
+                raise ValueError("optim.poet.single_step_x_one_sided requires merge_period=1.")
+            if poet.get("parameterization", "cayley") != "cayley":
+                raise ValueError(
+                    "optim.poet.single_step_x_one_sided requires parameterization=cayley."
+                )
+            if poet.get("q_optimizer", "adam") != "lie_ortho":
+                raise ValueError(
+                    "optim.poet.single_step_x_one_sided requires q_optimizer=lie_ortho."
+                )
+            if poet.get("head_aligned_attn", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_one_sided is incompatible with head_aligned_attn=true."
+                )
+            if poet.get("single_step_x_alternating", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_one_sided is mutually exclusive with "
+                    "single_step_x_alternating."
+                )
+            if poet.get("lie_alternating", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_one_sided is mutually exclusive with lie_alternating."
+                )
+            if poet.get("group_experts", False):
+                raise ValueError(
+                    "optim.poet.single_step_x_one_sided does not support group_experts=true."
+                )
         # block_count (decoupled block sizes) takes precedence over block_size.
         block_count = poet.get("block_count", None)
         if block_count is not None:
@@ -571,6 +609,10 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
         # store_true: dedicated true-single-side alternating POETX layer.
         if poet.get("single_step_x_alternating", False):
             poet_args.append("--poet-single-step-x-alternating")
+        # Pure one-sided POETX layer (train one fixed rotation side for the run).
+        if poet.get("single_step_x_one_sided", None) is not None:
+            poet_args.append("--poet-single-step-x-one-sided")
+            poet_args.append(str(poet.get("single_step_x_one_sided")))
         # store_true: group MoE experts into a single batched POETX layer.
         if poet.get("group_experts", False):
             poet_args.append("--poet-group-experts")
