@@ -8,7 +8,9 @@
   Muon at 60m. Headline — with no weight decay POET keeps `row_rms/col_rms` mean
   ~flat (~1.08x over 9155 steps) while Adam/Muon grow ~3.2–3.4x; orthogonal
   rotations preserve the Frobenius norm, so POET is self-regularizing. Includes the
-  matched (wd=0, raw-init) trio, wd=0.1 context, per-type breakdown, and repro cmds.
+  matched (wd=0, raw-init) trio, a wd=0 vs wd=0.1 effect table for Adam/Muon
+  (decay trims final norm ~20% and turns monotonic growth into a plateau, but
+  neither matches POET), per-type breakdown, and repro cmds.
 
 ### Changed — weight_norm_monitor logs mean only (2026-06-18)
 

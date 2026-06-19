@@ -445,13 +445,33 @@ averaged over first/mid/last layers and all matrix types, at step 100 → 9100:
 | **Adam** (wd 0) | 0.0160 | 0.0280 | 0.0420 | 0.0505 | **0.0517** | **3.23×** |
 | **Muon** (wd 0) | 0.0166 | 0.0335 | 0.0477 | 0.0551 | **0.0562** | **3.39×** |
 
-**Context — weight decay on, and POET's normalized init.**
+**Effect of adding weight decay (Adam & Muon).** `row_rms/mean`, step 100 → 9100,
+wd=0 vs wd=0.1 head-to-head:
+
+| optimizer | wd | start | @1k | @3k | @6k | final | growth | Δfinal vs wd=0 |
+|---|---|---|---|---|---|---|---|---|
+| Adam | 0.0 | 0.0160 | 0.0280 | 0.0420 | 0.0505 | 0.0517 | 3.23× | — |
+| Adam | 0.1 | 0.0159 | 0.0264 | 0.0368 | 0.0409 | 0.0403 | 2.54× | **−22%** |
+| Muon | 0.0 | 0.0166 | 0.0335 | 0.0477 | 0.0551 | 0.0562 | 3.39× | — |
+| Muon | 0.1 | 0.0165 | 0.0322 | 0.0430 | 0.0464 | 0.0457 | 2.77× | **−19%** |
+
+- **Decay trims the final per-element RMS ~20%** for both (Adam −22%, Muon −19%) —
+  but neither comes near POET's flat line; even decayed they still grow **~2.5–2.8×**
+  from init. So decoupled weight decay does real, measurable work, yet doesn't
+  replicate POET's intrinsic norm preservation.
+- **It also changes the *shape*, not just the level.** With wd=0 the norm rises
+  monotonically and is **still climbing at the end** (Adam 0.0505 @6k → 0.0517;
+  Muon 0.0551 → 0.0562). With wd=0.1 it reaches a **quasi-equilibrium mid-run and
+  slightly recedes** as the LR cosine-decays (Adam peaks ~0.041 @6k → 0.0403; Muon
+  ~0.046 → 0.0457). Decay converts unbounded growth into a bounded plateau — the
+  classic decoupled-decay ↔ effective-norm-target behavior.
+
+**POET's normalized init (wd 0), for reference** — flat regardless of starting point:
 
 | run | start | final | growth |
 |---|---|---|---|
-| Adam (wd 0.1) | 0.0159 | 0.0403 | 2.54× |
-| Muon (wd 0.1) | 0.0165 | 0.0457 | 2.77× |
-| POET (norm init, wd 0) | 0.0416 | 0.0440 | 1.06× (flat) |
+| POET (norm init) | 0.0416 | 0.0440 | 1.06× (flat) |
+| POET (raw init) | 0.0146 | 0.0158 | 1.08× (flat) |
 
 **Per-type final `row_rms/mean` (wd=0 trio).** POET stays near its (type-dependent)
 init; Adam/Muon inflate every type to a common ~0.045–0.060 band:
