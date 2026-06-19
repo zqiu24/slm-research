@@ -15,13 +15,13 @@
 #   normalized init, llama3-60m, 40 tokens/param (ablation_40x), seq 256, global batch 1024.
 #
 # SWEPT (6 x 2 x 2 = 24):
-#   optim.lr               in {1e-3, 2e-3, 3e-3, 4e-3, 5e-3, 6e-3}  (ALSO the AdamW dense LR)
+#   optim.lr               in {3e-3, 4e-3, 5e-3, 6e-3, 1e-2, 2e-2}  (ALSO the AdamW dense LR)
 #   optim.poet.lie_ortho_c in {4, 8}                                 (per-plane angle multiplier)
 #   optim.poet.scale       in {0.5, 1.0}                             (scales ONLY the rotation LR)
 #
 # Realized rotation angle of the TRAINED side  eff∠ = optim.lr * scale * lie_ortho_c
 # (muon band ~0.75-1.0x). Known both-sides ceiling: eff∠ ~0.012 best+stable, >= ~0.016
-# diverges — the high-angle cells here (up to 0.006*1.0*8 = 0.048) are boundary probes
+# diverges — the high-angle cells here (up to 0.02*1.0*8 = 0.16) are boundary probes
 # and may diverge; codexlog does NOT abort the rest of the grid when one run fails. One
 # point of this sweep is to learn whether the one-sided angle ceiling differs.
 
@@ -51,7 +51,7 @@ codexlog() {
   echo "<<< END   ${name}  (status ${PIPESTATUS[0]})  $(date '+%F %T')"
 }
 
-LRS=(0.001 0.002 0.003 0.004 0.005 0.006)
+LRS=(0.003 0.004 0.005 0.006 0.01 0.02)
 CS=(4 8)
 SCALES=(0.5 1.0)
 
