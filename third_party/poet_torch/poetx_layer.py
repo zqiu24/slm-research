@@ -210,3 +210,48 @@ class AlternatingPOETXLinear(POETXLinear):
             self.rows_in, self.cols_in, self.rows_out, self.cols_out,
             self.block_size_in, self.block_size_out, active,
         )
+
+
+class OneSidedPOETXLinear(POETXLinear):
+    """POETX layer that trains ONE FIXED rotation side for the whole run.
+
+    side="in" trains only oft_R_in; side="out" only oft_R_out. The frozen side's
+    oft_R stays at its 0 init (identity) -- its forward rotation, backward
+    gradient, momentum, and merge fold are all short-circuited (the forward reuses
+    AlternatingPOETXSingleStepFunction with a CONSTANT active side). Unlike
+    AlternatingPOETXLinear the side never toggles, so the momentum-staleness
+    regression does not apply: the trained side's momentum advances and applies
+    every step.
+
+    alternating=True routes the merge driver to the active-only fold; the active
+    side is pinned globally via alt_state.set_fixed_side(side) at apply time, so the
+    optimizer (true_single_side) and merge agree with this layer's fixed forward.
+    """
+
+    def __init__(self, *args, side: str, alternate_every: int = 1, **kwargs):
+        if side not in ("in", "out"):
+            raise ValueError(f"side must be 'in' or 'out', got {side!r}")
+        super().__init__(*args, alternating=True, alternate_every=alternate_every, **kwargs)
+        self.side = side
+
+    def forward(self, x):
+        return AlternatingPOETXSingleStepFunction.apply(
+            x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
+            self.perm_in_inv, self.perm_out_inv,
+            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+            self.block_size_in, self.block_size_out, self.side,
+        )
+
+
+class InOnlyPOETXLinear(OneSidedPOETXLinear):
+    """OneSidedPOETXLinear pinned to the input side (trains only oft_R_in)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, side="in", **kwargs)
+
+
+class OutOnlyPOETXLinear(OneSidedPOETXLinear):
+    """OneSidedPOETXLinear pinned to the output side (trains only oft_R_out)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, side="out", **kwargs)
