@@ -308,6 +308,7 @@ def replace_linears_with_poet(
     single_step_native: bool = False,
     single_step_x: bool = False,
     single_step_x_alternating: bool = False,
+    single_step_x_one_sided: str | None = None,
     lie_alternating: bool = False,
     alternate_every: int = 1,
     group_experts: bool = False,
@@ -451,7 +452,25 @@ def replace_linears_with_poet(
 
                 has_bias = child.bias is not None and child.bias.numel() > 0
                 if cache_mode == "none":
-                    if single_step_x and single_step_x_alternating:
+                    if single_step_x and single_step_x_one_sided is not None:
+                        from poet_torch import InOnlyPOETXLinear, OutOnlyPOETXLinear
+
+                        _PoetCls = (  # noqa: N806
+                            InOnlyPOETXLinear
+                            if single_step_x_one_sided == "in"
+                            else OutOnlyPOETXLinear
+                        )
+                        pl = _PoetCls(
+                            in_features=in_f,
+                            out_features=out_f,
+                            bias=has_bias,
+                            device=child.weight.device,
+                            dtype=child.weight.dtype,
+                            parameterization=parameterization,
+                            alternate_every=alternate_every,
+                            **block_kwargs,
+                        )
+                    elif single_step_x and single_step_x_alternating:
                         from poet_torch import AlternatingPOETXLinear as _PoetCls
 
                         pl = _PoetCls(

@@ -679,3 +679,56 @@ def test_head_aligned_legacy_built_without_single_step_x():
         head_dim=8,
     )
     assert isinstance(m.linear_q.poet_linear, HeadAlignedPOETLinear)
+
+
+def test_replace_with_one_sided_in_builds_in_only_layers():
+    import torch.nn as nn
+    from poet_torch import InOnlyPOETXLinear, OutOnlyPOETXLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8, bias=False)
+
+    m = M()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_x=True,
+        single_step_x_one_sided="in",
+    )
+    assert isinstance(m.fc1, POETMegatronLinear)
+    pl = m.fc1.poet_linear
+    assert isinstance(pl, InOnlyPOETXLinear)
+    assert not isinstance(pl, OutOnlyPOETXLinear)
+    assert pl.side == "in"
+
+
+def test_replace_with_one_sided_out_builds_out_only_layers():
+    import torch.nn as nn
+    from poet_torch import OutOnlyPOETXLinear
+
+    from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
+
+    class M(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.fc1 = nn.Linear(8, 8, bias=False)
+
+    m = M()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        single_step_x=True,
+        single_step_x_one_sided="out",
+    )
+    assert isinstance(m.fc1, POETMegatronLinear)
+    pl = m.fc1.poet_linear
+    assert isinstance(pl, OutOnlyPOETXLinear)
+    assert pl.side == "out"
