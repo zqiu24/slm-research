@@ -68,8 +68,14 @@ def _apply_poet_to_chunk(m, args) -> int:
     single_step_native = getattr(args, "poet_single_step_native", False)
     single_step_x = getattr(args, "poet_single_step_x", False)
     single_step_x_alternating = getattr(args, "poet_single_step_x_alternating", False)
+    single_step_x_one_sided = getattr(args, "poet_single_step_x_one_sided", None)
     lie_alternating = getattr(args, "poet_lie_alternating", False)
     alternate_every = getattr(args, "poet_lie_alternate_every", 1)
+    # One-sided POET: pin the shared active-side signal so the optimizer write side
+    # (true_single_side) and the merge fold side both target the fixed side.
+    from poet_torch import alt_state
+
+    alt_state.set_fixed_side(single_step_x_one_sided)
     head_resid_block_count = getattr(args, "poet_head_resid_block_count", 1)
     group_experts = getattr(args, "poet_group_experts", False)
     head_dim = getattr(args, "kv_channels", None)
@@ -92,6 +98,7 @@ def _apply_poet_to_chunk(m, args) -> int:
         single_step_native=single_step_native,
         single_step_x=single_step_x,
         single_step_x_alternating=single_step_x_alternating,
+        single_step_x_one_sided=single_step_x_one_sided,
         lie_alternating=lie_alternating,
         alternate_every=alternate_every,
         group_experts=group_experts,
