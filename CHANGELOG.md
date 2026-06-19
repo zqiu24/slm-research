@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Docs — POET_dev.md weight-norm results (2026-06-19)
+
+- Added §2.7 to `POET_dev.md`: weight-norm monitoring results for POET vs Adam vs
+  Muon at 60m. Headline — with no weight decay POET keeps `row_rms/col_rms` mean
+  ~flat (~1.08x over 9155 steps) while Adam/Muon grow ~3.2–3.4x; orthogonal
+  rotations preserve the Frobenius norm, so POET is self-regularizing. Includes the
+  matched (wd=0, raw-init) trio, wd=0.1 context, per-type breakdown, and repro cmds.
+
 ### Changed — weight_norm_monitor logs mean only (2026-06-18)
 
 - `_summary` in `src/patches/weight_norm_monitor.py` now emits only the `mean`

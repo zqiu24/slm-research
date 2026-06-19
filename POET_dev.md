@@ -1,6 +1,6 @@
 # POET: Parameter-Efficient Orthogonal Training
 
-> **Last updated: 2026-06-17.** Part 1 below is the conceptual reference (math,
+> **Last updated: 2026-06-19.** Part 1 below is the conceptual reference (math,
 > kernel, cache). For the living status of every implemented modification, which
 > designs actually help, and the best-run leaderboard, jump to
 > **[Part 2 — Modifications & results tracker](#part-2--modifications--results-tracker)**.
@@ -403,7 +403,105 @@ codexlog poet_best_grid bash scripts/train_poet_lie_orth.sh llama3 \
 | head-aligned | [poet_h_noperm_rms_c8-…20260605T112512Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_h_noperm_rms_c8-llama3-60m-s42-20260605T112512Z) | 3.6536 | 38.61 | lr 1e-3, c=8, noperm |
 | poet (vanilla) | `runs/poet-llama3-60m-s42-*` | ≈3.70 | ≈40.6 | lr 1e-3, merge_period 400 |
 
-## 2.7 How to update this tracker
+## 2.7 Weight-norm monitoring — POET vs Adam vs Muon (no weight decay)
+
+**Question.** POET trains with **no weight decay**, yet applies *both* a left
+($R_\text{out}$) and right ($R_\text{in}$) rotation around a frozen base. Does the
+effective weight $W_\text{eff}=R_\text{out}\,W_0\,R_\text{in}$ grow in norm over
+training, and how does that compare to additive optimizers (Adam / Muon) with and
+without decoupled weight decay?
+
+**How measured.** The `weight_norm_monitor` patch
+([src/patches/weight_norm_monitor.py](/lustre/fast/fast/zqiu/slm-research/src/patches/weight_norm_monitor.py))
+logs, per selected layer (`first,mid,last`) and matrix type, the **mean** of the
+per-row and per-column **RMS** norms of the *post-step* weight
+([compute_matrix_norm_stats](/lustre/fast/fast/zqiu/slm-research/src/patches/weight_norm_monitor.py#L125-L150)):
+`row_rms = ‖W[i,:]‖₂ / √in`, `col_rms = ‖W[:,j]‖₂ / √out`. The `/√dim` divides out
+matrix width so different-shaped matrices are comparable (≈ per-element weight std).
+For POET the weight is read **post-merge** (`merge_period=1` ⇒ base `== W_eff` every
+step). `row_rms ≈ col_rms` in every run (growth is symmetric between input/output
+sides), so only `row_rms` is quoted. Enable per-run with
+`training.log_weight_norms=true training.log_weight_norms_interval=100`.
+
+**Runs.** 60m / llama3 / `ablation_40x` (9155 steps) / lr 1e-3 / seed 42. All use
+`--unfuse-qkv`/`--unfuse-fc1`, so types are `q,k,v,proj,fc1_gate,fc1_up,fc2`. POET =
+`poet_lie_orth` (single-step, `merge_period=1`, cayley, `q_optimizer=lie_ortho`).
+
+| run | optimizer | wd | base init | dir |
+|---|---|---|---|---|
+| POET (raw init) | poet | 0.0 | `init_type=none` (raw Megatron 0.02) | [poet_lie_orth-…125743Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_orth-llama3-60m-s42-20260618T125743Z) |
+| POET (norm init) | poet | 0.0 | `init_type=normalized` (unit row-norm) | [poet_lie_orth-…122249Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_lie_orth-llama3-60m-s42-20260618T122249Z) |
+| Adam | adamw | 0.0 | raw 0.02 | [adam-…133519Z](/lustre/fast/fast/zqiu/slm-research/runs/adam-llama3-60m-s42-20260618T133519Z) |
+| Adam | adamw | 0.1 | raw 0.02 | [adam-…122414Z](/lustre/fast/fast/zqiu/slm-research/runs/adam-llama3-60m-s42-20260618T122414Z) |
+| Muon | muon_kimi | 0.0 | raw 0.02 | [muon_kimi-…134627Z](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260618T134627Z) |
+| Muon | muon_kimi | 0.1 | raw 0.02 | [muon_kimi-…131357Z](/lustre/fast/fast/zqiu/slm-research/runs/muon_kimi-llama3-60m-s42-20260618T131357Z) |
+
+**Result — matched (wd=0, raw init): the fair comparison.** `row_rms/mean`,
+averaged over first/mid/last layers and all matrix types, at step 100 → 9100:
+
+| run | start | @1k | @3k | @6k | final | growth |
+|---|---|---|---|---|---|---|
+| **POET** (raw init) | 0.0146 | 0.0151 | 0.0155 | 0.0157 | **0.0158** | **1.08×** (flat) |
+| **Adam** (wd 0) | 0.0160 | 0.0280 | 0.0420 | 0.0505 | **0.0517** | **3.23×** |
+| **Muon** (wd 0) | 0.0166 | 0.0335 | 0.0477 | 0.0551 | **0.0562** | **3.39×** |
+
+**Context — weight decay on, and POET's normalized init.**
+
+| run | start | final | growth |
+|---|---|---|---|
+| Adam (wd 0.1) | 0.0159 | 0.0403 | 2.54× |
+| Muon (wd 0.1) | 0.0165 | 0.0457 | 2.77× |
+| POET (norm init, wd 0) | 0.0416 | 0.0440 | 1.06× (flat) |
+
+**Per-type final `row_rms/mean` (wd=0 trio).** POET stays near its (type-dependent)
+init; Adam/Muon inflate every type to a common ~0.045–0.060 band:
+
+| type | POET (raw) | Adam | Muon |
+|---|---|---|---|
+| q | 0.0216 | 0.0549 | 0.0513 |
+| k | 0.0216 | 0.0540 | 0.0519 |
+| v | 0.0212 | 0.0449 | 0.0587 |
+| proj | 0.0078 | 0.0457 | 0.0523 |
+| fc1_gate | 0.0220 | 0.0549 | 0.0602 |
+| fc1_up | 0.0079 | 0.0550 | 0.0597 |
+| fc2 | 0.0080 | 0.0526 | 0.0592 |
+
+**Interpretation.**
+
+- **POET does not grow the effective-weight norm, even with no weight decay**
+  (~1.06–1.08× over 9000 steps, independent of init scheme), vs **~3.2–3.4× for
+  Adam/Muon**. POET behaves as if strongly weight-decayed without any decay term.
+- **Why:** $W_\text{eff}=R_\text{out}W_0R_\text{in}$ with $W_0$ frozen and $R$
+  orthogonal (Cayley / Muon-orthogonalized). Orthogonal rotations preserve the
+  Frobenius norm, so the merged weight's per-element RMS is pinned near $W_0$'s
+  init. The norm constraint is **baked into the parameterization**, which is why
+  POET needs no weight decay.
+- **Decoupled weight decay does real work for the additive optimizers** but doesn't
+  match POET: Adam 0.052 (wd0) → 0.040 (wd0.1); Muon 0.056 → 0.046. Even *with*
+  decay they grow ~2.5–2.8×.
+- **Muon grows slightly more than Adam** at matched wd=0 (3.39× vs 3.23×).
+- **`row_rms ≈ col_rms` everywhere** ⇒ for POET, neither the left ($R_\text{out}$,
+  rows) nor the right ($R_\text{in}$, cols) rotation lopsidedly inflates the
+  effective weight — both stay norm-preserving, as the orthogonal-rotation theory
+  predicts. No left/right asymmetry observed.
+
+**Repro (8-GPU node).** Same three overrides on each optimizer's dev launcher; POET
+uses `optim.poet.init_type=none` to match Adam/Muon's raw init, and `_nowd` runs add
+`optim.weight_decay=0.0`:
+
+```bash
+bash scripts/train_poet_dev.sh experiment=optim/poet_lie_orth optim.poet.init_type=none \
+  training.log_weight_norms=true training.log_weight_norms_interval=100 training.weight_norm_layers=first,mid,last
+bash scripts/train_adam_dev.sh optim.weight_decay=0.0 \
+  training.log_weight_norms=true training.log_weight_norms_interval=100 training.weight_norm_layers=first,mid,last
+bash scripts/train_muon_dev.sh optim.weight_decay=0.0 \
+  training.log_weight_norms=true training.log_weight_norms_interval=100 training.weight_norm_layers=first,mid,last
+```
+
+W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
+`weightnorm/L{i}/{row,col}_rms_hist` (mean-only scalars as of 2026-06-18).
+
+## 2.8 How to update this tracker
 
 - **Cohort matters:** only compare runs at the same scale + tokens/param. Everything above is 60m / 40tpp. A 300m or 20x table would be a separate block.
 - **Pull results** from each run's W&B summary: `runs/<dir>/**/wandb-summary.json`, keys `val/loss` / `train/loss` / `val/ppl` / `_step`. Treat `_step < 9000` as crashed/short for this cohort (full run = 9155 steps).
