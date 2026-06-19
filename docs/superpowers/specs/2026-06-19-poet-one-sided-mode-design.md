@@ -1,180 +1,209 @@
-# POET one-sided update mode (`in_only` / `out_only`) — design
+# POET pure one-sided update mode (`in_only` / `out_only`) — design
 
 Date: 2026-06-19
 
 ## Goal
 
-Add a new POET training mode that is **the current best POET config, but only ever
-updates one rotation side** — choosable between **`in_only`** (train only the
-input-side rotation `oft_R_in`) and **`out_only`** (train only the output-side
-rotation `oft_R_out`). Everything else is identical to the champion POET config.
+Add a POET mode that trains **exactly one rotation side for the whole run** —
+choosable between **`in_only`** (train only the input-side rotation `oft_R_in`) and
+**`out_only`** (train only the output-side rotation `oft_R_out`). It is a *pure*
+single-sided update: the frozen side's forward rotation, backward gradient, optimizer
+momentum, and merge fold are all short-circuited. Everything else matches the champion
+single-side POET recipe.
 
-This is a research/ablation mode: "what if we rotate only one side of every linear
-for the whole run?" It is *not* a speed play (that is the regressed
-`single_step_x_alternating` story); fidelity to the champion path matters more than
-skipping the frozen side's compute.
+This is a research/ablation mode: "what if we rotate only one side of every linear,
+fixed, for the whole run?"
 
-## Baseline ("cham poet") being cloned
+## Background: the existing pieces this builds on
 
-[`configs/experiments/optim/poet_lie_orth_alt.yaml`](../../../configs/experiments/optim/poet_lie_orth_alt.yaml)
-— the integrated alternating POETX champion:
+`poet_lie_orth_alt_x` (config
+[`poet_lie_orth_alt_x.yaml`](../../../configs/experiments/optim/poet_lie_orth_alt_x.yaml))
+already does a *per-step* pure single-side update:
 
-- `single_step_x: true` (plain `POETXLinear` forward-frame layer; feeds **both**
-  rotation grads every forward/backward)
-- `single_step_x_alternating: false` (NOT the dedicated true-single-side layer)
-- `lie_alternating: true`, `lie_alternate_every: 1`
-- `q_optimizer: lie_ortho` (Muon NS, `lie_ortho_c: 8`, 5 NS steps, distributed)
-- `lr 3e-3`, `block_count 1`, `merge_period 1`, `reinit_period -1`, `scale 0.5`,
-  `parameterization cayley`, `train_output_rotation: true`
-- `base.model.unfuse_qkv: true`, `unfuse_fc1: true`
+- [`AlternatingPOETXLinear`](../../../third_party/poet_torch/poetx_layer.py) forward
+  computes **only the active side's** rotation; its backward
+  (`AlternatingPOETXSingleStepFunction`) **zeros the frozen side's gradient**.
+- the `lie_ortho` optimizer with `true_single_side=True` **skips the frozen side's
+  momentum** ([`poet_lie_orth.py:117`](../../../src/optim/poet_lie_orth.py)) and writes
+  only the active side ([`poet_lie_orth.py:171`](../../../src/optim/poet_lie_orth.py)).
+- the merge folds **only the active side**
+  ([`poet_merge_step.py:608-612`](../../../src/patches/poet_merge_step.py)).
 
-In this path the **active rotation side toggles** out/in by iteration, while both Lie
-momenta advance every step and both grads are fed by the layer.
+All three read the active side from one source of truth,
+[`alt_state.active_side()`](../../../third_party/poet_torch/alt_state.py), which today
+*toggles* `out`/`in` by iteration.
 
-## Key insight: one source of truth for "active side"
+`AlternatingPOETXLinear`'s docstring warns it "regressed quality" — but that was caused
+by **alternating** (a side's momentum goes stale while it is idle, and the other side
+moves `W` in between), **not** by single-sidedness. **When the side is fixed, that
+regression cannot occur**: the trained side's momentum advances and applies every step
+(a clean Muon-on-one-side), and the frozen side never moves `W`.
 
-The active side is a single shared signal —
-[`third_party/poet_torch/alt_state.py`](../../../third_party/poet_torch/alt_state.py)
-`active_side(alternate_every)` — read by exactly the places that matter for the
-integrated path:
+## Design (chosen): dedicated one-sided layer classes + pinned side
 
-- the optimizer's **write** side:
-  [`poet_lie_orth.py:99-109`](../../../src/optim/poet_lie_orth.py) `_active_side()`,
-  and the buffer write guard `if active is not None and group["side"] != active: continue`
-  at [`poet_lie_orth.py:171`](../../../src/optim/poet_lie_orth.py)
-- the merge's **fold** side:
-  [`poet_merge_step.py:606-612`](../../../src/patches/poet_merge_step.py)
-  `pl._fold_active_side(active_side(pl.alternate_every), ...)`
+### Why dedicated classes (not just pinning the alternating layer)
 
-Today `active_side()` toggles `"out"` on even iterations, `"in"` on odd. **The entire
-feature is: pin it to a fixed side.** Because the optimizer write and the merge fold
-both read this one function, pinning it makes the whole mode self-consistent with no
-change to the optimizer or merge code.
+The active side has to be agreed in three places — layer forward, optimizer write, merge
+fold. We make the **layer** self-documenting by baking the side into a dedicated class
+(its forward differentiates a fixed side, never reads the iteration toggle). For the
+**optimizer and merge** we reuse the existing single-source-of-truth: pin
+`alt_state.active_side()` to the fixed side (we deliberately do *not* refactor the merge
+to read a per-layer attribute or the optimizer to read side from param groups — that is a
+larger change for no behavioral gain). Side comes from one config flag, so the layer's
+baked side and the `alt_state` pin are consistent by construction.
 
-When pinned, the frozen side's `oft_R` is never written (stays at its `0` init →
-Cayley(0)=Identity) and never folded into the base weight. The result is that, for the
-entire run, every linear is rotated on exactly one side. Both Lie momenta still advance
-(the integrated `_lie_m_update` advances all skew params regardless of `active` —
-[`poet_lie_orth.py:111-139`](../../../src/optim/poet_lie_orth.py)), and the layer still
-feeds both grads — so the path is bit-identical to the champion except that the side
-never toggles.
+### New layer classes — `third_party/poet_torch/poetx_layer.py`
 
-### Why not reuse `train_output_rotation` (`requires_grad` freeze)?
+```python
+class OneSidedPOETXLinear(POETXLinear):
+    """POETX layer that trains ONE FIXED rotation side for the whole run.
 
-There is an existing single-sided ablation: `train_output_rotation: false` →
-`--poet-freeze-output-rotation` sets `oft_R_out.requires_grad = False`, dropping it from
-the optimizer's param-group split
-([`poet_lie_momentum.py:_split_poet_lie_params`](../../../src/optim/poet_lie_momentum.py)).
-Reusing this (plus a new `train_input_rotation`) composes **badly** with the alternating
-integrated path: the optimizer's `_active_side()` and the merge's `_fold_active_side()`
-would still alternate to a side that now has no grad/param, requiring `lie_alternating`
-to be turned off and falling back to the non-alternating both-sides path. That is no
-longer "everything else the same as cham poet." **Rejected** in favor of pinning
-`alt_state`.
+    side="in" trains only oft_R_in; side="out" only oft_R_out. The frozen side's
+    oft_R stays at its 0 init (identity) -- its forward rotation, backward gradient,
+    momentum, and merge fold are all short-circuited. Unlike AlternatingPOETXLinear
+    the side never toggles, so its momentum-staleness regression does not apply.
 
-## Design (chosen)
+    alternating=True routes the merge driver to the active-only fold; the active
+    side is pinned globally via alt_state.set_fixed_side(side) at apply time so the
+    optimizer (true_single_side) and merge agree with this layer's fixed forward.
+    """
+
+    def __init__(self, *args, side: str, alternate_every: int = 1, **kwargs):
+        if side not in ("in", "out"):
+            raise ValueError(f"side must be 'in' or 'out', got {side!r}")
+        super().__init__(*args, alternating=True, alternate_every=alternate_every, **kwargs)
+        self.side = side
+
+    def forward(self, x):
+        return AlternatingPOETXSingleStepFunction.apply(
+            x, self.oft_R_in, self.oft_R_out, self.weight, self.bias,
+            self.perm_in_inv, self.perm_out_inv,
+            self.rows_in, self.cols_in, self.rows_out, self.cols_out,
+            self.block_size_in, self.block_size_out, self.side,
+        )
+
+
+class InOnlyPOETXLinear(OneSidedPOETXLinear):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, side="in", **kwargs)
+
+
+class OutOnlyPOETXLinear(OneSidedPOETXLinear):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, side="out", **kwargs)
+```
+
+Exported from [`third_party/poet_torch/__init__.py`](../../../third_party/poet_torch/__init__.py)
+next to `AlternatingPOETXLinear`.
 
 ### Config surface
 
-One new POET key, plus two ready-to-run experiment YAMLs (repo's
-one-YAML-per-variant convention).
+One new POET key carries both "enable" and "side":
 
-- `optim.poet.lie_fixed_side: in | out` — default **unset/`null`** = current
-  alternating behavior (no change to existing configs).
-- New experiments cloning `poet_lie_orth_alt.yaml` with only the new key changed:
-  - `configs/experiments/optim/poet_lie_orth_in_only.yaml` → `lie_fixed_side: in`
-  - `configs/experiments/optim/poet_lie_orth_out_only.yaml` → `lie_fixed_side: out`
+- `optim.poet.single_step_x_one_sided: in | out` — default **unset/`null`** = off.
+- Two experiment YAMLs cloning `poet_lie_orth_alt_x.yaml` with
+  `single_step_x_alternating: false` and `single_step_x_one_sided: in` (resp. `out`):
+  - `configs/experiments/optim/poet_lie_orth_in_only.yaml`
+  - `configs/experiments/optim/poet_lie_orth_out_only.yaml`
 
 ### Data flow
 
 ```
-YAML poet.lie_fixed_side: in|out
-  └─ megatron_args._optim_args(kind=poet): validate + emit  --poet-lie-fixed-side {in,out}
-       └─ argparse (launchers/pretrain_gpt_slm.py): args.poet_lie_fixed_side
-            └─ poet_apply_to_model._apply_poet_to_chunk: alt_state.set_fixed_side(args.poet_lie_fixed_side)
-                 └─ alt_state.active_side()  ── returns the pinned side ──┐
-                      ├─ LieOrthMomentum._active_side()  → writes only pinned side, both momenta advance
-                      └─ poet_merge_step  → folds only pinned side; frozen side stays identity forever
+YAML poet.single_step_x_one_sided: in|out
+  └─ megatron_args._optimizer_args(poet): validate + emit --poet-single-step-x-one-sided {in,out}
+       └─ argparse (pretrain_gpt_slm.py): args.poet_single_step_x_one_sided
+            └─ poet_apply_to_model._apply_poet_to_chunk:
+                 ├─ replace_linears_with_poet(single_step_x_one_sided=side)  → In/OutOnlyPOETXLinear
+                 └─ alt_state.set_fixed_side(side)
+            └─ poet.py get_megatron_poet_optimizer:
+                 true_single_side = single_step_x_alternating OR (single_step_x_one_sided is set)
+  alt_state.active_side() == side  ──▶ optimizer write+momentum (true_single_side) & merge fold
 ```
 
-The optimizer and merge are **unchanged** — they already route through `active_side()`.
+### Dispatch — `src/optim/poet_layers.py` `replace_linears_with_poet`
 
-### Components
+New keyword `single_step_x_one_sided: str | None = None`; a branch under `if single_step_x:`
+(so the forward-frame weight conversion at `:517` still runs), before the
+`single_step_x_alternating` branch:
 
-1. **`alt_state.py`** — add a module-level fixed-side override:
-   - `_FIXED_SIDE: str | None = None`
-   - `set_fixed_side(side: str | None)` — validates `side in {None, "in", "out"}`.
-   - `active_side(alternate_every=1)` — `return _FIXED_SIDE if _FIXED_SIDE is not None
-     else <existing toggle>`.
-   - Set once at apply time. Robust across checkpoint resume (re-derived from config,
-     not from iteration parity).
+```python
+if single_step_x and single_step_x_one_sided is not None:
+    from poet_torch import InOnlyPOETXLinear, OutOnlyPOETXLinear
 
-2. **argparse** — [`launchers/pretrain_gpt_slm.py`](../../../launchers/pretrain_gpt_slm.py)
-   near the other `--poet-lie-*` flags (~line 88):
-   `group.add_argument("--poet-lie-fixed-side", choices=["in", "out"], default=None)`.
+    _PoetCls = InOnlyPOETXLinear if single_step_x_one_sided == "in" else OutOnlyPOETXLinear
+    pl = _PoetCls(
+        in_features=in_f, out_features=out_f, bias=has_bias,
+        device=child.weight.device, dtype=child.weight.dtype,
+        parameterization=parameterization, alternate_every=alternate_every, **block_kwargs,
+    )
+elif single_step_x and single_step_x_alternating:
+    ...  # unchanged
+```
 
-3. **`megatron_args.py`** [`_optim_args` poet branch](../../../src/utils/megatron_args.py):
-   - Emit `--poet-lie-fixed-side <v>` only when set.
-   - Validation (in the poet branch): if `lie_fixed_side` is set, require
-     `lie_alternating=true`, `single_step_x=true`, `q_optimizer=lie_ortho`,
-     `merge_period=1`, `parameterization=cayley`, and **mutually exclusive** with
-     `single_step_x_alternating=true`. (These mirror the champion path's own
-     requirements; fail fast otherwise.)
+### Optimizer — `src/optim/poet.py`
 
-4. **`poet_apply_to_model.py`** [`_apply_poet_to_chunk`](../../../src/patches/poet_apply_to_model.py)
-   near where `lie_alternating`/`alternate_every` are read (~line 71): read
-   `getattr(args, "poet_lie_fixed_side", None)` and call
-   `poet_torch.alt_state.set_fixed_side(...)`. (Idempotent across the per-chunk loop.)
+`true_single_side` must be on for the one-sided mode so the frozen momentum is skipped:
 
-5. **optimizer + merge** — **no change** (already read `alt_state.active_side()`).
+```python
+true_single_side=(
+    getattr(config, "poet_single_step_x_alternating", False)
+    or getattr(config, "poet_single_step_x_one_sided", None) is not None
+),
+```
 
-### Two new experiment YAMLs
+`alternating` stays `False` (the YAML sets `lie_alternating: false`). The merge already
+routes one-sided layers to the active-only fold because `OneSidedPOETXLinear.alternating
+== True`.
 
-Byte-for-byte clones of `poet_lie_orth_alt.yaml` with:
-- `experiment.name` → `poet_lie_orth_in_only` / `poet_lie_orth_out_only`
-- updated `experiment.description` (one-sided, fixed side, ablation framing)
-- add `lie_fixed_side: in` (resp. `out`) under `optim.poet`
-- everything else (patches, lr, c, blocks, merge_period, momenta) identical.
+### Validation — `src/utils/megatron_args.py`
+
+When `single_step_x_one_sided` is set: value in `{in, out}`; require `single_step_x=true`,
+`merge_period=1`, `parameterization=cayley`, `q_optimizer=lie_ortho`, `head_aligned_attn=false`;
+mutually exclusive with `single_step_x_alternating=true` and `lie_alternating=true`;
+incompatible with `group_experts=true` (grouped one-sided not implemented). Emit
+`--poet-single-step-x-one-sided <v>` only when set.
 
 ## Testing (CPU only)
 
-All verification here is CPU-runnable; GPU smoke is the user's to run.
-
-- **`tests/unit`** new/extended cases:
-  - `alt_state.set_fixed_side("in"|"out")` makes `active_side()` return the pinned
-    side for several iterations (overrides the toggle); `set_fixed_side(None)` restores
-    the toggle; invalid side raises.
-  - `megatron_args`: `lie_fixed_side` emits `--poet-lie-fixed-side`; validation rejects
-    it without `lie_alternating`/`single_step_x`/`lie_ortho`, and rejects it together
-    with `single_step_x_alternating`.
-  - the two new YAMLs parse and produce the expected argv (extend the existing
-    config→argv test pattern).
-- **`python -m py_compile`** / **`ruff`** on touched files.
-- Reset `_FIXED_SIDE` between tests to avoid global-state bleed (fixture/teardown).
+- **`tests/unit/test_poetx_layer.py`** (or a new `test_one_sided_poetx.py`): construct
+  `InOnlyPOETXLinear`/`OutOnlyPOETXLinear`; after a backward, the frozen side's
+  `oft_R.grad` is all-zeros and the active side's is non-zero; `pl.side` and
+  `pl.alternating is True`; `side` validation raises.
+- **`tests/unit/test_poet_layers.py`**: `replace_linears_with_poet(single_step_x=True,
+  single_step_x_one_sided="in", extra_linear_types=(nn.Linear,))` yields
+  `InOnlyPOETXLinear` leaves (and `"out"` yields `OutOnlyPOETXLinear`).
+- **`tests/unit/test_alt_state.py`**: `set_fixed_side` pins `active_side()`; `None`
+  restores the toggle; invalid raises (with teardown to avoid global bleed).
+- **`tests/unit/test_megatron_args.py`**: emit + validation for
+  `single_step_x_one_sided`; the two new YAMLs parse and emit the flag.
+- `python -m py_compile` / `ruff` on touched files.
 
 ## GPU validation (hand off — user runs)
 
-Provide exact commands to launch `poet_lie_orth_in_only` and `poet_lie_orth_out_only`.
-Expected: training is stable; the frozen side's `oft_R` norm stays exactly 0; one-sided
-val/loss is (as an ablation) somewhat worse than the both-sides champion
-(val/loss ≈ 3.5332) — the comparison is the point of the mode.
+Provide launch commands for `poet_lie_orth_in_only` / `poet_lie_orth_out_only`. Expected:
+stable training at single-side POETX speed; the frozen side's `oft_R` norm stays exactly
+0; one-sided val/loss is the ablation signal (compared to the both-sides champion,
+val/loss ≈ 3.5332, and to the alternating `poet_lie_orth_alt_x`).
 
 ## Out of scope (YAGNI)
 
-- No speed optimization (skipping the frozen side's forward/backward/momentum) — that is
-  the `single_step_x_alternating` path and is explicitly *not* this mode.
-- No support for one-sided on the non-`lie_ortho` / non-POETX paths.
-- No new merge or optimizer code paths.
+- Grouped-expert (`group_experts`) one-sided layers.
+- One-sided on non-`lie_ortho` / non-POETX paths.
+- Refactoring the merge/optimizer to read the side off the layer/param groups (the
+  "full decouple from alt_state" option) — we keep the `alt_state` pin.
 
 ## Touch-point summary
 
 | # | File | Change |
 |---|------|--------|
-| 1 | `third_party/poet_torch/alt_state.py` | `_FIXED_SIDE` + `set_fixed_side()`; honor in `active_side()` |
-| 2 | `launchers/pretrain_gpt_slm.py` | `--poet-lie-fixed-side {in,out}` argparse |
-| 3 | `src/utils/megatron_args.py` | emit flag + validation in poet branch |
-| 4 | `src/patches/poet_apply_to_model.py` | `alt_state.set_fixed_side(args.poet_lie_fixed_side)` |
-| 5 | `configs/experiments/optim/poet_lie_orth_in_only.yaml` | new (clone + `lie_fixed_side: in`) |
-| 6 | `configs/experiments/optim/poet_lie_orth_out_only.yaml` | new (clone + `lie_fixed_side: out`) |
-| 7 | `tests/unit/*` | alt_state override + megatron_args validation/emit + YAML→argv |
-| — | optimizer / merge | **no change** (already route through `active_side()`) |
+| 1 | `third_party/poet_torch/poetx_layer.py` | `OneSidedPOETXLinear` + `InOnlyPOETXLinear`/`OutOnlyPOETXLinear` |
+| 2 | `third_party/poet_torch/__init__.py` | export the new classes |
+| 3 | `third_party/poet_torch/alt_state.py` | `_FIXED_SIDE` + `set_fixed_side()`; honor in `active_side()` |
+| 4 | `src/optim/poet_layers.py` | `single_step_x_one_sided` kwarg + dispatch branch |
+| 5 | `src/optim/poet.py` | `true_single_side` also on for one-sided |
+| 6 | `launchers/pretrain_gpt_slm.py` | `--poet-single-step-x-one-sided {in,out}` argparse |
+| 7 | `src/utils/megatron_args.py` | emit flag + validation |
+| 8 | `src/patches/poet_apply_to_model.py` | pass `single_step_x_one_sided`; `alt_state.set_fixed_side(side)` |
+| 9 | `configs/experiments/optim/poet_lie_orth_in_only.yaml` + `..._out_only.yaml` | new (clone alt_x) |
+| 10 | `docs/experiments/poet_lie_orth_in_only.md` + `..._out_only.md` | new (pre-commit hook) |
+| 11 | `tests/unit/*` | layer + dispatch + alt_state + megatron_args |
