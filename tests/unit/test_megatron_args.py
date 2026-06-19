@@ -1414,3 +1414,33 @@ def test_one_sided_rejects_bad_value():
 
     with pytest.raises(ValueError, match="single_step_x_one_sided"):
         _optimizer_args(_one_sided_cfg("left"))
+
+
+def test_in_only_yaml_emits_one_sided_in():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=600m",
+            "experiment=optim/poet_lie_orth_in_only",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    m = _args_to_map(build_megatron_args(cfg))
+    assert m["--poet-single-step-x-one-sided"] == "in"
+    assert m["--poet-single-step-x"] is True
+    assert "--poet-single-step-x-alternating" not in m
+
+
+def test_out_only_yaml_emits_one_sided_out():
+    cfg = _parse_overrides(
+        [
+            "base/family=llama3",
+            "base/scale=600m",
+            "experiment=optim/poet_lie_orth_out_only",
+            "training_regime=ablation_20x",
+            "cluster=h800_cn",
+        ]
+    )
+    m = _args_to_map(build_megatron_args(cfg))
+    assert m["--poet-single-step-x-one-sided"] == "out"

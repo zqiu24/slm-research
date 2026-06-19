@@ -1,0 +1,69 @@
+# @package _global_
+# poet_lie_orth_in_only: pure one-sided POETX on the champion lie_ortho recipe
+# (head-OFF, lr 3e-3, c=8, distributed). InOnlyPOETXLinear trains ONLY the input-side
+# rotation oft_R_in for the whole run; oft_R_out stays at its zero init (identity).
+# The frozen side's forward, backward, momentum, and merge fold are short-circuited.
+# Same recipe as poet_lie_orth_alt_x but the side is FIXED (single_step_x_one_sided)
+# instead of alternating -- so the alternating momentum-staleness regression does not
+# apply. See docs/superpowers/specs/2026-06-19-poet-one-sided-mode-design.md
+experiment:
+  name: poet_lie_orth_in_only
+  family: optim
+  description: |
+    Pure one-sided POET (input side): InOnlyPOETXLinear trains only oft_R_in;
+    oft_R_out stays identity. Built on the champion lie_ortho recipe with the side
+    fixed (not alternating). Ablation vs the both-sides champion (val/loss ≈3.5332)
+    and the alternating poet_lie_orth_alt_x.
+  references:
+    - "POET"
+    - "Muon"
+    - "Pion"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 3.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: normalized
+    mup_alpha: 1.0
+    merge_period: 1
+    reinit_period: -1
+    scale: 0.5
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_ortho
+    lie_b1: 0.9
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: elementwise
+    lie_ortho_c: 8
+    lie_ortho_method: muon
+    lie_ortho_ns_steps: 5
+    lie_ortho_use_second_moment: false
+    lie_ortho_distributed: true
+    head_aligned_attn: false
+    single_step_fast: true
+    single_step_x: true
+    single_step_x_alternating: false
+    lie_alternating: false
+    lie_alternate_every: 1
+    train_output_rotation: true
+    single_step_x_one_sided: in
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true
