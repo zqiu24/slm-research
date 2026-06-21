@@ -1179,7 +1179,9 @@ overlap geometry is the same as in the forward frame.
 | W&B key (`poet_coord/<layer>/…`, plus `poet_coord/_mean/…`) | Definition / how computed | Mechanism it arbitrates | The read |
 |---|---|---|---|
 | `mom_cos_out`, `mom_cos_in` | \(\dfrac{\langle m_s, g_s\rangle_F}{\lVert m_s\rVert_F\,\lVert g_s\rVert_F}\), reduced over the whole \((r_s, n_{\mathrm{elems}})\) tensor (one scalar/side). The \(\sqrt2\) skew↔vec factor cancels; zero input → 0. | **staleness / SNR** (fact #5) | **Empirically (qjapxj18) the champion reads ≈0 (mildly negative, \(-0.2\to 0\) as LR decays), NOT \(\gtrsim 0.8\)** — the per-step rotation gradient is near-white, so the EMA *averages noise* rather than tracking a stable direction (and the mild negative tilt is a per-step *overshoot* fingerprint of eff∠ 0.016). Healthy = small-and-stable; the discriminator is the frozen arm, whose reactivated side should decohere further / lose momentum norm. |
-| `cos_D_out_D_in` | \(\dfrac{\langle D_{\mathrm{out}}, D_{\mathrm{in}}\rangle_F}{\lVert D_{\mathrm{out}}\rVert_F\,\lVert D_{\mathrm{in}}\rVert_F}\) | **gauge-redundancy** (champion > simultaneous) | persistently \(\lvert\cos\rvert>0.3\) (esp. attn-out / MLP-down) → a matched-\(\lVert\Delta W\rVert\) simultaneous step over-spends the redundant direction. \(\cos\approx 0\) **falsifies** redundancy → look elsewhere |
+| `cos_D_out_D_in` | \(\dfrac{\langle D_{\mathrm{out}}, D_{\mathrm{in}}\rangle_F}{\lVert D_{\mathrm{out}}\rVert_F\,\lVert D_{\mathrm{in}}\rVert_F}\) | **gauge-redundancy** (champion > simultaneous) | persistently \(\lvert\cos\rvert>0.3\) (esp. attn-out / MLP-down) → a matched-\(\lVert\Delta W\rVert\) simultaneous step over-spends the redundant direction. \(\cos\approx 0\) **falsifies** redundancy → look elsewhere. **(Empirically ≈0 all run, qjapxj18 — falsified; see §17.6.)** |
+| `cos_D_out_D_in_raw` | same, but \(A=\text{raw }(-m)\) (no NS) | is the decorrelation **intrinsic or NS-induced** | raw correlated but orthogonalized ≈0 → Muon whitening decorrelates the sides; both ≈0 → intrinsic |
+| `r_cross` | \(\dfrac{\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F}{\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F}\), via \(\operatorname{blockdiag}(A_{\mathrm{out}})\,D_{\mathrm{in}}\) (one extra block-matmul) | **finite-step coupling** the first-order overlap can't see | \(\sim\) eff∠ (≈0.016) ⇒ decoupled at finite order too; materially larger / growing ⇒ real bilinear coupling (the channel the alternating win could flow through) |
 | `gram_cond` | condition number of \(M=\begin{bmatrix}\lVert D_{\mathrm{out}}\rVert^2 & \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle\\ \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle & \lVert D_{\mathrm{in}}\rVert^2\end{bmatrix}\), via the analytic 2×2 eigenvalues \(\lambda_\pm=\tfrac{a+b}{2}\pm\sqrt{(\tfrac{a-b}{2})^2+c^2}\) | same | routinely \(5\text{–}50\times\) confirms a near-singular 2-direction subspace |
 | `r_joint` | \(\dfrac{\lVert D_{\mathrm{out}}+D_{\mathrm{in}}\rVert_F^2}{\lVert D_{\mathrm{out}}\rVert_F^2+\lVert D_{\mathrm{in}}\rVert_F^2}\) | overlap sign | \(<1\) cancellation, \(=1\) orthogonal, \(>1\) reinforcement |
 | `norm_D_out`, `norm_D_in` | \(\lVert D_{\mathrm{out}}\rVert_F,\ \lVert D_{\mathrm{in}}\rVert_F\) | relative per-side movement | which side actually moves \(W\) more |
@@ -1196,10 +1198,28 @@ extra forward or backward.** Sampling: the wanted projections (q/v/fc1/fc2 …)
 that carry **both** `oft_R_in` and `oft_R_out`, capped at `max_targets`, every
 `SLM_POET_COORD_DIAG_INTERVAL` steps.
 
-## 17.5 What this does *not* yet capture (Tier-1 follow-ups)
+## 17.5 Tier-1 additions (wired) and what is still deferred
 
-- `r_cross` \(=\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F/(\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F)\) and \(-\langle G, A_{\mathrm{out}}WA_{\mathrm{in}}\rangle\) — one extra matmul; settles the §6 within-step cross-term magnitude for good.
-- Weight-only staleness split \(\cos(W^\top G,\ W_o^\top G)\) reusing the same \(G\) — decomposes second-side staleness into weight-driven (free to fix) vs gradient-driven (needs a backward).
+**Wired** (added after the `qjapxj18` read, to probe whether the sides are *truly*
+decoupled or merely first-order orthogonal — one extra block-matmul each, no backward):
+
+- `cos_D_out_D_in_raw` — the overlap from the **raw** \(-m\) directions (no NS). If the
+  raw cos is correlated but `cos_D_out_D_in` (orthogonalized) is ≈0, the Muon whitening
+  is what decorrelates the two sides; if raw is also ≈0, the decorrelation is intrinsic.
+- `r_cross` \(=\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F/(\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F)\)
+  — the finite bilinear cross-term magnitude. First-order orthogonality
+  (`cos_D_out_D_in`≈0) does **not** imply this is zero; it is the coupling channel the
+  overlap metric is blind to. Expected \(\sim\) eff∠ (≈0.016) if the sides are decoupled
+  at finite order too; materially larger / growing ⇒ real finite-step coupling.
+
+**Still deferred** (these need the ambient \(G=\partial L/\partial W\) and/or extra
+forward passes, so they cannot reuse the optimizer-state hook):
+
+- Cross-term **loss alignment** \(-\langle G, A_{\mathrm{out}}WA_{\mathrm{in}}\rangle\) —
+  needs \(G\) (the hook only has the skew-tangent grads \(K=\operatorname{skew}(GW^\top)\)).
+- Finite four-loss interaction \(I_{oi}=L_{oi}-L_o-L_i+L_0\) (§6) — needs a diagnostic
+  minibatch and four forward passes.
+- Weight-only staleness split \(\cos(W^\top G,\ W_o^\top G)\) reusing the same \(G\).
 
 ## 17.6 First champion read (`qjapxj18`, 60m / lr4e-3 / scale0.5 / c8)
 

@@ -119,6 +119,35 @@ def direction_overlap(
     return {"cos": cos, "r_joint": r_joint, "gram_cond": gram_cond}
 
 
+def cross_term_ratio(
+    a_out_skew: torch.Tensor,
+    d_out: torch.Tensor,
+    d_in: torch.Tensor,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Finite bilinear cross-term magnitude, relative to the first-order movement:
+
+        r_cross = ||A_out W A_in||_F / (||A_out W||_F + ||W A_in||_F).
+
+    This is the second-order term a *simultaneous* both-sides step carries (and the
+    alternating write spreads across two steps). First-order orthogonality
+    (cos(D_out, D_in) ~ 0) does NOT imply this is zero — it is the coupling channel
+    the overlap metric is blind to. Computed from the already-formed directions:
+    A_out W A_in = blockdiag(A_out) @ (W A_in) = blockdiag(A_out) @ d_in, so it costs
+    one extra block-matmul, no backward. Scales ~ linearly with the operating angle.
+    """
+    a_out = a_out_skew.to(torch.float32)
+    d_in = d_in.to(torch.float32)
+    d_out = d_out.to(torch.float32)
+    r_out, b_out, _ = a_out.shape
+    out_features, in_features = d_in.shape
+    cross = torch.bmm(a_out, d_in.reshape(r_out, b_out, in_features)).reshape(
+        out_features, in_features
+    )
+    denom = (d_out.norm() + d_in.norm()).clamp_min(eps)
+    return cross.norm() / denom
+
+
 def layer_coordination_metrics(
     lie_m_out: torch.Tensor,
     grad_out: torch.Tensor,
@@ -142,23 +171,40 @@ def layer_coordination_metrics(
     Returns plain floats (wandb-ready):
         mom_cos_out / mom_cos_in  -> cos(momentum, fresh grad), the STALENESS arbiter
         cos_D_out_D_in            -> overlap of the two sides' weight-space directions
+        cos_D_out_D_in_raw        -> same overlap from the RAW -m directions (no NS), to
+                                     tell intrinsic decorrelation from orthogonalizer-induced
         r_joint, gram_cond        -> joint-movement ratio + direction-Gram conditioning
+        r_cross                   -> finite bilinear cross-term ||A_out W A_in|| / movement
         norm_D_out / norm_D_in    -> relative per-side movement magnitude
     """
     mom_cos_out = momentum_grad_cosine(lie_m_out, grad_out)
     mom_cos_in = momentum_grad_cosine(lie_m_in, grad_in)
 
-    a_out = orthogonalize_fn(vec_to_skew(-lie_m_out.to(torch.float32), block_size_out))
-    a_in = orthogonalize_fn(vec_to_skew(-lie_m_in.to(torch.float32), block_size_in))
+    # Skew generators from the raw momenta, then the NS-orthogonalized (written) ones.
+    raw_out = vec_to_skew(-lie_m_out.to(torch.float32), block_size_out)
+    raw_in = vec_to_skew(-lie_m_in.to(torch.float32), block_size_in)
+    a_out = orthogonalize_fn(raw_out)
+    a_in = orthogonalize_fn(raw_in)
+
     d_out, d_in = side_directions(a_out, a_in, w_perm)
     ov = direction_overlap(d_out, d_in)
+
+    # Raw-direction overlap: if this is correlated but ov["cos"] ~ 0, the Muon
+    # whitening is what decorrelates the two sides (orthogonalizer-induced).
+    d_out_raw, d_in_raw = side_directions(raw_out, raw_in, w_perm)
+    cos_raw = direction_overlap(d_out_raw, d_in_raw)["cos"]
+
+    # Finite cross-term on the written (orthogonalized) directions.
+    r_cross = cross_term_ratio(a_out, d_out, d_in)
 
     return {
         "mom_cos_out": mom_cos_out.item(),
         "mom_cos_in": mom_cos_in.item(),
         "cos_D_out_D_in": ov["cos"].item(),
+        "cos_D_out_D_in_raw": cos_raw.item(),
         "r_joint": ov["r_joint"].item(),
         "gram_cond": ov["gram_cond"].item(),
+        "r_cross": r_cross.item(),
         "norm_D_out": d_out.norm().item(),
         "norm_D_in": d_in.norm().item(),
     }

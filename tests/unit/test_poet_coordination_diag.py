@@ -15,6 +15,7 @@ import pytest
 import torch
 
 from src.diag.poet_coordination_diag import (
+    cross_term_ratio,
     direction_overlap,
     layer_coordination_metrics,
     momentum_grad_cosine,
@@ -162,6 +163,39 @@ def test_side_directions_square_equal_blocks():
     assert torch.allclose(d_in, w @ _block_diag(a_in), atol=1e-5)
 
 
+def test_cross_term_ratio_matches_dense_reference():
+    # r_cross = ||A_out W A_in||_F / (||A_out W||_F + ||W A_in||_F), the finite
+    # bilinear cross term simultaneous carries. Verify against a dense block-diag ref.
+    torch.manual_seed(0)
+    r_out, b_out = 3, 4
+    r_in, b_in = 2, 5
+    a_out = torch.randn(r_out, b_out, b_out)
+    a_in = torch.randn(r_in, b_in, b_in)
+    w = torch.randn(r_out * b_out, r_in * b_in)
+    d_out, d_in = side_directions(a_out, a_in, w)
+
+    got = cross_term_ratio(a_out, d_out, d_in)
+
+    cross = _block_diag(a_out) @ w @ _block_diag(a_in)
+    ref = cross.norm() / (d_out.norm() + d_in.norm())
+    assert got == pytest.approx(ref.item(), rel=1e-5)
+
+
+def test_cross_term_ratio_scales_linearly_with_angle():
+    # cross ~ ||A||^2, denom ~ ||A|| -> ratio ~ ||A||: scaling both generators by s
+    # scales r_cross by ~s (so a small operating angle => small cross term).
+    torch.manual_seed(1)
+    r, b = 2, 4
+    a_out = torch.randn(r, b, b)
+    a_in = torch.randn(r, b, b)
+    w = torch.randn(r * b, r * b)
+    d_out, d_in = side_directions(a_out, a_in, w)
+    base = cross_term_ratio(a_out, d_out, d_in)
+    d_out_s, d_in_s = side_directions(0.1 * a_out, 0.1 * a_in, w)
+    scaled = cross_term_ratio(0.1 * a_out, d_out_s, d_in_s)
+    assert scaled == pytest.approx(0.1 * base, rel=1e-4)
+
+
 def test_side_directions_skew_inputs_compose_to_overlap():
     # End-to-end on skew generators: build A from skew vecs, form directions, and
     # confirm direction_overlap consumes them and returns finite geometry.
@@ -272,3 +306,28 @@ def test_layer_metrics_aligned_momentum_gives_high_cos():
     )
     assert m["mom_cos_out"] == pytest.approx(1.0, abs=1e-5)
     assert m["mom_cos_in"] == pytest.approx(1.0, abs=1e-5)
+
+
+def test_layer_metrics_includes_raw_overlap_and_cross_term():
+    # Tier-1 additions: cos_D_out_D_in_raw (overlap of the RAW -m directions, to tell
+    # intrinsic decorrelation from orthogonalizer-induced) and r_cross (finite bilinear
+    # cross-term magnitude). Both floats and finite; raw cos in [-1, 1].
+    torch.manual_seed(3)
+    r_out, b_out = 2, 4
+    r_in, b_in = 3, 4
+    ne_out = b_out * (b_out - 1) // 2
+    ne_in = b_in * (b_in - 1) // 2
+    m = layer_coordination_metrics(
+        torch.randn(r_out, ne_out),
+        torch.randn(r_out, ne_out),
+        torch.randn(r_in, ne_in),
+        torch.randn(r_in, ne_in),
+        torch.randn(r_out * b_out, r_in * b_in),
+        block_size_out=b_out,
+        block_size_in=b_in,
+        orthogonalize_fn=_ortho5,
+    )
+    for k in ("cos_D_out_D_in_raw", "r_cross"):
+        assert k in m and isinstance(m[k], float) and math.isfinite(m[k])
+    assert -1.0 - 1e-5 <= m["cos_D_out_D_in_raw"] <= 1.0 + 1e-5
+    assert m["r_cross"] >= 0.0
