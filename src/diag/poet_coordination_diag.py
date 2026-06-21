@@ -148,6 +148,57 @@ def cross_term_ratio(
     return cross.norm() / denom
 
 
+def block_diag_skew(m: torch.Tensor, block_size: int) -> torch.Tensor:
+    """Block-diagonal skew part of a square matrix.
+
+    ``m`` is ``(n, n)`` with ``n = r*block_size``; returns ``(r, block_size,
+    block_size)`` where block ``i`` is ``skew(m[i*b:(i+1)*b, i*b:(i+1)*b])``. This is
+    how POET's per-block tangent signals are formed from ``W^T G`` / ``G W^T``.
+    """
+    m = m.to(torch.float32)
+    b = block_size
+    r = m.shape[0] // b
+    idx = torch.arange(r, device=m.device)
+    diag = m.reshape(r, b, r, b)[idx, :, idx, :]  # (r, b, b) diagonal blocks
+    return 0.5 * (diag - diag.transpose(-1, -2))
+
+
+def weight_only_staleness_cos(
+    g: torch.Tensor,
+    w: torch.Tensor,
+    d_out: torch.Tensor,
+    *,
+    block_size_in: int,
+    angle: float = 1.0,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """Weight-only staleness of the in-side signal under an out-side rotation.
+
+    Holding the ambient gradient ``G`` fixed, an out-side update ``W -> W_o = W +
+    angle*D_out`` shifts the in-side tangent signal from ``K_in = block_skew(W^T G)``
+    to ``block_skew(W_o^T G)``. Returns ``cos(K_in_before, K_in_after)`` (Frobenius
+    over the in blocks):
+
+      * high (~1) => the out rotation barely moves the in signal, so the staleness
+        that hurts long write-gaps is gradient-field-driven, NOT inter-side coupling;
+      * low      => strong inter-side weight coupling (rotating out genuinely changes
+        what in should do — a real Gauss-Seidel channel).
+
+    Needs the ambient ``G = dL/dW_eff`` (captured via layer fwd/bwd hooks, since POET
+    does not materialize it on the frozen W). ``d_out = blockdiag(A_out) @ W`` is the
+    out-side first-order direction; ``angle`` is eff∠ (so W_o is the realized move).
+    """
+    g = g.to(torch.float32)
+    w = w.to(torch.float32)
+    d_out = d_out.to(torch.float32)
+    k_before = block_diag_skew(w.transpose(-2, -1) @ g, block_size_in)
+    w_o = w + angle * d_out
+    k_after = block_diag_skew(w_o.transpose(-2, -1) @ g, block_size_in)
+    kb, ka = k_before.flatten(), k_after.flatten()
+    denom = (kb.norm() * ka.norm()).clamp_min(eps)
+    return torch.dot(kb, ka) / denom
+
+
 def layer_coordination_metrics(
     lie_m_out: torch.Tensor,
     grad_out: torch.Tensor,

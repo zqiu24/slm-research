@@ -186,6 +186,7 @@ _ALWAYS_ON_PATCHES = (
     "grad_conditioning",
     "weight_norm_monitor",
     "poet_coordination_log",
+    "poet_weight_split_log",
 )
 
 

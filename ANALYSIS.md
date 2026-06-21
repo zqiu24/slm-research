@@ -1214,14 +1214,24 @@ decoupled or merely first-order orthogonal — one extra block-matmul each, no b
   overlap metric is blind to. Decoupled ⇒ \(r_{\mathrm{cross}}\lesssim\) eff∠; \(O(1)\) /
   growing ⇒ real finite-step coupling.
 
-**Still deferred** (these need the ambient \(G=\partial L/\partial W\) and/or extra
-forward passes, so they cannot reuse the optimizer-state hook):
+**Weight-only staleness split** (wired as a *separate* patch
+[poet_weight_split_log.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_weight_split_log.py),
+`SLM_POET_WSPLIT=1`): \(\cos\big(K_{\mathrm{in}}(W),\,K_{\mathrm{in}}(W_o)\big)\) with
+\(K_{\mathrm{in}}=\operatorname{block\_skew}(W^\top G)\), \(W_o=W+\text{eff∠}\cdot D_{\mathrm{out}}\),
+holding \(G\) fixed — the *weight-driven* part of second-side staleness. POET freezes \(W\)
+and never materializes \(G=\partial L/\partial W_{\mathrm{eff}}\), so this **cannot** reuse the
+optimizer-state hook: it captures \(G=g_y^\top x\) (output-grad × input) via per-layer
+fwd/bwd hooks (no extra backward, accumulated over micro-batches). **Self-validating** —
+logs `validate_cos` = \(\cos(\operatorname{block\_skew}(W_{\mathrm{perm}}^\top G_{\mathrm{perm}}),\,\partial L/\partial\text{oft\_R\_in})\),
+which must be \(\approx\pm1\) or the capture/frame-mapping is wrong. **Read:** high
+`weight_only_cos` ⇒ rotating out barely moves the in-signal ⇒ staleness is
+gradient-field-driven, not inter-side coupling; low ⇒ real weight coupling.
 
-- Cross-term **loss alignment** \(-\langle G, A_{\mathrm{out}}WA_{\mathrm{in}}\rangle\) —
-  needs \(G\) (the hook only has the skew-tangent grads \(K=\operatorname{skew}(GW^\top)\)).
-- Finite four-loss interaction \(I_{oi}=L_{oi}-L_o-L_i+L_0\) (§6) — needs a diagnostic
-  minibatch and four forward passes.
-- Weight-only staleness split \(\cos(W^\top G,\ W_o^\top G)\) reusing the same \(G\).
+**Still deferred** (need \(G\) *and* extra forward passes):
+
+- Cross-term **loss alignment** \(-\langle G, A_{\mathrm{out}}WA_{\mathrm{in}}\rangle\).
+- Finite four-loss interaction \(I_{oi}=L_{oi}-L_o-L_i+L_0\) (§6) — a diagnostic minibatch
+  and four forward passes.
 
 ## 17.6 First champion read (`qjapxj18`, 60m / lr4e-3 / scale0.5 / c8)
 

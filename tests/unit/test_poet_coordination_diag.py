@@ -15,11 +15,13 @@ import pytest
 import torch
 
 from src.diag.poet_coordination_diag import (
+    block_diag_skew,
     cross_term_ratio,
     direction_overlap,
     layer_coordination_metrics,
     momentum_grad_cosine,
     side_directions,
+    weight_only_staleness_cos,
 )
 
 
@@ -211,6 +213,63 @@ def test_side_directions_skew_inputs_compose_to_overlap():
     ov = direction_overlap(d_out, d_in)
     assert torch.isfinite(ov["cos"]).all()
     assert -1.0 - 1e-5 <= ov["cos"].item() <= 1.0 + 1e-5
+
+
+# --- weight-only staleness split (out rotates -> in signal shift) ---------
+
+
+def _ref_block_diag_skew(mat, b):
+    r = mat.shape[0] // b
+    blocks = []
+    for i in range(r):
+        blk = mat[i * b : (i + 1) * b, i * b : (i + 1) * b]
+        blocks.append((blk - blk.T) / 2)
+    return torch.stack(blocks)
+
+
+def test_block_diag_skew_matches_reference():
+    torch.manual_seed(0)
+    r, b = 3, 4
+    M = torch.randn(r * b, r * b)
+    got = block_diag_skew(M, b)
+    assert got.shape == (r, b, b)
+    assert torch.allclose(got, _ref_block_diag_skew(M, b), atol=1e-6)
+
+
+def test_block_diag_skew_is_skew():
+    torch.manual_seed(1)
+    r, b = 2, 5
+    out = block_diag_skew(torch.randn(r * b, r * b), b)
+    assert torch.allclose(out, -out.transpose(-1, -2), atol=1e-6)
+
+
+def test_weight_only_staleness_is_one_at_zero_angle():
+    # angle=0 -> W_o == W -> K_in unchanged -> cos == 1.
+    torch.manual_seed(0)
+    r_out, b_out = 3, 4
+    r_in, b_in = 2, 5
+    out_f, in_f = r_out * b_out, r_in * b_in
+    g = torch.randn(out_f, in_f)
+    w = torch.randn(out_f, in_f)
+    d_out = _block_diag(torch.randn(r_out, b_out, b_out)) @ w
+    cos0 = weight_only_staleness_cos(g, w, d_out, block_size_in=b_in, angle=0.0)
+    assert cos0.item() == pytest.approx(1.0, abs=1e-6)
+
+
+def test_weight_only_staleness_drops_with_rotation():
+    # A finite out-side rotation shifts the in-side signal -> cos < 1.
+    torch.manual_seed(2)
+    r_out, b_out = 3, 4
+    r_in, b_in = 2, 5
+    out_f, in_f = r_out * b_out, r_in * b_in
+    g = torch.randn(out_f, in_f)
+    w = torch.randn(out_f, in_f)
+    d_out = _block_diag(torch.randn(r_out, b_out, b_out)) @ w
+    cos1 = weight_only_staleness_cos(g, w, d_out, block_size_in=b_in, angle=1.0)
+    cos_small = weight_only_staleness_cos(g, w, d_out, block_size_in=b_in, angle=0.05)
+    assert cos1.item() < 0.999
+    # smaller weight move -> closer to 1 (monotone)
+    assert cos_small.item() > cos1.item()
 
 
 # --- layer_coordination_metrics (per-layer assembler) ---------------------
