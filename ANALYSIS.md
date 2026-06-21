@@ -1240,12 +1240,11 @@ points step 1000 → 8250:
   (`au92x0pj`). The mild negative tilt is a small per-step **overshoot** signature
   consistent with eff∠ 0.016 being the hot edge.
 
-**Refined verdict:** the alternating advantage is **temporal / momentum
-(noise-averaging + fresh-W re-evaluation)**, *not* spatial overlap/cancellation.
-This also reframes POET_dev's "Gauss–Seidel coupling" attribution: the coupling is
-temporal, not a spatial redundancy between the two directions. Next levers are
-momentum-estimator ones (the `alternate_every` averaging-window sweep; possibly a
-slightly cooler or `mom_cos`-gated angle), not direction-geometry.
+**Refined verdict:** the alternating advantage is **temporal / momentum**, *not*
+spatial overlap/cancellation. This reframes POET_dev's "Gauss–Seidel coupling"
+attribution: the coupling is temporal, not a spatial redundancy between the two
+directions. The `alternate_every` sweep (POET_dev arm **J**) then resolves *which*
+temporal effect — see §17.8.
 
 ## 17.7 Tier-1 read: are the sides *really* decoupled? (`rba7iepm`)
 
@@ -1266,3 +1265,28 @@ therefore confirmed to be **purely temporal / momentum**, with no spatial or
 finite-curvature channel. (Note: `r_cross` was changed to report the physical,
 eff∠-scaled fraction; runs before this fix logged the unit-generator ratio ≈0.41,
 which equals physical / eff∠.)
+
+## 17.8 Which temporal effect? `alternate_every` sweep (POET_dev arm J)
+
+The temporal win has two candidate sub-mechanisms: **(a)** a wider EMA averaging
+window (more rest → lower-variance momentum before each write), vs **(b)** per-step
+fresh re-evaluation (the momentum must keep advancing AND be re-applied at the
+freshly-moved W every step). Holding the champion recipe and sweeping
+`lie_alternate_every ∈ {1,2,4,8}` (eff∠ fixed; only the per-side write cadence
+changes) discriminates them:
+
+| `alternate_every` | val/loss | `mom_cos` (end) |
+|---:|---:|---:|
+| **1 (champ)** | **3.5231** | +0.009 |
+| 2 | 3.5262 | +0.015 |
+| 4 | 3.5241 | +0.002 |
+| 8 | 3.5285 | −0.009 |
+
+**k=1 is optimal, monotone-worse with k**, and `mom_cos` trends *down* (negative at
+k=8) — longer rest makes the per-step rotation gradient **staler / anti-correlated**,
+i.e. averaging longer *lowers* SNR rather than raising it. So mechanism **(b)** wins:
+the alternating advantage is **per-step fresh re-evaluation**, not a wider averaging
+window. This is the same axis as the frozen-EMA blow-up (`au92x0pj` → 4.22): the
+momentum must keep advancing *and* be re-applied every step; staleness — whether from
+freezing or from long rest — is the killer. Gauge-redundancy stays falsified at every
+k. **Verdict: keep `lie_alternate_every` pinned at 1.**
