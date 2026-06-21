@@ -158,6 +158,7 @@ def layer_coordination_metrics(
     block_size_out: int,
     block_size_in: int,
     orthogonalize_fn: Callable[[torch.Tensor], torch.Tensor],
+    realized_angle: float = 1.0,
 ) -> dict[str, float]:
     """Assemble the Tier-0 coordination metrics for one POET layer.
 
@@ -174,7 +175,13 @@ def layer_coordination_metrics(
         cos_D_out_D_in_raw        -> same overlap from the RAW -m directions (no NS), to
                                      tell intrinsic decorrelation from orthogonalizer-induced
         r_joint, gram_cond        -> joint-movement ratio + direction-Gram conditioning
-        r_cross                   -> finite bilinear cross-term ||A_out W A_in|| / movement
+        r_cross                   -> PHYSICAL finite cross-term ||A_out W A_in|| / movement,
+                                     = realized_angle * (unit-generator ratio). Pass
+                                     realized_angle = eff∠ (= skew group_lr * ortho_c) so the
+                                     logged value is the true fraction of movement at the
+                                     operating angle (the orthogonalized A have sigma~1, so
+                                     the unscaled ratio is an O(1) constant, not the physical
+                                     coupling). Default 1.0 = unit-angle geometric ratio.
         norm_D_out / norm_D_in    -> relative per-side movement magnitude
     """
     mom_cos_out = momentum_grad_cosine(lie_m_out, grad_out)
@@ -194,8 +201,9 @@ def layer_coordination_metrics(
     d_out_raw, d_in_raw = side_directions(raw_out, raw_in, w_perm)
     cos_raw = direction_overlap(d_out_raw, d_in_raw)["cos"]
 
-    # Finite cross-term on the written (orthogonalized) directions.
-    r_cross = cross_term_ratio(a_out, d_out, d_in)
+    # Finite cross-term on the written (orthogonalized) directions, scaled to the
+    # realized angle so it reads as the physical fraction of movement.
+    r_cross = realized_angle * cross_term_ratio(a_out, d_out, d_in)
 
     return {
         "mom_cos_out": mom_cos_out.item(),

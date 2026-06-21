@@ -82,9 +82,12 @@ def w_perm_frame(layer):
     return w.index_select(0, layer.perm_out_inv.long()).index_select(1, layer.perm_in_inv.long())
 
 
-def collect_metrics_for_layer(layer, lie_grad, orthogonalize_fn):
+def collect_metrics_for_layer(layer, lie_grad, orthogonalize_fn, realized_angle: float = 1.0):
     """Bridge one layer's (lie_m_out, grad_out, lie_m_in, grad_in) snapshot + its
-    W_perm weight into the pure Tier-0 metric assembler. Returns a dict of floats."""
+    W_perm weight into the pure Tier-0 metric assembler. Returns a dict of floats.
+
+    realized_angle (= eff∠ = skew group_lr * ortho_c) scales r_cross to the physical
+    cross-term fraction; 1.0 leaves it as the unit-generator geometric ratio."""
     from src.diag.poet_coordination_diag import layer_coordination_metrics
 
     lie_m_out, grad_out, lie_m_in, grad_in = lie_grad
@@ -97,6 +100,7 @@ def collect_metrics_for_layer(layer, lie_grad, orthogonalize_fn):
         block_size_out=int(layer.block_size_out),
         block_size_in=int(layer.block_size_in),
         orthogonalize_fn=orthogonalize_fn,
+        realized_angle=realized_angle,
     )
 
 
@@ -159,6 +163,22 @@ def _lie_grad_for_layer(layer, lookup):
     return lie_m_out, grad_out, lie_m_in, grad_in
 
 
+def _realized_angle(layer, lookup) -> float:
+    """eff∠ = (skew group lr) * ortho_c for the layer's lie_ortho optimizer, used to
+    scale r_cross to the physical cross-term fraction. Falls back to 1.0 (unit-angle
+    geometric ratio) if the optimizer / lr / ortho_c is unavailable."""
+    torch_opt, _ = lookup.get(id(getattr(layer, "oft_R_out", None)), (None, None))
+    if torch_opt is None:
+        return 1.0
+    ortho_c = getattr(torch_opt, "ortho_c", None)
+    if ortho_c is None:
+        return 1.0
+    for g in getattr(torch_opt, "param_groups", []):
+        if g.get("use_skew") and g.get("lr") is not None:
+            return float(g["lr"]) * float(ortho_c)
+    return 1.0
+
+
 def _log_coordination(targets, lookup, iteration: int) -> None:
     import torch
 
@@ -183,7 +203,8 @@ def _log_coordination(targets, lookup, iteration: int) -> None:
             if lie_grad is None:
                 continue
             try:
-                m = collect_metrics_for_layer(t["layer"], lie_grad, _ortho)
+                angle = _realized_angle(t["layer"], lookup)
+                m = collect_metrics_for_layer(t["layer"], lie_grad, _ortho, realized_angle=angle)
             except Exception:  # diagnostics must never break training
                 logger.exception("[COORD] metric failed for %s", t["label"])
                 continue

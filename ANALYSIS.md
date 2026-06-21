@@ -1181,7 +1181,7 @@ overlap geometry is the same as in the forward frame.
 | `mom_cos_out`, `mom_cos_in` | \(\dfrac{\langle m_s, g_s\rangle_F}{\lVert m_s\rVert_F\,\lVert g_s\rVert_F}\), reduced over the whole \((r_s, n_{\mathrm{elems}})\) tensor (one scalar/side). The \(\sqrt2\) skew↔vec factor cancels; zero input → 0. | **staleness / SNR** (fact #5) | **Empirically (qjapxj18) the champion reads ≈0 (mildly negative, \(-0.2\to 0\) as LR decays), NOT \(\gtrsim 0.8\)** — the per-step rotation gradient is near-white, so the EMA *averages noise* rather than tracking a stable direction (and the mild negative tilt is a per-step *overshoot* fingerprint of eff∠ 0.016). Healthy = small-and-stable; the discriminator is the frozen arm, whose reactivated side should decohere further / lose momentum norm. |
 | `cos_D_out_D_in` | \(\dfrac{\langle D_{\mathrm{out}}, D_{\mathrm{in}}\rangle_F}{\lVert D_{\mathrm{out}}\rVert_F\,\lVert D_{\mathrm{in}}\rVert_F}\) | **gauge-redundancy** (champion > simultaneous) | persistently \(\lvert\cos\rvert>0.3\) (esp. attn-out / MLP-down) → a matched-\(\lVert\Delta W\rVert\) simultaneous step over-spends the redundant direction. \(\cos\approx 0\) **falsifies** redundancy → look elsewhere. **(Empirically ≈0 all run, qjapxj18 — falsified; see §17.6.)** |
 | `cos_D_out_D_in_raw` | same, but \(A=\text{raw }(-m)\) (no NS) | is the decorrelation **intrinsic or NS-induced** | raw correlated but orthogonalized ≈0 → Muon whitening decorrelates the sides; both ≈0 → intrinsic |
-| `r_cross` | \(\dfrac{\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F}{\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F}\), via \(\operatorname{blockdiag}(A_{\mathrm{out}})\,D_{\mathrm{in}}\) (one extra block-matmul) | **finite-step coupling** the first-order overlap can't see | \(\sim\) eff∠ (≈0.016) ⇒ decoupled at finite order too; materially larger / growing ⇒ real bilinear coupling (the channel the alternating win could flow through) |
+| `r_cross` | \(\text{eff∠}\cdot\dfrac{\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F}{\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F}\), via \(\operatorname{blockdiag}(A_{\mathrm{out}})\,D_{\mathrm{in}}\) (one extra block-matmul). **Scaled by eff∠** (= skew group_lr·ortho_c) so it is the *physical* fraction of movement — the orthogonalized \(A\) have \(\sigma\sim1\), so the unscaled ratio is an O(1) constant, not the coupling. | **finite-step coupling** the first-order overlap can't see | \(\ll 1\) (\(\lesssim\) eff∠) ⇒ decoupled at finite order too; \(\sim O(1)\) / growing ⇒ real bilinear coupling (the channel the alternating win could flow through). **(Empirically ≈0.006 at peak, qjapxj18/rba7iepm — decoupled; see §17.7.)** |
 | `gram_cond` | condition number of \(M=\begin{bmatrix}\lVert D_{\mathrm{out}}\rVert^2 & \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle\\ \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle & \lVert D_{\mathrm{in}}\rVert^2\end{bmatrix}\), via the analytic 2×2 eigenvalues \(\lambda_\pm=\tfrac{a+b}{2}\pm\sqrt{(\tfrac{a-b}{2})^2+c^2}\) | same | routinely \(5\text{–}50\times\) confirms a near-singular 2-direction subspace |
 | `r_joint` | \(\dfrac{\lVert D_{\mathrm{out}}+D_{\mathrm{in}}\rVert_F^2}{\lVert D_{\mathrm{out}}\rVert_F^2+\lVert D_{\mathrm{in}}\rVert_F^2}\) | overlap sign | \(<1\) cancellation, \(=1\) orthogonal, \(>1\) reinforcement |
 | `norm_D_out`, `norm_D_in` | \(\lVert D_{\mathrm{out}}\rVert_F,\ \lVert D_{\mathrm{in}}\rVert_F\) | relative per-side movement | which side actually moves \(W\) more |
@@ -1206,11 +1206,13 @@ decoupled or merely first-order orthogonal — one extra block-matmul each, no b
 - `cos_D_out_D_in_raw` — the overlap from the **raw** \(-m\) directions (no NS). If the
   raw cos is correlated but `cos_D_out_D_in` (orthogonalized) is ≈0, the Muon whitening
   is what decorrelates the two sides; if raw is also ≈0, the decorrelation is intrinsic.
-- `r_cross` \(=\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F/(\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F)\)
-  — the finite bilinear cross-term magnitude. First-order orthogonality
+- `r_cross` \(=\text{eff∠}\cdot\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F/(\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F)\)
+  — the finite bilinear cross-term magnitude, **scaled to the physical fraction** by the
+  realized angle eff∠ (= skew group_lr·ortho_c), since the orthogonalized \(A\) have
+  \(\sigma\sim1\) and the unscaled ratio is an O(1) constant. First-order orthogonality
   (`cos_D_out_D_in`≈0) does **not** imply this is zero; it is the coupling channel the
-  overlap metric is blind to. Expected \(\sim\) eff∠ (≈0.016) if the sides are decoupled
-  at finite order too; materially larger / growing ⇒ real finite-step coupling.
+  overlap metric is blind to. Decoupled ⇒ \(r_{\mathrm{cross}}\lesssim\) eff∠; \(O(1)\) /
+  growing ⇒ real finite-step coupling.
 
 **Still deferred** (these need the ambient \(G=\partial L/\partial W\) and/or extra
 forward passes, so they cannot reuse the optimizer-state hook):
@@ -1244,3 +1246,23 @@ This also reframes POET_dev's "Gauss–Seidel coupling" attribution: the couplin
 temporal, not a spatial redundancy between the two directions. Next levers are
 momentum-estimator ones (the `alternate_every` averaging-window sweep; possibly a
 slightly cooler or `mom_cos`-gated angle), not direction-geometry.
+
+## 17.7 Tier-1 read: are the sides *really* decoupled? (`rba7iepm`)
+
+Champion re-run with the Tier-1 probes (W&B `rba7iepm`, same recipe as qjapxj18,
+val/loss 3.5241), 45 diag points step 250 → 8750:
+
+- `cos_D_out_D_in_raw` ≈ 0 the **entire run** (mean 0.0001, \(\lvert\cdot\rvert\le0.0014\))
+  — the **raw** \(-m\) directions are orthogonal *before* Newton–Schulz, so the
+  decorrelation is **intrinsic**, not orthogonalizer-induced.
+- `r_cross` (physical) ≈ **0.006 at peak**, shrinking with LR decay (the underlying
+  unit-generator ratio is flat at ≈0.41 all run; eff∠ ≈ 0.016 → 1.6e-4). So the finite
+  bilinear cross-term is **≤0.6% of movement and falling** — the sides are **decoupled
+  at finite order too**, and the coupling is not growing.
+
+**Conclusion:** the two sides are genuinely decoupled — intrinsically first-order
+orthogonal **and** with negligible finite-step coupling. The alternating advantage is
+therefore confirmed to be **purely temporal / momentum**, with no spatial or
+finite-curvature channel. (Note: `r_cross` was changed to report the physical,
+eff∠-scaled fraction; runs before this fix logged the unit-generator ratio ≈0.41,
+which equals physical / eff∠.)

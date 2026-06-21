@@ -331,3 +331,26 @@ def test_layer_metrics_includes_raw_overlap_and_cross_term():
         assert k in m and isinstance(m[k], float) and math.isfinite(m[k])
     assert -1.0 - 1e-5 <= m["cos_D_out_D_in_raw"] <= 1.0 + 1e-5
     assert m["r_cross"] >= 0.0
+
+
+def test_r_cross_scales_with_realized_angle():
+    # r_cross is reported PHYSICAL: realized_angle (= eff∠) times the unit-generator
+    # cross-term ratio, so it is directly "fraction of movement" at the operating angle.
+    # cos/r_joint/gram are angle-invariant.
+    torch.manual_seed(4)
+    r_out, b_out = 2, 4
+    r_in, b_in = 3, 4
+    ne_out = b_out * (b_out - 1) // 2
+    ne_in = b_in * (b_in - 1) // 2
+    args = (
+        torch.randn(r_out, ne_out),
+        torch.randn(r_out, ne_out),
+        torch.randn(r_in, ne_in),
+        torch.randn(r_in, ne_in),
+        torch.randn(r_out * b_out, r_in * b_in),
+    )
+    kw = dict(block_size_out=b_out, block_size_in=b_in, orthogonalize_fn=_ortho5)
+    m_unit = layer_coordination_metrics(*args, realized_angle=1.0, **kw)
+    m_scaled = layer_coordination_metrics(*args, realized_angle=0.02, **kw)
+    assert m_scaled["r_cross"] == pytest.approx(0.02 * m_unit["r_cross"], rel=1e-5)
+    assert m_scaled["cos_D_out_D_in"] == pytest.approx(m_unit["cos_D_out_D_in"], abs=1e-6)
