@@ -1178,7 +1178,7 @@ overlap geometry is the same as in the forward frame.
 
 | W&B key (`poet_coord/<layer>/…`, plus `poet_coord/_mean/…`) | Definition / how computed | Mechanism it arbitrates | The read |
 |---|---|---|---|
-| `mom_cos_out`, `mom_cos_in` | \(\dfrac{\langle m_s, g_s\rangle_F}{\lVert m_s\rVert_F\,\lVert g_s\rVert_F}\), reduced over the whole \((r_s, n_{\mathrm{elems}})\) tensor (one scalar/side). The \(\sqrt2\) skew↔vec factor cancels; zero input → 0. | **staleness** (fact #5) | champion: both \(\gtrsim 0.8\) every step. Frozen arm (`true_single_side`): the reactivated side's cosine collapses at toggle steps → "slower convergence = stale direction" |
+| `mom_cos_out`, `mom_cos_in` | \(\dfrac{\langle m_s, g_s\rangle_F}{\lVert m_s\rVert_F\,\lVert g_s\rVert_F}\), reduced over the whole \((r_s, n_{\mathrm{elems}})\) tensor (one scalar/side). The \(\sqrt2\) skew↔vec factor cancels; zero input → 0. | **staleness / SNR** (fact #5) | **Empirically (qjapxj18) the champion reads ≈0 (mildly negative, \(-0.2\to 0\) as LR decays), NOT \(\gtrsim 0.8\)** — the per-step rotation gradient is near-white, so the EMA *averages noise* rather than tracking a stable direction (and the mild negative tilt is a per-step *overshoot* fingerprint of eff∠ 0.016). Healthy = small-and-stable; the discriminator is the frozen arm, whose reactivated side should decohere further / lose momentum norm. |
 | `cos_D_out_D_in` | \(\dfrac{\langle D_{\mathrm{out}}, D_{\mathrm{in}}\rangle_F}{\lVert D_{\mathrm{out}}\rVert_F\,\lVert D_{\mathrm{in}}\rVert_F}\) | **gauge-redundancy** (champion > simultaneous) | persistently \(\lvert\cos\rvert>0.3\) (esp. attn-out / MLP-down) → a matched-\(\lVert\Delta W\rVert\) simultaneous step over-spends the redundant direction. \(\cos\approx 0\) **falsifies** redundancy → look elsewhere |
 | `gram_cond` | condition number of \(M=\begin{bmatrix}\lVert D_{\mathrm{out}}\rVert^2 & \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle\\ \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle & \lVert D_{\mathrm{in}}\rVert^2\end{bmatrix}\), via the analytic 2×2 eigenvalues \(\lambda_\pm=\tfrac{a+b}{2}\pm\sqrt{(\tfrac{a-b}{2})^2+c^2}\) | same | routinely \(5\text{–}50\times\) confirms a near-singular 2-direction subspace |
 | `r_joint` | \(\dfrac{\lVert D_{\mathrm{out}}+D_{\mathrm{in}}\rVert_F^2}{\lVert D_{\mathrm{out}}\rVert_F^2+\lVert D_{\mathrm{in}}\rVert_F^2}\) | overlap sign | \(<1\) cancellation, \(=1\) orthogonal, \(>1\) reinforcement |
@@ -1200,3 +1200,27 @@ that carry **both** `oft_R_in` and `oft_R_out`, capped at `max_targets`, every
 
 - `r_cross` \(=\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F/(\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F)\) and \(-\langle G, A_{\mathrm{out}}WA_{\mathrm{in}}\rangle\) — one extra matmul; settles the §6 within-step cross-term magnitude for good.
 - Weight-only staleness split \(\cos(W^\top G,\ W_o^\top G)\) reusing the same \(G\) — decomposes second-side staleness into weight-driven (free to fix) vs gradient-driven (needs a backward).
+
+## 17.6 First champion read (`qjapxj18`, 60m / lr4e-3 / scale0.5 / c8)
+
+Full-training read of the champion (`coord_champion`, W&B `qjapxj18`), 41 diag
+points step 1000 → 8250:
+
+- `cos_D_out_D_in` \(\in[-0.002, +0.002]\) for the **entire run**; `gram_cond`
+  \(\approx 1.25\); `r_joint` \(\approx 1.000\). The two sides' weight-space
+  directions are **orthogonal throughout training** →
+  **gauge-redundancy is falsified** (not just at plateau). The gauge-decorrelation
+  lever is therefore off the table — there is no redundant subspace to decorrelate.
+- `mom_cos_{out,in}` start mildly negative (\(\sim-0.12\) to \(-0.23\)) and decay
+  to \(\approx 0\) by step ~8000 as the cosine LR approaches its floor. The per-step
+  rotation gradient is **near-white** (low SNR all run), so the persistent EMA is
+  doing genuine **noise-averaging** — which is why freezing it regresses to 4.22
+  (`au92x0pj`). The mild negative tilt is a small per-step **overshoot** signature
+  consistent with eff∠ 0.016 being the hot edge.
+
+**Refined verdict:** the alternating advantage is **temporal / momentum
+(noise-averaging + fresh-W re-evaluation)**, *not* spatial overlap/cancellation.
+This also reframes POET_dev's "Gauss–Seidel coupling" attribution: the coupling is
+temporal, not a spatial redundancy between the two directions. Next levers are
+momentum-estimator ones (the `alternate_every` averaging-window sweep; possibly a
+slightly cooler or `mom_cos`-gated angle), not direction-geometry.
