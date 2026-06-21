@@ -96,6 +96,8 @@ ignore = ["E501"]
 "tests/unit/test_poetx_layer.py" = ["N802", "N803", "N806"]
 # Alternating POETX tests share the same forward-frame Wx/R_in/R_out naming.
 "tests/unit/test_alternating_poetx.py" = ["N802", "N803", "N806"]
+# Two-sided coordination diag tests: D/D_out/D_in are the standard direction-matrix names.
+"tests/unit/test_poet_coordination_diag.py" = ["N806"]
 
 [tool.ruff.format]
 quote-style = "double"

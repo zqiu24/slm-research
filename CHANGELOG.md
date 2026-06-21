@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added — POET two-sided coordination Tier-0 diagnostics (2026-06-21)
+
+- New `src/diag/poet_coordination_diag.py` (pure, CPU-tested) with the Tier-0
+  arbiters for *why* alternating + fresh-momentum POET beats simultaneous:
+  `momentum_grad_cosine` (cos of a side's `lie_m` with its fresh skew-tangent
+  gradient → the staleness arbiter for established fact #5), and
+  `side_directions` + `direction_overlap` (`cos(D_out, D_in)`, `r_joint`,
+  direction-Gram condition number, with `D_out = A_out·W`, `D_in = W·A_in` in the
+  un-permuted W_perm frame → the gauge-redundancy arbiter). `layer_coordination_metrics`
+  assembles them per layer from injected momenta + orthogonalizer.
+- New `src/patches/poet_coordination_log.py`: env-gated (`SLM_POET_COORD_DIAG=1`,
+  interval `SLM_POET_COORD_DIAG_INTERVAL`, default 250) W&B logger mirroring
+  `poet_grad_conditioning` — wraps `setup_model_and_optimizer`, samples
+  representative two-sided layers, and logs `poet_coord/<layer>/{mom_cos_*,
+  cos_D_out_D_in,r_joint,gram_cond,norm_D_*}` (+ `_mean/`) from the PRE-step
+  momentum and fresh `main_grad`. Reads BOTH sides' momenta every step, so the
+  metric is identical across the alternating/simultaneous/frozen 3-arm comparison.
+  Added to `_ALWAYS_ON_PATCHES` (inert unless the env var is set).
+
 ### Docs — POET_dev.md weight-norm results (2026-06-19)
 
 - Added §2.7 to `POET_dev.md`: weight-norm monitoring results for POET vs Adam vs

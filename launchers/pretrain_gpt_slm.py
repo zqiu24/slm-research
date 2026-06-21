@@ -176,15 +176,16 @@ def _load_resolved_config(config_path: str):
 
 # Patches applied to EVERY Megatron run regardless of experiment. The logging
 # ones are no-ops on the model; the diagnostic ones (overfit_single_batch,
-# poet_grad_conditioning, grad_conditioning) self-disable unless their SLM_* env
-# var is set, so they are inert on normal runs and stay out of the experiment
-# patch_set_hash.
+# poet_grad_conditioning, grad_conditioning, poet_coordination_log) self-disable
+# unless their SLM_* env var is set, so they are inert on normal runs and stay out
+# of the experiment patch_set_hash.
 _ALWAYS_ON_PATCHES = (
     "wandb_trainable_params",
     "overfit_single_batch",
     "poet_grad_conditioning",
     "grad_conditioning",
     "weight_norm_monitor",
+    "poet_coordination_log",
 )
 
 
