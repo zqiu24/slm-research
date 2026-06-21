@@ -50,23 +50,32 @@ def _install_capture_hook(layer):
     import torch
 
     def _fwd_hook(module, inp, out):
-        if not _capture["on"] or not inp:
-            return
-        x = inp[0]
-        if not torch.is_tensor(x) or not torch.is_tensor(out):
-            return
-        x = x.detach()
+        # Diagnostics must never crash training: a no-grad forward (eval / init /
+        # recompute) yields an output that does not require grad, and register_hook
+        # raises on it -- skip those, and wrap everything defensively.
+        try:
+            if not _capture["on"] or not inp:
+                return
+            x = inp[0]
+            if not torch.is_tensor(x) or not torch.is_tensor(out) or not out.requires_grad:
+                return
+            x = x.detach()
 
-        def _grad_hook(grad_out):
-            gy = grad_out.detach()
-            # contract all leading (token/batch) dims -> G_eff = g_y^T x, (out, in).
-            contrib = gy.reshape(-1, gy.shape[-1]).transpose(0, 1).to(torch.float32) @ x.reshape(
-                -1, x.shape[-1]
-            ).to(torch.float32)
-            prev = getattr(module, "_coord_G", None)
-            module._coord_G = contrib if prev is None else prev + contrib
+            def _grad_hook(grad_out):
+                try:
+                    gy = grad_out.detach()
+                    # contract all leading (token/batch) dims -> G_eff = g_y^T x, (out, in).
+                    contrib = gy.reshape(-1, gy.shape[-1]).transpose(0, 1).to(
+                        torch.float32
+                    ) @ x.reshape(-1, x.shape[-1]).to(torch.float32)
+                    prev = getattr(module, "_coord_G", None)
+                    module._coord_G = contrib if prev is None else prev + contrib
+                except Exception:  # never break the backward
+                    logger.exception("[WSPLIT] grad capture failed")
 
-        out.register_hook(_grad_hook)
+            out.register_hook(_grad_hook)
+        except Exception:  # never break the forward
+            logger.exception("[WSPLIT] forward capture failed")
 
     layer.register_forward_hook(_fwd_hook)
 
