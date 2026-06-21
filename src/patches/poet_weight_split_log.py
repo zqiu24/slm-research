@@ -8,13 +8,15 @@ Question it answers (ANALYSIS.md §17.5 deferred probe): the alternating win is
 "per-step fresh re-evaluation" (arm J) — but is that because rotating the out-side
 genuinely shifts the in-side's preferred direction (inter-side coupling), or just
 because the gradient field is fast-moving on its own? This logs the WEIGHT-only part
-of that staleness:
+of that staleness as an angle-free sensitivity:
 
-    cos( K_in(W),  K_in(W_o) )  with  W_o = W + eff∠·D_out,  G held fixed,
+    s = ||block_skew(D_out^T G)||_F / ||block_skew(W^T G)||_F,
 
-i.e. how much an out-side update alone moves the in-side tangent signal
-K_in = block_skew(W^T G). High (~1) => out barely moves in => staleness is
-gradient-field-driven, not inter-side coupling; low => real weight coupling.
+i.e. how much a unit out-side rotation moves the in-side tangent signal
+K_in = block_skew(W^T G) (physical per-step shift = eff∠·s, logged as ``relchange``).
+s<<1 => out barely moves in => staleness gradient-field-driven, not inter-side
+coupling; s~O(1) => real weight coupling. (A bare cosine at the realized eff∠ is ~1
+regardless of coupling, so we report the sensitivity, not the cosine.)
 
 POET freezes W and never materializes the ambient G = dL/dW_eff, so we capture it
 with fwd/bwd hooks: stash the layer input x, accumulate G += g_y^T x over the
@@ -84,7 +86,7 @@ def _log_weight_split(targets, lookup, iteration: int) -> None:
     from src.diag.poet_coordination_diag import (
         block_diag_skew,
         side_directions,
-        weight_only_staleness_cos,
+        weight_only_sensitivity,
     )
     from src.diag.skew_conditioning import vec_to_skew
     from src.optim.poet_skew_muon import orthogonalize_skew_direction
@@ -123,9 +125,10 @@ def _log_weight_split(targets, lookup, iteration: int) -> None:
                 d_out, _ = side_directions(a_out, a_in, w_perm)
                 angle = _realized_angle(layer, lookup)
 
-                wsplit = weight_only_staleness_cos(
-                    g_perm, w_perm, d_out, block_size_in=b_in, angle=angle
-                ).item()
+                # Angle-free sensitivity of the in-signal to an out rotation, and the
+                # physical per-step shift (eff∠ * sensitivity).
+                sens = weight_only_sensitivity(g_perm, w_perm, d_out, block_size_in=b_in).item()
+                relchange = angle * sens
 
                 # Self-check: block_skew(W_perm^T G_perm) must align with oft_R_in.grad
                 # (|cos| ~ 1) if the G capture + frame-mapping are correct.
@@ -135,9 +138,11 @@ def _log_weight_split(targets, lookup, iteration: int) -> None:
             except Exception:
                 logger.exception("[WSPLIT] metric failed for %s", t["label"])
                 continue
-            payload[f"poet_wsplit/{t['label']}/weight_only_cos"] = wsplit
+            payload[f"poet_wsplit/{t['label']}/sensitivity"] = sens
+            payload[f"poet_wsplit/{t['label']}/relchange"] = relchange
             payload[f"poet_wsplit/{t['label']}/validate_cos"] = vcos
-            agg.setdefault("weight_only_cos", []).append(wsplit)
+            agg.setdefault("sensitivity", []).append(sens)
+            agg.setdefault("relchange", []).append(relchange)
             agg.setdefault("validate_cos", []).append(vcos)
 
     if not payload:

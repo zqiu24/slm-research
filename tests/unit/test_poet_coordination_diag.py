@@ -21,7 +21,7 @@ from src.diag.poet_coordination_diag import (
     layer_coordination_metrics,
     momentum_grad_cosine,
     side_directions,
-    weight_only_staleness_cos,
+    weight_only_sensitivity,
 )
 
 
@@ -243,21 +243,20 @@ def test_block_diag_skew_is_skew():
     assert torch.allclose(out, -out.transpose(-1, -2), atol=1e-6)
 
 
-def test_weight_only_staleness_is_one_at_zero_angle():
-    # angle=0 -> W_o == W -> K_in unchanged -> cos == 1.
+def test_weight_only_sensitivity_zero_with_no_out_direction():
+    # d_out = 0 -> the in-signal does not move -> sensitivity 0.
     torch.manual_seed(0)
     r_out, b_out = 3, 4
     r_in, b_in = 2, 5
     out_f, in_f = r_out * b_out, r_in * b_in
     g = torch.randn(out_f, in_f)
     w = torch.randn(out_f, in_f)
-    d_out = _block_diag(torch.randn(r_out, b_out, b_out)) @ w
-    cos0 = weight_only_staleness_cos(g, w, d_out, block_size_in=b_in, angle=0.0)
-    assert cos0.item() == pytest.approx(1.0, abs=1e-6)
+    s = weight_only_sensitivity(g, w, torch.zeros(out_f, in_f), block_size_in=b_in)
+    assert s.item() == pytest.approx(0.0, abs=1e-12)
 
 
-def test_weight_only_staleness_drops_with_rotation():
-    # A finite out-side rotation shifts the in-side signal -> cos < 1.
+def test_weight_only_sensitivity_is_linear_in_out_direction():
+    # sensitivity = ||block_skew(D_out^T G)|| / ||block_skew(W^T G)|| is linear in D_out.
     torch.manual_seed(2)
     r_out, b_out = 3, 4
     r_in, b_in = 2, 5
@@ -265,11 +264,24 @@ def test_weight_only_staleness_drops_with_rotation():
     g = torch.randn(out_f, in_f)
     w = torch.randn(out_f, in_f)
     d_out = _block_diag(torch.randn(r_out, b_out, b_out)) @ w
-    cos1 = weight_only_staleness_cos(g, w, d_out, block_size_in=b_in, angle=1.0)
-    cos_small = weight_only_staleness_cos(g, w, d_out, block_size_in=b_in, angle=0.05)
-    assert cos1.item() < 0.999
-    # smaller weight move -> closer to 1 (monotone)
-    assert cos_small.item() > cos1.item()
+    s1 = weight_only_sensitivity(g, w, d_out, block_size_in=b_in)
+    s2 = weight_only_sensitivity(g, w, 3.0 * d_out, block_size_in=b_in)
+    assert s1.item() > 0
+    assert s2.item() == pytest.approx(3.0 * s1.item(), rel=1e-5)
+
+
+def test_weight_only_sensitivity_matches_explicit_ratio():
+    torch.manual_seed(3)
+    r_out, b_out = 2, 4
+    r_in, b_in = 3, 4
+    out_f, in_f = r_out * b_out, r_in * b_in
+    g = torch.randn(out_f, in_f)
+    w = torch.randn(out_f, in_f)
+    d_out = _block_diag(torch.randn(r_out, b_out, b_out)) @ w
+    got = weight_only_sensitivity(g, w, d_out, block_size_in=b_in)
+    k = block_diag_skew(w.T @ g, b_in)
+    dk = block_diag_skew(d_out.T @ g, b_in)
+    assert got.item() == pytest.approx((dk.norm() / k.norm()).item(), rel=1e-5)
 
 
 # --- layer_coordination_metrics (per-layer assembler) ---------------------

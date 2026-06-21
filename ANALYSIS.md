@@ -1216,16 +1216,19 @@ decoupled or merely first-order orthogonal — one extra block-matmul each, no b
 
 **Weight-only staleness split** (wired as a *separate* patch
 [poet_weight_split_log.py](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_weight_split_log.py),
-`SLM_POET_WSPLIT=1`): \(\cos\big(K_{\mathrm{in}}(W),\,K_{\mathrm{in}}(W_o)\big)\) with
-\(K_{\mathrm{in}}=\operatorname{block\_skew}(W^\top G)\), \(W_o=W+\text{eff∠}\cdot D_{\mathrm{out}}\),
-holding \(G\) fixed — the *weight-driven* part of second-side staleness. POET freezes \(W\)
-and never materializes \(G=\partial L/\partial W_{\mathrm{eff}}\), so this **cannot** reuse the
-optimizer-state hook: it captures \(G=g_y^\top x\) (output-grad × input) via per-layer
-fwd/bwd hooks (no extra backward, accumulated over micro-batches). **Self-validating** —
-logs `validate_cos` = \(\cos(\operatorname{block\_skew}(W_{\mathrm{perm}}^\top G_{\mathrm{perm}}),\,\partial L/\partial\text{oft\_R\_in})\),
-which must be \(\approx\pm1\) or the capture/frame-mapping is wrong. **Read:** high
-`weight_only_cos` ⇒ rotating out barely moves the in-signal ⇒ staleness is
-gradient-field-driven, not inter-side coupling; low ⇒ real weight coupling.
+`SLM_POET_WSPLIT=1`): the angle-free **sensitivity** of the in-side signal to an out
+rotation, \(s=\lVert\operatorname{block\_skew}(D_{\mathrm{out}}^\top G)\rVert_F/\lVert\operatorname{block\_skew}(W^\top G)\rVert_F\)
+(holding \(G\) fixed; physical per-step shift `relchange` \(=\text{eff∠}\cdot s\)) — the
+*weight-driven* part of second-side staleness. A bare \(\cos(K_{\mathrm{in}}(W),K_{\mathrm{in}}(W_o))\)
+at the realized eff∠ is ≈1 regardless of coupling (same pitfall as the unscaled
+`r_cross`), so we report \(s\). POET freezes \(W\) and never materializes
+\(G=\partial L/\partial W_{\mathrm{eff}}\), so this **cannot** reuse the optimizer-state
+hook: it captures \(G=g_y^\top x\) (output-grad × input) via per-layer fwd/bwd hooks (no
+extra backward, accumulated over micro-batches). **Self-validating** — logs
+`validate_cos` = \(\cos(\operatorname{block\_skew}(W_{\mathrm{perm}}^\top G_{\mathrm{perm}}),\,\partial L/\partial\text{oft\_R\_in})\),
+which must be \(\approx\pm1\) or the capture/frame-mapping is wrong. **Read:** \(s\ll1\) ⇒
+rotating out barely moves the in-signal ⇒ staleness is gradient-field-driven, not
+inter-side coupling; \(s\sim O(1)\) ⇒ real weight coupling.
 
 **Still deferred** (need \(G\) *and* extra forward passes):
 
