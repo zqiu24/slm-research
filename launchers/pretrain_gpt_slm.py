@@ -102,6 +102,14 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # Muon-style Nesterov look-ahead: orthogonalize (1-b1)*g + b1*m instead of m.
     group.add_argument("--poet-lie-ortho-nesterov", action="store_true")
     group.add_argument("--poet-lie-ortho-distributed", action="store_true")
+    # Cross-side decorrelation probe (ANALYSIS §17.6): project the two sides' generators
+    # apart so cos(D_out,D_in)->0, isolating inter-side gauge-redundancy. Simultaneous cfg.
+    group.add_argument("--poet-lie-ortho-decorrelate", action="store_true")
+    group.add_argument(
+        "--poet-lie-ortho-decorrelate-mode",
+        choices=["in_off_out", "out_off_in", "symmetric"],
+        default="in_off_out",
+    )
     # Head-aligned attention rotation (opt-in): q/k/v/o rotate their head-
     # structured side per head (block_size=head_dim, identity Psi, no perm);
     # the residual side stays a normal POET rotation. Requires --unfuse-qkv.
