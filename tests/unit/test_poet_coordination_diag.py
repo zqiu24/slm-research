@@ -284,6 +284,47 @@ def test_weight_only_sensitivity_matches_explicit_ratio():
     assert got.item() == pytest.approx((dk.norm() / k.norm()).item(), rel=1e-5)
 
 
+def test_wsplit_validation_matches_poet_backward_up_to_sign():
+    # The WSPLIT validate_cos compares block_skew(W_perm^T G_perm) (G = captured
+    # ambient grad) against oft_R_in.grad. Replicate POETXSingleStepFunction.backward
+    # (poetx_ops.py:55-62) and confirm they align up to sign (|cos|~1) -> the frame is
+    # correct, so a *run's* validate_cos~0 is a DP local-vs-global mismatch, not a frame bug.
+    from src.diag.skew_conditioning import vec_to_skew
+
+    torch.manual_seed(0)
+    r_out, b_out = 3, 4
+    r_in, b_in = 2, 5
+    out_f, in_f = r_out * b_out, r_in * b_in
+    n_tok = 7
+    x = torch.randn(n_tok, in_f)
+    grad_y = torch.randn(n_tok, out_f)
+    wx = torch.randn(out_f, in_f)
+    perm_in_inv = torch.argsort(torch.randperm(in_f))
+    perm_out_inv = torch.argsort(torch.randperm(out_f))
+    tri = torch.triu_indices(b_in, b_in, 1)
+
+    def _conj(m, p):
+        return m.index_select(0, p).index_select(1, p)
+
+    def _bdsv(full, b, rows, cols, factor=2.0):
+        nb = full.shape[0] // b
+        diag = full.reshape(nb, b, nb, b)[torch.arange(nb), :, torch.arange(nb), :]
+        return factor * (diag - diag.transpose(-1, -2))[:, rows.long(), cols.long()]
+
+    # exact POET backward in-side gradient
+    g_their = x.reshape(-1, in_f).t() @ grad_y.reshape(-1, out_f)  # (in, out)
+    k_true = vec_to_skew(_bdsv(_conj(g_their @ wx, perm_in_inv), b_in, tri[0], tri[1]), b_in)
+
+    # WSPLIT validation formula (captured G = grad_y^T x)
+    g_eff = grad_y.reshape(-1, out_f).t() @ x.reshape(-1, in_f)  # (out, in)
+    g_perm = g_eff.index_select(0, perm_out_inv).index_select(1, perm_in_inv)
+    w_perm = wx.index_select(0, perm_out_inv).index_select(1, perm_in_inv)
+    k_mine = block_diag_skew(w_perm.t() @ g_perm, b_in)
+
+    cos = (k_mine.flatten() @ k_true.flatten()) / (k_mine.norm() * k_true.norm())
+    assert abs(cos.item()) > 0.999, cos.item()
+
+
 # --- layer_coordination_metrics (per-layer assembler) ---------------------
 
 

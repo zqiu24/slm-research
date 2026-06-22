@@ -20,9 +20,12 @@ regardless of coupling, so we report the sensitivity, not the cosine.)
 
 POET freezes W and never materializes the ambient G = dL/dW_eff, so we capture it
 with fwd/bwd hooks: stash the layer input x, accumulate G += g_y^T x over the
-backward of every micro-batch (matching main_grad's accumulation), NO extra backward.
-Self-validating: logs ``validate_cos`` = cos(block_skew(W_perm^T G_perm),
-oft_R_in.grad), which must be ~±1 if the capture + frame-mapping are correct.
+backward of every micro-batch, then DP all-reduce it (so it matches main_grad, which is
+DP-reduced — the local-only G is ~orthogonal to the global grad when the tangent is
+near-white). NO extra backward. Self-validating: logs ``validate_cos`` =
+cos(block_skew(W_perm^T G_perm), oft_R_in.grad), whose **|value| must be ~1** (it lands
+near -1: block_skew(W^T G) = -block_skew(G^T W), the convention POET's backward uses).
+|validate_cos| far from 1 => the capture/frame is wrong; do not trust the sensitivity.
 
 Mechanism mirrors ``poet_coordination_log`` (wrap setup_model_and_optimizer, select
 two-sided layers, wrap optimizer.step), plus per-layer capture hooks gated to the
@@ -80,6 +83,33 @@ def _install_capture_hook(layer):
     layer.register_forward_hook(_fwd_hook)
 
 
+def _allreduce_coord_G(targets) -> None:  # noqa: N802
+    """DP all-reduce(SUM) each layer's captured G so it matches the gradient the
+    optimizer actually uses (oft_R.main_grad is DP-reduced). MUST run on every rank
+    (collective) before the rank-0-only logging — otherwise the local G is just this
+    rank's shard, ~orthogonal to the global grad when the tangent gradient is near-white
+    (which is exactly why validate_cos read ~0). The per-layer scale is irrelevant to
+    both validate_cos and the sensitivity ratio, so SUM (no /world_size) is fine."""
+    try:
+        import torch.distributed as dist
+        from megatron.core import parallel_state as mpu
+    except Exception:
+        return
+    if not (dist.is_available() and dist.is_initialized()):
+        return
+    try:
+        if mpu.get_data_parallel_world_size() <= 1:
+            return
+        grp = mpu.get_data_parallel_group()
+    except Exception:
+        return
+    # Same targets + same capture schedule on every rank => identical reduce set (safe).
+    for t in targets:
+        g = getattr(t["layer"], "_coord_G", None)
+        if g is not None:
+            dist.all_reduce(g, group=grp)
+
+
 def _g_perm(layer):
     """Un-permute the captured forward-frame G_eff into the W_perm frame (same
     index-select as the weight), or None if not captured this step."""
@@ -104,6 +134,10 @@ def _log_weight_split(targets, lookup, iteration: int) -> None:
         _realized_angle,
         w_perm_frame,
     )
+
+    # Collective: ALL ranks must reduce their local captured G to the global gradient
+    # BEFORE the rank-0-only logging gate below (else local G ~ orthogonal to main_grad).
+    _allreduce_coord_G(targets)
 
     try:
         import wandb

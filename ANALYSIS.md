@@ -1224,11 +1224,14 @@ at the realized eff∠ is ≈1 regardless of coupling (same pitfall as the unsca
 `r_cross`), so we report \(s\). POET freezes \(W\) and never materializes
 \(G=\partial L/\partial W_{\mathrm{eff}}\), so this **cannot** reuse the optimizer-state
 hook: it captures \(G=g_y^\top x\) (output-grad × input) via per-layer fwd/bwd hooks (no
-extra backward, accumulated over micro-batches). **Self-validating** — logs
-`validate_cos` = \(\cos(\operatorname{block\_skew}(W_{\mathrm{perm}}^\top G_{\mathrm{perm}}),\,\partial L/\partial\text{oft\_R\_in})\),
-which must be \(\approx\pm1\) or the capture/frame-mapping is wrong. **Read:** \(s\ll1\) ⇒
-rotating out barely moves the in-signal ⇒ staleness is gradient-field-driven, not
-inter-side coupling; \(s\sim O(1)\) ⇒ real weight coupling.
+extra backward, accumulated over micro-batches, then **DP all-reduced** — `main_grad`
+is DP-reduced, and the rank-local \(G\) is ~orthogonal to it when the tangent is
+near-white, which is exactly why the first run read `validate_cos`≈0). **Self-validating**
+— logs `validate_cos` = \(\cos(\operatorname{block\_skew}(W_{\mathrm{perm}}^\top G_{\mathrm{perm}}),\,\partial L/\partial\text{oft\_R\_in})\),
+whose **\(\lvert\cdot\rvert\) must be ≈1** (it lands near \(-1\): \(\operatorname{block\_skew}(W^\top G)=-\operatorname{block\_skew}(G^\top W)\),
+POET's backward convention — verified by `test_wsplit_validation_matches_poet_backward_up_to_sign`).
+**Read:** \(s\ll1\) ⇒ rotating out barely moves the in-signal ⇒ staleness is
+gradient-field-driven, not inter-side coupling; \(s\sim O(1)\) ⇒ real weight coupling.
 
 **Still deferred** (need \(G\) *and* extra forward passes):
 
