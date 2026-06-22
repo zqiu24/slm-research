@@ -76,6 +76,33 @@ def _build_lie_param_groups(skew_in, skew_out, adamw_params, lr, min_lr, scale):
     return groups
 
 
+def _build_decorrelate_pairs(model_chunks):
+    """(out_param, in_param, weight, block_size_out, block_size_in) for each two-sided
+    POETLinear with BOTH rotations trainable -- the layer pairing LieOrthMomentum's
+    cross-side decorrelation needs. ``weight`` is the block-contiguous frame the
+    generators live in (POETLinear.weight, unpermuted -- the forward permutes the
+    activations, not the weight). block_size_in/out are present only on the inner
+    POETLinear, so the Megatron wrapper is naturally skipped."""
+    pairs = []
+    for mc in model_chunks:
+        for mod in mc.modules():
+            oin = getattr(mod, "oft_R_in", None)
+            oout = getattr(mod, "oft_R_out", None)
+            w = getattr(mod, "weight", None)
+            if (
+                oin is None
+                or oout is None
+                or w is None
+                or not getattr(oin, "requires_grad", False)
+                or not getattr(oout, "requires_grad", False)
+                or not hasattr(mod, "block_size_in")
+                or not hasattr(mod, "block_size_out")
+            ):
+                continue
+            pairs.append((oout, oin, w, int(mod.block_size_out), int(mod.block_size_in)))
+    return pairs
+
+
 class LieAlgebraMomentum(torch.optim.Optimizer):
     def __init__(
         self,

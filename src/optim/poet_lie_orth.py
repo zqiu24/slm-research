@@ -44,6 +44,9 @@ class LieOrthMomentum(torch.optim.Optimizer):
         dp_world_size: int = 1,
         dp_rank: int = 0,
         dp_group=None,
+        decorrelate_sides: bool = False,
+        decorrelate_mode: str = "in_off_out",
+        layer_pairs=None,
         adamw_betas=(0.9, 0.95),
         adamw_eps: float = 1e-8,
         adamw_wd: float = 0.0,
@@ -52,6 +55,11 @@ class LieOrthMomentum(torch.optim.Optimizer):
             raise ValueError(f"v_mode must be 'scalar' or 'elementwise', got {v_mode!r}")
         if ortho_method not in ("muon", "spectral"):
             raise ValueError(f"ortho_method must be 'muon' or 'spectral', got {ortho_method!r}")
+        if decorrelate_mode not in ("in_off_out", "out_off_in", "symmetric"):
+            raise ValueError(
+                "decorrelate_mode must be 'in_off_out' | 'out_off_in' | 'symmetric', "
+                f"got {decorrelate_mode!r}"
+            )
         # Alternating single-sided update: write only one side's oft_R per step (out on
         # even, in on odd), accumulating momentum on BOTH sides.
         self.alternating = bool(alternating)
@@ -82,6 +90,15 @@ class LieOrthMomentum(torch.optim.Optimizer):
         self._dp_world_size = int(dp_world_size)
         self._dp_rank = int(dp_rank)
         self.dp_group = dp_group
+        # Cross-side decorrelation (ANALYSIS §17.6 probe): project each layer's in/out
+        # generator off the other's weight-space direction so cos(D_out, D_in) -> 0,
+        # isolating the inter-side gauge-redundancy channel from per-side conditioning.
+        # Meant for the SIMULTANEOUS config (alternating=False) where both sides write
+        # each step; in alternating mode only one side is non-zero per step so it is a
+        # near no-op. layer_pairs = [(out_param, in_param, weight, bsz_out, bsz_in), ...].
+        self.decorrelate_sides = bool(decorrelate_sides)
+        self.decorrelate_mode = decorrelate_mode
+        self._decorr_pairs = list(layer_pairs) if layer_pairs else []
         defaults = dict(
             lr=0.0,
             use_skew=False,
@@ -203,6 +220,49 @@ class LieOrthMomentum(torch.optim.Optimizer):
                 row_off += nb
         return buf, slices
 
+    def _decorrelate_buf(self, buf, slices):
+        """Cross-side Gram-Schmidt on the assembled generators (post all-reduce, so both
+        sides are complete on every rank): project each layer's in/out generator off the
+        other's weight-space direction, driving cos(D_out, D_in) -> 0 while leaving each
+        side's Muon whitening ~intact. Exact identity (in the block-contiguous frame the
+        generators live in, with W = POETLinear.weight):
+
+            <D_out, D_in>_F = <block_skew(W^T D_out), A_in>  (and the symmetric W D_in^T form),
+
+        so removing the block_skew(W^T D_out) component from A_in zeros the overlap. One
+        extra block-matmul per side; no backward, no W grad. Mutates buf in place."""
+        if not self._decorr_pairs:
+            return
+        from src.diag.poet_coordination_diag import block_diag_skew, side_directions
+
+        off_by_id = {id(p): (off, n) for off, n, p, _lr in slices}
+        eps = 1e-12
+        sym = self.decorrelate_mode == "symmetric"
+        for out_p, in_p, w, bsz_out, bsz_in in self._decorr_pairs:
+            so, si = off_by_id.get(id(out_p)), off_by_id.get(id(in_p))
+            if so is None or si is None:
+                continue
+            (oo, no), (oi, ni) = so, si
+            out_vec = buf[oo : oo + no].view(out_p.shape[0], -1)
+            in_vec = buf[oi : oi + ni].view(in_p.shape[0], -1)
+            # One side may be all-zeros this step (e.g. alternating) -> nothing to project.
+            if float(out_vec.abs().sum()) == 0.0 or float(in_vec.abs().sum()) == 0.0:
+                continue
+            A_out = vec_to_skew(out_vec, bsz_out)
+            A_in = vec_to_skew(in_vec, bsz_in)
+            W = w.detach().to(torch.float32)
+            d_out, d_in = side_directions(A_out, A_in, W)  # from the ORIGINAL generators
+            if self.decorrelate_mode in ("in_off_out", "symmetric"):
+                g = block_diag_skew(W.transpose(-2, -1) @ d_out, bsz_in)
+                c = (A_in.flatten() @ g.flatten()) / (g.flatten() @ g.flatten()).clamp_min(eps)
+                A_in = A_in - (0.5 * c if sym else c) * g
+                buf[oi : oi + ni] = skew_to_vec(A_in, bsz_in).reshape(-1)
+            if self.decorrelate_mode in ("out_off_in", "symmetric"):
+                g = block_diag_skew(d_in @ W.transpose(-2, -1), bsz_out)
+                c = (A_out.flatten() @ g.flatten()) / (g.flatten() @ g.flatten()).clamp_min(eps)
+                A_out = A_out - (0.5 * c if sym else c) * g
+                buf[oo : oo + no] = skew_to_vec(A_out, bsz_out).reshape(-1)
+
     def _apply_skew_update_buffer(self, buf, slices):
         """Phase (d): scatter the (already all-reduced) flat buffer back onto oft_R,
         applying each param's lr. Cast order (gen.to(dtype) then alpha=lr) matches the
@@ -226,6 +286,10 @@ class LieOrthMomentum(torch.optim.Optimizer):
             import torch.distributed as dist
 
             dist.all_reduce(buf, group=self.dp_group)
+        # Decorrelate AFTER all-reduce so both sides' generators are complete on every
+        # rank (W is DP-replicated -> identical result across ranks, no extra collective).
+        if self.decorrelate_sides:
+            self._decorrelate_buf(buf, slices)
         self._apply_skew_update_buffer(buf, slices)
 
         # --- AdamW branch (non-skew params): unchanged, replicated ---

@@ -544,6 +544,7 @@ def get_megatron_poet_lie_momentum_optimizer(
 
     from src.optim.poet_lie_momentum import (
         LieAlgebraMomentum,
+        _build_decorrelate_pairs,
         _build_lie_param_groups,
         _split_poet_lie_params,
     )
@@ -600,6 +601,7 @@ def get_megatron_poet_lie_momentum_optimizer(
         _dp_world = mpu.get_data_parallel_world_size() if _lie_ortho_distributed else 1
         _dp_rank = mpu.get_data_parallel_rank() if _lie_ortho_distributed else 0
         _dp_group = mpu.get_data_parallel_group() if _lie_ortho_distributed else None
+        _lie_ortho_decorrelate = bool(getattr(config, "poet_lie_ortho_decorrelate", False))
         logger.info(
             "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s, "
             "nesterov=%s, distributed=%s",
@@ -614,6 +616,13 @@ def get_megatron_poet_lie_momentum_optimizer(
             logger.info(
                 "[POET] Lie-orth distributed orthogonalization: dp_world=%s",
                 _dp_world,
+            )
+        if _lie_ortho_decorrelate:
+            logger.warning(
+                "[POET] Lie-orth CROSS-SIDE DECORRELATION ON (mode=%s) — projects the two "
+                "sides' generators apart so cos(D_out,D_in)->0; intended for the "
+                "simultaneous (alternating=false) config (ANALYSIS §17.6 probe).",
+                getattr(config, "poet_lie_ortho_decorrelate_mode", "in_off_out"),
             )
         optimizer = LieOrthMomentum(
             param_groups,
@@ -630,6 +639,9 @@ def get_megatron_poet_lie_momentum_optimizer(
             dp_world_size=_dp_world,
             dp_rank=_dp_rank,
             dp_group=_dp_group,
+            decorrelate_sides=_lie_ortho_decorrelate,
+            decorrelate_mode=getattr(config, "poet_lie_ortho_decorrelate_mode", "in_off_out"),
+            layer_pairs=_build_decorrelate_pairs(model_chunks) if _lie_ortho_decorrelate else None,
             **shared_kwargs,
         )
     else:

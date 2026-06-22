@@ -417,3 +417,69 @@ def test_true_single_side_active_flips_with_iteration():
     opt.step()
     assert p_out.data.abs().sum() > 0
     assert torch.allclose(p_in.data, torch.zeros_like(p_in))
+
+
+# --- cross-side decorrelation (decorrelate_sides) -------------------------
+# Projects each layer's in/out generator off the other's weight-space direction so
+# cos(D_out, D_in) -> 0, holding per-side Muon conditioning ~fixed. Isolates the
+# inter-side gauge-redundancy channel (ANALYSIS §17.6). The one-sided modes zero the
+# overlap exactly; 'symmetric' splits the perturbation and reduces it.
+def _decorr_applied_cos(decorrelate, mode, seed=1):
+    from src.diag.poet_coordination_diag import side_directions
+
+    torch.manual_seed(seed)
+    out_f, in_f, bo, bi = 12, 12, 12, 12  # block_count=1 (champion): one full block/side
+    r_out, r_in = out_f // bo, in_f // bi
+    oout = nn.Parameter(torch.zeros(r_out, bo * (bo - 1) // 2))
+    oin = nn.Parameter(torch.zeros(r_in, bi * (bi - 1) // 2))
+    oout.grad = torch.randn_like(oout)
+    oin.grad = torch.randn_like(oin)
+    W = torch.randn(out_f, in_f)
+    lr = 0.05
+    opt = LieOrthMomentum(
+        [
+            dict(params=[oin], use_skew=True, side="in", lr=lr),
+            dict(params=[oout], use_skew=True, side="out", lr=lr),
+        ],
+        ortho_c=0.1,
+        decorrelate_sides=decorrelate,
+        decorrelate_mode=mode,
+        layer_pairs=[(oout, oin, W, bo, bi)] if decorrelate else None,
+    )
+    opt.step()
+    # oft_R started at 0, so .data = lr * generator -> recover the applied generators.
+    A_out = vec_to_skew(oout.data / lr, bo)
+    A_in = vec_to_skew(oin.data / lr, bi)
+    d_out, d_in = side_directions(A_out, A_in, W.float())
+    a, b = d_out.flatten(), d_in.flatten()
+    return (a @ b / (a.norm() * b.norm() + 1e-12)).item()
+
+
+@pytest.mark.parametrize("mode", ["in_off_out", "out_off_in"])
+def test_decorrelate_zeroes_inter_side_overlap(mode):
+    base = _decorr_applied_cos(False, mode)
+    assert abs(base) > 0.02, f"baseline overlap should be non-trivial, got {base}"
+    c = _decorr_applied_cos(True, mode)
+    assert abs(c) < 1e-4, f"{mode} should drive cos(D_out,D_in)->0, got {c}"
+    assert abs(c) < 0.05 * abs(base), f"{mode} should crush overlap: base={base} c={c}"
+
+
+def test_decorrelate_symmetric_reduces_overlap():
+    base = abs(_decorr_applied_cos(False, "symmetric"))
+    sym = abs(_decorr_applied_cos(True, "symmetric"))
+    assert sym < 0.5 * base, f"symmetric should reduce overlap: base={base} sym={sym}"
+
+
+def test_decorrelate_off_is_unchanged():
+    # decorrelate_sides=False must be bit-identical to the plain optimizer.
+    assert _decorr_applied_cos(False, "in_off_out") == _decorr_applied_cos(False, "out_off_in")
+
+
+def test_decorrelate_rejects_bad_mode():
+    p = nn.Parameter(torch.zeros(1, 28))
+    with pytest.raises(ValueError, match="decorrelate_mode"):
+        LieOrthMomentum(
+            [dict(params=[p], use_skew=True, side="in", lr=0.1)],
+            decorrelate_sides=True,
+            decorrelate_mode="bogus",
+        )
