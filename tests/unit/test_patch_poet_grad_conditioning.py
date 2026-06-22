@@ -125,19 +125,38 @@ def test_log_conditioning_also_logs_muon_update_spectrum(monkeypatch):
     v[:, :3] *= 6.0  # heavy-tailed raw gradient (the (n_blocks, n_elems) vec form)
     param = torch.nn.Parameter(torch.zeros(2, ne))
     param.main_grad = v
-    target = {"label": "x", "factor": "R_in", "param": param, "block_size": b, "layer": None}
+    base_label = "module.module.decoder.layers.0.self_attention.linear_v"
+    side_label = f"{base_label}.poet_linear.R_in"
+    target = {
+        "label": side_label,
+        "base_label": base_label,
+        "factor": "R_in",
+        "param": param,
+        "block_size": b,
+        "layer": None,
+    }
 
     _log_conditioning([target], iteration=0)
 
-    assert "poet_cond/x/condition_number" in captured
-    assert "poet_update/x/cond_orthogonalized" in captured
-    assert captured["poet_cond/x/condition_number"] > 10.0  # raw grad heavy-tailed
-    assert captured["poet_update/x/cond_orthogonalized"] < 5.0  # Muon update flattened
+    assert f"poet_cond/{side_label}/condition_number" in captured
+    assert f"poet_update/{side_label}/cond_orthogonalized" in captured
+    assert captured[f"poet_cond/{side_label}/condition_number"] > 10.0  # raw grad heavy-tailed
+    assert captured[f"poet_update/{side_label}/cond_orthogonalized"] < 5.0
     # full post-orthogonalization spectral stats (not just the condition number),
     # plus effective_rank on the raw side, so both spectra carry the same metrics.
     for metric in ("stable_rank", "effective_rank", "sigma_max_over_median"):
-        assert f"poet_cond/x/{metric}" in captured
-        assert f"poet_update/x/{metric}" in captured
-    assert "poet_cond/x/effective_rank" in captured
+        assert f"poet_cond/{side_label}/{metric}" in captured
+        assert f"poet_update/{side_label}/{metric}" in captured
+        assert f"grad_cond/{base_label}/R_in/{metric}" in captured
+        assert f"grad_update/{base_label}/R_in/{metric}" in captured
+        assert f"grad_cond/{base_label}/{metric}" in captured
+        assert f"grad_update/{base_label}/{metric}" in captured
+    assert f"poet_cond/{side_label}/effective_rank" in captured
+    assert captured[f"grad_cond/{base_label}/effective_rank"] == pytest.approx(
+        captured[f"poet_cond/{side_label}/effective_rank"]
+    )
     # NS whitens the skew update: effective rank rises vs the heavy-tailed raw grad
-    assert captured["poet_update/x/effective_rank"] > captured["poet_cond/x/effective_rank"]
+    assert (
+        captured[f"poet_update/{side_label}/effective_rank"]
+        > captured[f"poet_cond/{side_label}/effective_rank"]
+    )

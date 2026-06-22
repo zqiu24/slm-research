@@ -785,6 +785,26 @@ def _weight_norm_args(training: DictConfig) -> list[str]:
     return args
 
 
+def _delta_w_args(training: DictConfig) -> list[str]:
+    """Emit the weight_delta_monitor flags from the `training` config block."""
+    if not _truthy(training.get("log_delta_w", False)):
+        return []
+    args: list[str] = ["--log-delta-w"]
+    interval = training.get("log_delta_w_interval", None)
+    if interval is not None:
+        _add(args, "--log-delta-w-interval", interval)
+    layers = training.get("delta_w_layers", None)
+    if layers is not None:
+        _add(args, "--delta-w-layers", layers)
+    max_targets = training.get("delta_w_max_targets", None)
+    if max_targets is not None:
+        _add(args, "--delta-w-max-targets", max_targets)
+    spectral_max_dim = training.get("delta_w_spectral_max_dim", None)
+    if spectral_max_dim is not None:
+        _add(args, "--delta-w-spectral-max-dim", spectral_max_dim)
+    return args
+
+
 def _logging_args(cfg: DictConfig) -> list[str]:
     derived = cfg.get("_derived", {})
     archive = derived.get("run_dir", "runs/pending") if hasattr(derived, "get") else "runs/pending"
@@ -843,6 +863,7 @@ def _logging_args(cfg: DictConfig) -> list[str]:
         _add(args, "--finetune")
         _add(args, "--override-opt-param-scheduler")
     args.extend(_weight_norm_args(cfg.training))
+    args.extend(_delta_w_args(cfg.training))
     return args
 
 

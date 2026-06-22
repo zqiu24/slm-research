@@ -45,6 +45,18 @@ _WANTED = (
 )
 
 
+def _generic_grad_label(label: str, factor: str | None = None) -> str:
+    """Map a POET side label back to the comparable dense Linear label."""
+    base = str(label)
+    if factor:
+        suffix = f".{factor}"
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    if base.endswith(".poet_linear"):
+        base = base[: -len(".poet_linear")]
+    return base
+
+
 def select_target_params(named_layers, max_targets: int = 8):
     """From (name, poet_layer) pairs, pick representative blocks to probe.
 
@@ -66,6 +78,7 @@ def select_target_params(named_layers, max_targets: int = 8):
             targets.append(
                 {
                     "label": f"{name}.{factor}",
+                    "base_label": _generic_grad_label(name),
                     "factor": factor,
                     "param": param,
                     "block_size": int(bsz),
@@ -88,6 +101,9 @@ def _log_conditioning(targets, iteration: int) -> None:
     except Exception:
         wandb = None
 
+    payload = {}
+    raw_by_base = {}
+    update_by_base = {}
     for t in targets:
         param = t["param"]
         grad = getattr(param, "main_grad", None)
@@ -106,31 +122,41 @@ def _log_conditioning(targets, iteration: int) -> None:
         # realized update spectrum on the muon arms and the counterfactual on the
         # adam arms. ns_steps=5 matches the SkewMuon default these runs use.
         upd = muon_update_spectral_stats(skew, ns_steps=5)
+        raw_metrics = {
+            "condition_number": stats["condition_number"].mean().item(),
+            "stable_rank": stats["stable_rank"].mean().item(),
+            "sigma_max_over_median": stats["sigma_max_over_median"].mean().item(),
+            "effective_rank": stats["effective_rank"].mean().item(),
+        }
+        update_metrics = {
+            "condition_number": upd["condition_number"].mean().item(),
+            "stable_rank": upd["stable_rank"].mean().item(),
+            "sigma_max_over_median": upd["sigma_max_over_median"].mean().item(),
+            "effective_rank": upd["effective_rank"].mean().item(),
+        }
         if wandb is not None and getattr(wandb, "run", None) is not None:
-            wandb.log(
-                {
-                    # raw skew-gradient spectrum (read before the optimizer steps)
-                    f"poet_cond/{t['label']}/condition_number": stats["condition_number"]
-                    .mean()
-                    .item(),
-                    f"poet_cond/{t['label']}/stable_rank": stats["stable_rank"].mean().item(),
-                    f"poet_cond/{t['label']}/sigma_max_over_median": stats["sigma_max_over_median"]
-                    .mean()
-                    .item(),
-                    f"poet_cond/{t['label']}/effective_rank": stats["effective_rank"].mean().item(),
-                    # post-orthogonalization (SkewMuon update) spectrum. cond_orthogonalized
-                    # is kept as the original key; the rest complete the metric set.
-                    f"poet_update/{t['label']}/cond_orthogonalized": upd["condition_number"]
-                    .mean()
-                    .item(),
-                    f"poet_update/{t['label']}/stable_rank": upd["stable_rank"].mean().item(),
-                    f"poet_update/{t['label']}/sigma_max_over_median": upd["sigma_max_over_median"]
-                    .mean()
-                    .item(),
-                    f"poet_update/{t['label']}/effective_rank": upd["effective_rank"].mean().item(),
-                },
-                step=iteration,
-            )
+            # Raw skew-gradient spectrum (read before the optimizer steps). The
+            # poet_* keys keep the side-specific POET detail; the grad_* aliases
+            # put comparable summaries on the same W&B panels as Adam/Muon.
+            for metric, value in raw_metrics.items():
+                payload[f"poet_cond/{t['label']}/{metric}"] = value
+            # Post-orthogonalization (SkewMuon update) spectrum. cond_orthogonalized
+            # is kept as the original key; condition_number aliases the same value
+            # for comparison with generic grad_update/* charts.
+            payload[f"poet_update/{t['label']}/cond_orthogonalized"] = update_metrics[
+                "condition_number"
+            ]
+            for metric, value in update_metrics.items():
+                payload[f"poet_update/{t['label']}/{metric}"] = value
+
+            base_label = t.get("base_label") or _generic_grad_label(t["label"], t.get("factor"))
+            factor = t.get("factor")
+            for metric, value in raw_metrics.items():
+                payload[f"grad_cond/{base_label}/{factor}/{metric}"] = value
+                raw_by_base.setdefault(base_label, {}).setdefault(metric, []).append(value)
+            for metric, value in update_metrics.items():
+                payload[f"grad_update/{base_label}/{factor}/{metric}"] = value
+                update_by_base.setdefault(base_label, {}).setdefault(metric, []).append(value)
 
         # rotation diagnostics: build R = f(Q) for this block's CURRENT oft_R and
         # log realized-angle ||G-I|| + orthogonality-drift ||RR^T-I|| (Stage-2 calibration).
@@ -153,15 +179,19 @@ def _log_conditioning(targets, iteration: int) -> None:
             )
             rd = block_rotation_diagnostics(rot)
             if wandb is not None and getattr(wandb, "run", None) is not None:
-                wandb.log(
-                    {
-                        f"poet_rot/{t['label']}/g_minus_i": rd["g_minus_i"].mean().item(),
-                        f"poet_rot/{t['label']}/ortho_err": rd["ortho_err"].mean().item(),
-                    },
-                    step=iteration,
-                )
+                payload[f"poet_rot/{t['label']}/g_minus_i"] = rd["g_minus_i"].mean().item()
+                payload[f"poet_rot/{t['label']}/ortho_err"] = rd["ortho_err"].mean().item()
         except Exception:  # diagnostics must never break training
             logger.exception("[COND] rotation diag failed for %s", t["label"])
+
+    if wandb is not None and getattr(wandb, "run", None) is not None and payload:
+        for base_label, by_metric in raw_by_base.items():
+            for metric, values in by_metric.items():
+                payload[f"grad_cond/{base_label}/{metric}"] = sum(values) / len(values)
+        for base_label, by_metric in update_by_base.items():
+            for metric, values in by_metric.items():
+                payload[f"grad_update/{base_label}/{metric}"] = sum(values) / len(values)
+        wandb.log(payload, step=iteration)
 
 
 def _install_step_hook(optimizer, targets, interval: int) -> None:

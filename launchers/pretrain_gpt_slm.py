@@ -165,6 +165,12 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--log-weight-norms", action="store_true")
     group.add_argument("--log-weight-norms-interval", type=int, default=100)
     group.add_argument("--weight-norm-layers", type=str, default="first,mid,last")
+    # Materialized weight-displacement monitoring (weight_delta_monitor patch).
+    group.add_argument("--log-delta-w", action="store_true")
+    group.add_argument("--log-delta-w-interval", type=int, default=250)
+    group.add_argument("--delta-w-layers", type=str, default="first,mid,last")
+    group.add_argument("--delta-w-max-targets", type=int, default=0)
+    group.add_argument("--delta-w-spectral-max-dim", type=int, default=128)
     return parser
 
 
@@ -193,6 +199,7 @@ _ALWAYS_ON_PATCHES = (
     "poet_grad_conditioning",
     "grad_conditioning",
     "weight_norm_monitor",
+    "weight_delta_monitor",
     "poet_coordination_log",
     "poet_weight_split_log",
 )

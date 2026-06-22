@@ -1,5 +1,5 @@
 # src/patches/weight_norm_monitor.py
-"""Patch: log row/column norm summaries of a few weight matrices to W&B.
+"""Patch: log weight norm summaries of a few weight matrices to W&B.
 
 Flag-gated by ``--log-weight-norms`` (interval ``--log-weight-norms-interval``,
 default 100; layers ``--weight-norm-layers``, default ``first,mid,last``). Inert
@@ -123,30 +123,36 @@ def _summary(vec) -> dict:
 
 
 def compute_matrix_norm_stats(weight) -> dict:
-    """Row/col L2-norm summaries (raw and RMS-normalized) for a 2-D weight.
+    """Weight RMS plus row/col L2-norm summaries for a 2-D weight.
 
     For ``weight`` of shape ``(out, in)``:
+      * weight RMS ``sqrt(mean(W**2))`` (one scalar for the whole matrix)
       * row norms ``r_i = ||W[i, :]||`` (length ``out``); RMS = ``r_i / sqrt(in)``
       * col norms ``c_j = ||W[:, j]||`` (length ``in``);  RMS = ``c_j / sqrt(out)``
     RMS divides out the matrix width so different-shaped matrices are comparable.
-    Returns scalar summaries under keys ``row``/``col``/``row_rms``/``col_rms``
-    plus the raw RMS vectors (``_row_rms_vec``/``_col_rms_vec``) for histograms.
+    Returns scalar summaries under keys ``weight_rms``/``row``/``col``/
+    ``row_rms``/``col_rms`` plus the raw RMS vectors for histograms. ``_sum_sq``
+    and ``_numel`` support exact pooled RMS aggregation across several matrices.
     """
     import torch
 
     w = weight.detach().to(torch.float32)
     out_dim, in_dim = w.shape
+    sq_sum = w.square().sum()
     row = torch.linalg.vector_norm(w, dim=1)
     col = torch.linalg.vector_norm(w, dim=0)
     row_rms = row / (in_dim**0.5)
     col_rms = col / (out_dim**0.5)
     return {
+        "weight_rms": sq_sum.div(w.numel()).sqrt().item(),
         "row": _summary(row),
         "col": _summary(col),
         "row_rms": _summary(row_rms),
         "col_rms": _summary(col_rms),
         "_row_rms_vec": row_rms,
         "_col_rms_vec": col_rms,
+        "_sum_sq": sq_sum.item(),
+        "_numel": w.numel(),
     }
 
 
@@ -174,7 +180,7 @@ def collect_target_weights(model, selected_layers: set[int]) -> list:
 
 
 def _log_weight_norms(model, iteration: int, opts) -> None:
-    """Compute and log row/col norm summaries + per-layer RMS histograms.
+    """Compute and log weight/row/col norm summaries + per-layer RMS histograms.
 
     Rank-gated implicitly: returns early unless a W&B run is active (Megatron
     initializes ``wandb.run`` only on the logging rank). Never raises — callers
@@ -202,21 +208,41 @@ def _log_weight_norms(model, iteration: int, opts) -> None:
 
     payload: dict = {}
     pools: dict = {}  # layer_idx -> {"row": [vec...], "col": [vec...]}
+    layer_weight_stats: dict = {}  # layer_idx -> {"sum_sq": float, "numel": int}
+    total_sum_sq = 0.0
+    total_numel = 0
     with torch.no_grad():
         for layer_idx, mtype, weight in targets:
             stats = compute_matrix_norm_stats(weight)
             prefix = f"weightnorm/L{layer_idx}/{mtype}"
+            payload[f"{prefix}/weight_rms"] = stats["weight_rms"]
             for kind in ("row", "col", "row_rms", "col_rms"):
                 for stat_name, value in stats[kind].items():
                     payload[f"{prefix}/{kind}/{stat_name}"] = value
             pool = pools.setdefault(layer_idx, {"row": [], "col": []})
             pool["row"].append(stats["_row_rms_vec"])
             pool["col"].append(stats["_col_rms_vec"])
+
+            sum_sq = float(stats["_sum_sq"])
+            numel = int(stats["_numel"])
+            layer_acc = layer_weight_stats.setdefault(layer_idx, {"sum_sq": 0.0, "numel": 0})
+            layer_acc["sum_sq"] += sum_sq
+            layer_acc["numel"] += numel
+            total_sum_sq += sum_sq
+            total_numel += numel
+
         for layer_idx, pool in pools.items():
             row_all = torch.cat(pool["row"]).cpu().numpy()
             col_all = torch.cat(pool["col"]).cpu().numpy()
             payload[f"weightnorm/L{layer_idx}/row_rms_hist"] = wandb.Histogram(row_all)
             payload[f"weightnorm/L{layer_idx}/col_rms_hist"] = wandb.Histogram(col_all)
+        for layer_idx, acc in layer_weight_stats.items():
+            if acc["numel"]:
+                payload[f"weightnorm/L{layer_idx}/_global/weight_rms"] = (
+                    acc["sum_sq"] / acc["numel"]
+                ) ** 0.5
+        if total_numel:
+            payload["weightnorm/_global/weight_rms"] = (total_sum_sq / total_numel) ** 0.5
 
     wandb.log(payload, step=iteration)
 

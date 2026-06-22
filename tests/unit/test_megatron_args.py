@@ -389,6 +389,30 @@ def test_poet_argv_omits_lie_ortho_distributed_by_default():
     assert "--poet-lie-ortho-distributed" not in args
 
 
+def test_poet_argv_emits_lie_ortho_decorrelate():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_count": 1,
+                "q_optimizer": "lie_ortho",
+                "lie_ortho_decorrelate": True,
+                "lie_ortho_decorrelate_mode": "symmetric",
+            }
+        )
+    )
+    assert "--poet-lie-ortho-decorrelate" in args
+    assert args[args.index("--poet-lie-ortho-decorrelate-mode") + 1] == "symmetric"
+
+
+def test_poet_argv_omits_lie_ortho_decorrelate_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-lie-ortho-decorrelate" not in args
+
+
 def test_wsd_scheduler_emits_wsd_flags():
     cfg = _parse_overrides(
         [
@@ -1277,6 +1301,37 @@ def test_weight_norm_args_omits_flags_by_default():
     assert _weight_norm_args(OmegaConf.create({})) == []
     # bool false also emits nothing
     assert _weight_norm_args(OmegaConf.create({"log_weight_norms": False})) == []
+
+
+def test_delta_w_args_emits_flags_when_enabled():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _delta_w_args
+
+    training = OmegaConf.create(
+        {
+            "log_delta_w": True,
+            "log_delta_w_interval": 50,
+            "delta_w_layers": "first,last",
+            "delta_w_max_targets": 3,
+            "delta_w_spectral_max_dim": 64,
+        }
+    )
+    argv = _delta_w_args(training)
+    assert "--log-delta-w" in argv
+    assert argv[argv.index("--log-delta-w-interval") + 1] == "50"
+    assert argv[argv.index("--delta-w-layers") + 1] == "first,last"
+    assert argv[argv.index("--delta-w-max-targets") + 1] == "3"
+    assert argv[argv.index("--delta-w-spectral-max-dim") + 1] == "64"
+
+
+def test_delta_w_args_omits_flags_by_default():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _delta_w_args
+
+    assert _delta_w_args(OmegaConf.create({})) == []
+    assert _delta_w_args(OmegaConf.create({"log_delta_w": False})) == []
 
 
 def _poet_moe_cfg(grouped_gemm: bool):

@@ -75,6 +75,8 @@ def test_compute_matrix_norm_stats_values_and_rms():
 
     # only the mean is emitted now (min/max/std commented out to cut W&B volume)
     assert set(stats["row"]) == {"mean"}
+    # exact whole-matrix RMS = sqrt((3^2 + 4^2) / 6)
+    assert stats["weight_rms"] == pytest.approx(math.sqrt(25.0 / 6.0))
     # row norms = [3, 4]; row_rms = norm / sqrt(in_dim=3)
     assert stats["row"]["mean"] == pytest.approx(3.5)
     assert stats["row_rms"]["mean"] == pytest.approx(3.5 / math.sqrt(3))
@@ -84,6 +86,8 @@ def test_compute_matrix_norm_stats_values_and_rms():
     # raw RMS vectors are returned for histogram pooling
     assert stats["_row_rms_vec"].shape == (2,)
     assert stats["_col_rms_vec"].shape == (3,)
+    assert stats["_sum_sq"] == pytest.approx(25.0)
+    assert stats["_numel"] == 6
 
 
 class _FakeMod:
@@ -143,7 +147,11 @@ def test_log_weight_norms_emits_scalars_and_per_layer_histograms(monkeypatch):
     # scalar keys for both matrices in layer 0, all four kinds (mean only now)
     assert "weightnorm/L0/qkv/row/mean" in captured
     assert "weightnorm/L0/qkv/col_rms/mean" in captured
+    assert captured["weightnorm/L0/qkv/weight_rms"] == pytest.approx(1.0)
     assert "weightnorm/L0/fc1/row/mean" in captured
+    assert captured["weightnorm/L0/fc1/weight_rms"] == pytest.approx(2.0)
+    assert captured["weightnorm/L0/_global/weight_rms"] == pytest.approx((152.0 / 56.0) ** 0.5)
+    assert captured["weightnorm/_global/weight_rms"] == pytest.approx((152.0 / 56.0) ** 0.5)
     # min/max/std are no longer logged
     assert not any(k.endswith(("/min", "/max", "/std")) for k in captured)
     # per-layer pooled RMS histograms (one row + one col), tagged HIST
@@ -215,6 +223,8 @@ def test_wrapper_logs_after_inner_train_step_with_post_step_weights(monkeypatch)
     # row norm of a [5,5] row = sqrt(50); reads the POST-step weight, not the pre-step ones
     # (both rows equal, so mean == that row norm)
     assert captured["weightnorm/L0/qkv/row/mean"] == pytest.approx(50.0**0.5)
+    assert captured["weightnorm/L0/qkv/weight_rms"] == pytest.approx(5.0)
+    assert captured["weightnorm/_global/weight_rms"] == pytest.approx(5.0)
 
 
 def test_wrapper_is_noop_when_flag_off(monkeypatch):
