@@ -1255,11 +1255,12 @@ gradient-field-driven, not inter-side coupling; \(s\sim O(1)\) ⇒ real weight c
 > **unaffected** (they don't pass through `w_perm_frame`) and reproduce exactly.
 
 Full-training read of the champion recipe (`coord_diag_wpermfix`, W&B `g9i51g5l`;
-identical recipe to `qjapxj18` but frame-fixed), diag points step 250 → 7250 (flat
-trajectory):
+identical recipe to `qjapxj18` but frame-fixed), 36 diag points step 250 → 9000,
+val/loss **3.518** — matching `qjapxj18`'s training within seed noise, confirming the
+fix is **diagnostic-only** (it does not touch the optimizer). Trajectory is flat:
 
-- `cos_D_out_D_in` \(\approx +0.44\) (range \([+0.41,+0.45]\)) for the **entire run**;
-  `gram_cond` \(\approx 2.6\); `r_joint` \(\approx 1.44\). The two sides' weight-space
+- `cos_D_out_D_in` \(\approx +0.44\) (range \([+0.41,+0.47]\)) for the **entire run**;
+  `gram_cond` \(\approx 2.7\); `r_joint` \(\approx 1.44\). The two sides' weight-space
   directions carry a **stable, substantial positive (reinforcing) overlap throughout
   training** — well above the \(\lvert\cos\rvert>0.3\) gauge-redundancy threshold.
   **Gauge-redundancy is SUPPORTED, not falsified** (the original ≈0 / ⊥ reading was
