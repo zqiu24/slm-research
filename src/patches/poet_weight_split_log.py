@@ -26,6 +26,9 @@ near-white). NO extra backward. Self-validating: logs ``validate_cos`` =
 cos(block_skew(W_perm^T G_perm), oft_R_in.grad), whose **|value| must be ~1** (it lands
 near -1: block_skew(W^T G) = -block_skew(G^T W), the convention POET's backward uses).
 |validate_cos| far from 1 => the capture/frame is wrong; do not trust the sensitivity.
+W_perm here is the block-contiguous ``layer.weight`` itself (w_perm_frame) — the forward
+permutes the activations, not the weight, so no re-permutation is applied. (Re-permuting
+it was the original bug that pinned validate_cos at ~0 even after the DP all-reduce.)
 
 Mechanism mirrors ``poet_coordination_log`` (wrap setup_model_and_optimizer, select
 two-sided layers, wrap optimizer.step), plus per-layer capture hooks gated to the
@@ -87,8 +90,11 @@ def _allreduce_coord_G(targets) -> None:  # noqa: N802
     """DP all-reduce(SUM) each layer's captured G so it matches the gradient the
     optimizer actually uses (oft_R.main_grad is DP-reduced). MUST run on every rank
     (collective) before the rank-0-only logging — otherwise the local G is just this
-    rank's shard, ~orthogonal to the global grad when the tangent gradient is near-white
-    (which is exactly why validate_cos read ~0). The per-layer scale is irrelevant to
+    rank's shard (~orthogonal to the global grad when the tangent gradient is near-white),
+    so the sensitivity would be measured against this rank's gradient, not the global one.
+    (NOTE: the run's validate_cos~0 was NOT this DP shard issue — it was w_perm_frame
+    re-permuting an already-block-frame weight; this all-reduce is still needed for the
+    sensitivity to reflect the global gradient.) The per-layer scale is irrelevant to
     both validate_cos and the sensitivity ratio, so SUM (no /world_size) is fine."""
     try:
         import torch.distributed as dist

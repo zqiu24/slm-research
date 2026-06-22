@@ -73,13 +73,18 @@ def select_target_layers(named_layers, max_targets: int = 8):
 
 
 def w_perm_frame(layer):
-    """Un-permute the forward-frame ``layer.weight`` back to the W_perm frame
-    (``weight[perm_out_inv][:, perm_in_inv]``), where POET's generators are
-    block-diagonal. fp32, detached."""
+    """The block-contiguous weight POET's generators are block-diagonal in (fp32,
+    detached). This is ``layer.weight`` UNCHANGED: the forward permutes the
+    activations (x by perm_in_inv, y by perm_out), never the weight — so
+    ``oft_R_in``/``oft_R_out`` rotate contiguous column/row blocks of ``layer.weight``
+    directly (see chain_layer_x_fast_decoupled and single_step.py's M_in = A @ weight).
+    An earlier version re-permuted by perm_out_inv/perm_in_inv on the false premise
+    that ``layer.weight`` was a "forward frame"; that scrambled the block alignment and
+    drove the weight-split ``validate_cos`` to ~0 (misdiagnosed as a DP local-vs-global
+    issue). Returning the raw weight makes validate_cos land at ~-1 as derived."""
     import torch
 
-    w = layer.weight.detach().to(torch.float32)
-    return w.index_select(0, layer.perm_out_inv.long()).index_select(1, layer.perm_in_inv.long())
+    return layer.weight.detach().to(torch.float32)
 
 
 def collect_metrics_for_layer(layer, lie_grad, orthogonalize_fn, realized_angle: float = 1.0):

@@ -287,8 +287,11 @@ def test_weight_only_sensitivity_matches_explicit_ratio():
 def test_wsplit_validation_matches_poet_backward_up_to_sign():
     # The WSPLIT validate_cos compares block_skew(W_perm^T G_perm) (G = captured
     # ambient grad) against oft_R_in.grad. Replicate POETXSingleStepFunction.backward
-    # (poetx_ops.py:55-62) and confirm they align up to sign (|cos|~1) -> the frame is
-    # correct, so a *run's* validate_cos~0 is a DP local-vs-global mismatch, not a frame bug.
+    # (poetx_ops.py:55-62) and confirm they align up to sign (|cos|~1). This validates the
+    # frame ALGEBRA on a synthetic forward-frame weight; it does NOT exercise the live
+    # module. The run's validate_cos~0 was a real frame bug — w_perm_frame re-permuted an
+    # already-block-frame POETLinear.weight — caught only by the live end-to-end test
+    # test_w_perm_frame_matches_live_poet_single_step_backward (test_poet_coordination_log).
     from src.diag.skew_conditioning import vec_to_skew
 
     torch.manual_seed(0)
