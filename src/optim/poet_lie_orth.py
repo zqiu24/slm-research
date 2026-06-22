@@ -238,10 +238,12 @@ class LieOrthMomentum(torch.optim.Optimizer):
         off_by_id = {id(p): (off, n) for off, n, p, _lr in slices}
         eps = 1e-12
         sym = self.decorrelate_mode == "symmetric"
+        matched = 0
         for out_p, in_p, w, bsz_out, bsz_in in self._decorr_pairs:
             so, si = off_by_id.get(id(out_p)), off_by_id.get(id(in_p))
             if so is None or si is None:
                 continue
+            matched += 1
             (oo, no), (oi, ni) = so, si
             out_vec = buf[oo : oo + no].view(out_p.shape[0], -1)
             in_vec = buf[oi : oi + ni].view(in_p.shape[0], -1)
@@ -262,6 +264,18 @@ class LieOrthMomentum(torch.optim.Optimizer):
                 c = (A_out.flatten() @ g.flatten()) / (g.flatten() @ g.flatten()).clamp_min(eps)
                 A_out = A_out - (0.5 * c if sym else c) * g
                 buf[oo : oo + no] = skew_to_vec(A_out, bsz_out).reshape(-1)
+        # Loud guard: decorrelation requested but NO pair's params matched the optimizer's
+        # slices (e.g. model-vs-master param identity mismatch) => silent no-op. Warn once
+        # rather than letting the A/B run bit-identical to baseline undetected.
+        if matched == 0 and not getattr(self, "_decorr_warned", False):
+            self._decorr_warned = True
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "[WSPLIT/decorrelate] decorrelate_sides=True but 0/%d pairs matched the "
+                "optimizer's param slices — decorrelation is a NO-OP (param identity mismatch).",
+                len(self._decorr_pairs),
+            )
 
     def _apply_skew_update_buffer(self, buf, slices):
         """Phase (d): scatter the (already all-reduced) flat buffer back onto oft_R,

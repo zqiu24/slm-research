@@ -678,8 +678,31 @@ def get_megatron_poet_lie_momentum_optimizer(
                     st["moment2"] = torch.zeros_like(p.data)
 
     if getattr(config, "bf16", False):
-        return Float16OptimizerWithFloat16Params(optimizer, config, None, init_state_fn)
-    return FP32Optimizer(optimizer, config, init_state_fn)
+        wrapped = Float16OptimizerWithFloat16Params(optimizer, config, None, init_state_fn)
+    else:
+        wrapped = FP32Optimizer(optimizer, config, init_state_fn)
+    # The bf16 wrapper swaps the inner optimizer's params for fp32 MASTER copies, so
+    # LieOrthMomentum iterates master params at step time. Cross-side decorrelation
+    # captured its (out,in) pairs against the MODEL params at build — remap them to the
+    # master params, else the per-pair slice lookup misses and decorrelation silently
+    # no-ops (the §17.6 A/B ran bit-identical to baseline because of exactly this).
+    if getattr(optimizer, "decorrelate_sides", False) and getattr(optimizer, "_decorr_pairs", None):
+        m2master: dict[int, Any] = {}
+        fg = getattr(wrapped, "float16_groups", None) or []
+        mg = getattr(wrapped, "fp32_from_float16_groups", None) or []
+        for grp_model, grp_master in zip(fg, mg, strict=False):
+            for model_p, master_p in zip(grp_model, grp_master, strict=False):
+                m2master[id(model_p)] = master_p
+        if m2master:
+            optimizer._decorr_pairs = [
+                (m2master.get(id(o), o), m2master.get(id(i), i), w, bo, bi)
+                for (o, i, w, bo, bi) in optimizer._decorr_pairs
+            ]
+            logger.warning(
+                "[POET] decorrelate: remapped %d (out,in) pairs model->fp32-master",
+                len(optimizer._decorr_pairs),
+            )
+    return wrapped
 
 
 def get_megatron_poet_optimizer(
