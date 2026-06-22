@@ -1179,7 +1179,7 @@ overlap geometry is the same as in the forward frame.
 | W&B key (`poet_coord/<layer>/…`, plus `poet_coord/_mean/…`) | Definition / how computed | Mechanism it arbitrates | The read |
 |---|---|---|---|
 | `mom_cos_out`, `mom_cos_in` | \(\dfrac{\langle m_s, g_s\rangle_F}{\lVert m_s\rVert_F\,\lVert g_s\rVert_F}\), reduced over the whole \((r_s, n_{\mathrm{elems}})\) tensor (one scalar/side). The \(\sqrt2\) skew↔vec factor cancels; zero input → 0. | **staleness / SNR** (fact #5) | **Empirically (qjapxj18) the champion reads ≈0 (mildly negative, \(-0.2\to 0\) as LR decays), NOT \(\gtrsim 0.8\)** — the per-step rotation gradient is near-white, so the EMA *averages noise* rather than tracking a stable direction (and the mild negative tilt is a per-step *overshoot* fingerprint of eff∠ 0.016). Healthy = small-and-stable; the discriminator is the frozen arm, whose reactivated side should decohere further / lose momentum norm. |
-| `cos_D_out_D_in` | \(\dfrac{\langle D_{\mathrm{out}}, D_{\mathrm{in}}\rangle_F}{\lVert D_{\mathrm{out}}\rVert_F\,\lVert D_{\mathrm{in}}\rVert_F}\) | **gauge-redundancy** (champion > simultaneous) | persistently \(\lvert\cos\rvert>0.3\) (esp. attn-out / MLP-down) → a matched-\(\lVert\Delta W\rVert\) simultaneous step over-spends the redundant direction. \(\cos\approx 0\) **falsifies** redundancy → look elsewhere. **(Empirically ≈0 all run, qjapxj18 — falsified; see §17.6.)** |
+| `cos_D_out_D_in` | \(\dfrac{\langle D_{\mathrm{out}}, D_{\mathrm{in}}\rangle_F}{\lVert D_{\mathrm{out}}\rVert_F\,\lVert D_{\mathrm{in}}\rVert_F}\) | **gauge-redundancy** (champion > simultaneous) | persistently \(\lvert\cos\rvert>0.3\) (esp. attn-out / MLP-down) → a matched-\(\lVert\Delta W\rVert\) simultaneous step over-spends the redundant direction. \(\cos\approx 0\) **falsifies** redundancy → look elsewhere. **(Empirically ≈+0.44 all run, frame-fixed re-run `g9i51g5l` — redundancy SUPPORTED; the original qjapxj18 ≈0 was a `w_perm_frame` bug, commit `aac95a2`; see §17.6.)** |
 | `cos_D_out_D_in_raw` | same, but \(A=\text{raw }(-m)\) (no NS) | is the decorrelation **intrinsic or NS-induced** | raw correlated but orthogonalized ≈0 → Muon whitening decorrelates the sides; both ≈0 → intrinsic |
 | `r_cross` | \(\text{eff∠}\cdot\dfrac{\lVert A_{\mathrm{out}}WA_{\mathrm{in}}\rVert_F}{\lVert A_{\mathrm{out}}W\rVert_F+\lVert WA_{\mathrm{in}}\rVert_F}\), via \(\operatorname{blockdiag}(A_{\mathrm{out}})\,D_{\mathrm{in}}\) (one extra block-matmul). **Scaled by eff∠** (= skew group_lr·ortho_c) so it is the *physical* fraction of movement — the orthogonalized \(A\) have \(\sigma\sim1\), so the unscaled ratio is an O(1) constant, not the coupling. | **finite-step coupling** the first-order overlap can't see | \(\ll 1\) (\(\lesssim\) eff∠) ⇒ decoupled at finite order too; \(\sim O(1)\) / growing ⇒ real bilinear coupling (the channel the alternating win could flow through). **(Empirically ≈0.006 at peak, qjapxj18/rba7iepm — decoupled; see §17.7.)** |
 | `gram_cond` | condition number of \(M=\begin{bmatrix}\lVert D_{\mathrm{out}}\rVert^2 & \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle\\ \langle D_{\mathrm{out}},D_{\mathrm{in}}\rangle & \lVert D_{\mathrm{in}}\rVert^2\end{bmatrix}\), via the analytic 2×2 eigenvalues \(\lambda_\pm=\tfrac{a+b}{2}\pm\sqrt{(\tfrac{a-b}{2})^2+c^2}\) | same | routinely \(5\text{–}50\times\) confirms a near-singular 2-direction subspace |
@@ -1226,7 +1226,9 @@ at the realized eff∠ is ≈1 regardless of coupling (same pitfall as the unsca
 hook: it captures \(G=g_y^\top x\) (output-grad × input) via per-layer fwd/bwd hooks (no
 extra backward, accumulated over micro-batches, then **DP all-reduced** — `main_grad`
 is DP-reduced, and the rank-local \(G\) is ~orthogonal to it when the tangent is
-near-white, which is exactly why the first run read `validate_cos`≈0). **Self-validating**
+near-white, so the all-reduce is needed for the *sensitivity* to reflect the global
+gradient. (The first run's `validate_cos`≈0 was **not** this DP issue but a
+`w_perm_frame` frame bug — see §17.6 correction / commit `aac95a2`.) **Self-validating**
 — logs `validate_cos` = \(\cos(\operatorname{block\_skew}(W_{\mathrm{perm}}^\top G_{\mathrm{perm}}),\,\partial L/\partial\text{oft\_R\_in})\),
 whose **\(\lvert\cdot\rvert\) must be ≈1** (it lands near \(-1\): \(\operatorname{block\_skew}(W^\top G)=-\operatorname{block\_skew}(G^\top W)\),
 POET's backward convention — verified by `test_wsplit_validation_matches_poet_backward_up_to_sign`).
@@ -1239,48 +1241,84 @@ gradient-field-driven, not inter-side coupling; \(s\sim O(1)\) ⇒ real weight c
 - Finite four-loss interaction \(I_{oi}=L_{oi}-L_o-L_i+L_0\) (§6) — a diagnostic minibatch
   and four forward passes.
 
-## 17.6 First champion read (`qjapxj18`, 60m / lr4e-3 / scale0.5 / c8)
+## 17.6 First champion read — CORRECTED (frame-fix re-run `g9i51g5l`)
 
-Full-training read of the champion (`coord_champion`, W&B `qjapxj18`), 41 diag
-points step 1000 → 8250:
+> **Correction (2026-06-22, commit `aac95a2`).** The original read (W&B `qjapxj18`)
+> was computed with a buggy `w_perm_frame` that re-permuted the *already*-block-frame
+> `POETLinear.weight`, scrambling every `side_directions`-derived metric
+> (`cos_D_out_D_in`, `cos_D_out_D_in_raw`, `gram_cond`, `r_joint`, `r_cross`) to
+> ~noise. The forward permutes the activations, never the weight, so the generators
+> are block-diagonal in the raw `weight` frame; the extra permutation pinned
+> `cos_D_out_D_in` (and the weight-split `validate_cos`) at ≈0. Fixed by returning
+> the raw weight; the wsplit self-probe `validate_cos` now lands at ≈−1, confirming
+> the frame. Numbers below are the regenerated read; `mom_cos_{out,in}` were
+> **unaffected** (they don't pass through `w_perm_frame`) and reproduce exactly.
 
-- `cos_D_out_D_in` \(\in[-0.002, +0.002]\) for the **entire run**; `gram_cond`
-  \(\approx 1.25\); `r_joint` \(\approx 1.000\). The two sides' weight-space
-  directions are **orthogonal throughout training** →
-  **gauge-redundancy is falsified** (not just at plateau). The gauge-decorrelation
-  lever is therefore off the table — there is no redundant subspace to decorrelate.
-- `mom_cos_{out,in}` start mildly negative (\(\sim-0.12\) to \(-0.23\)) and decay
-  to \(\approx 0\) by step ~8000 as the cosine LR approaches its floor. The per-step
-  rotation gradient is **near-white** (low SNR all run), so the persistent EMA is
-  doing genuine **noise-averaging** — which is why freezing it regresses to 4.22
-  (`au92x0pj`). The mild negative tilt is a small per-step **overshoot** signature
-  consistent with eff∠ 0.016 being the hot edge.
+Full-training read of the champion recipe (`coord_diag_wpermfix`, W&B `g9i51g5l`;
+identical recipe to `qjapxj18` but frame-fixed), diag points step 250 → 7250 (flat
+trajectory):
 
-**Refined verdict:** the alternating advantage is **temporal / momentum**, *not*
-spatial overlap/cancellation. This reframes POET_dev's "Gauss–Seidel coupling"
-attribution: the coupling is temporal, not a spatial redundancy between the two
-directions. The `alternate_every` sweep (POET_dev arm **J**) then resolves *which*
-temporal effect — see §17.8.
+- `cos_D_out_D_in` \(\approx +0.44\) (range \([+0.41,+0.45]\)) for the **entire run**;
+  `gram_cond` \(\approx 2.6\); `r_joint` \(\approx 1.44\). The two sides' weight-space
+  directions carry a **stable, substantial positive (reinforcing) overlap throughout
+  training** — well above the \(\lvert\cos\rvert>0.3\) gauge-redundancy threshold.
+  **Gauge-redundancy is SUPPORTED, not falsified** (the original ≈0 / ⊥ reading was
+  the frame artifact). `cos_D_out_D_in_raw` \(\approx +0.54\), so the overlap is
+  **intrinsic** to the momenta, not Newton–Schulz-induced.
+- `r_cross` (physical, eff∠-scaled) \(\approx 0.004\) (peak 0.007, → 0.001 as LR
+  decays). So although the two sides overlap in *angle*, the finite-step bilinear
+  cross-term is **≤0.7% of movement and shrinking** — the overlap is
+  first-order/directional, not a large finite-curvature coupling.
+- `mom_cos_{out,in}` start mildly negative (\(\sim-0.12\) to \(-0.19\)) and decay
+  to \(\approx 0\) by step ~7000 as the cosine LR approaches its floor (UNCHANGED
+  from the buggy read). The per-step rotation gradient is **near-white** (low SNR
+  all run), so the persistent EMA is doing genuine **noise-averaging** — which is why
+  freezing it regresses to 4.22 (`au92x0pj`). The mild negative tilt is a small
+  per-step **overshoot** signature consistent with eff∠ 0.016 being the hot edge.
 
-## 17.7 Tier-1 read: are the sides *really* decoupled? (`rba7iepm`)
+**Refined verdict (revised):** the alternating advantage has **two live channels**,
+not one. **(i) Spatial gauge-redundancy** — the sides share a reinforcing
+\(\cos\approx0.44\) subspace (`gram_cond` ≈ 2.6), so a matched-\(\lVert\Delta W\rVert\)
+*simultaneous* step over-spends that redundant direction while the alternating step
+does not. This **revives** POET_dev's "Gauss–Seidel coupling" attribution that the
+buggy read had dismissed. **(ii) Temporal / momentum** — near-white per-step gradient
++ noise-averaging EMA (supported, unchanged, by `au92x0pj` and the `alternate_every`
+sweep §17.8). The earlier "purely temporal, *not* spatial overlap" conclusion was a
+frame artifact: the directional overlap is real, though its *finite-step physical*
+magnitude (`r_cross` ≤0.7%) is small. Which channel dominates the val-loss gap is now
+open. The `alternate_every` sweep (POET_dev arm **J**) addresses the temporal axis —
+see §17.8.
 
-Champion re-run with the Tier-1 probes (W&B `rba7iepm`, same recipe as qjapxj18,
-val/loss 3.5241), 45 diag points step 250 → 8750:
+## 17.7 Tier-1 read: are the sides *really* decoupled? (`rba7iepm`) — CORRECTED
 
-- `cos_D_out_D_in_raw` ≈ 0 the **entire run** (mean 0.0001, \(\lvert\cdot\rvert\le0.0014\))
-  — the **raw** \(-m\) directions are orthogonal *before* Newton–Schulz, so the
-  decorrelation is **intrinsic**, not orthogonalizer-induced.
-- `r_cross` (physical) ≈ **0.006 at peak**, shrinking with LR decay (the underlying
-  unit-generator ratio is flat at ≈0.41 all run; eff∠ ≈ 0.016 → 1.6e-4). So the finite
-  bilinear cross-term is **≤0.6% of movement and falling** — the sides are **decoupled
-  at finite order too**, and the coupling is not growing.
+> **Correction (2026-06-22, commit `aac95a2`).** Same `w_perm_frame` bug as §17.6:
+> `cos_D_out_D_in_raw` here was a frame artifact. The frame-fixed re-run `g9i51g5l`
+> (same recipe) shows `cos_D_out_D_in_raw` ≈ **+0.54**, not ≈0 — so the **raw** \(-m\)
+> directions are **correlated** before Newton–Schulz, i.e. the overlap is intrinsic to
+> the momenta (the "intrinsic *orthogonality*" reading is reversed: it's intrinsic
+> *overlap*). The `r_cross` magnitude conclusion below **survives** the fix.
 
-**Conclusion:** the two sides are genuinely decoupled — intrinsically first-order
-orthogonal **and** with negligible finite-step coupling. The alternating advantage is
-therefore confirmed to be **purely temporal / momentum**, with no spatial or
-finite-curvature channel. (Note: `r_cross` was changed to report the physical,
-eff∠-scaled fraction; runs before this fix logged the unit-generator ratio ≈0.41,
-which equals physical / eff∠.)
+Original (frame-bugged) read: W&B `rba7iepm`, same recipe as qjapxj18, val/loss
+3.5241, 45 diag points step 250 → 8750. Corrected metrics from `g9i51g5l`:
+
+- `cos_D_out_D_in_raw` ≈ **+0.54** the entire run (was reported ≈0) — the raw \(-m\)
+  directions are **correlated** before Newton–Schulz, so the side overlap is
+  **intrinsic**, not orthogonalizer-induced. The NS-orthogonalized overlap
+  (`cos_D_out_D_in` ≈ 0.44) is slightly lower, i.e. Muon whitening *reduces* but does
+  not remove the correlation.
+- `r_cross` (physical, eff∠-scaled) ≈ **0.004** (peak 0.007, → 0.001 with LR decay).
+  The finite bilinear cross-term is **≤0.7% of movement and falling** — so even though
+  the directions overlap, the sides are still **weakly coupled at finite order**, and
+  the coupling is not growing. (This conclusion is unchanged by the frame fix.)
+
+**Conclusion (revised):** the two sides are **directionally correlated**
+(\(\cos\approx0.44\), intrinsic) but their **finite-step physical coupling is small**
+(`r_cross` ≤0.7%). So there *is* a spatial/gauge-redundancy channel (a reinforcing
+shared direction; see corrected §17.6), but its second-order contribution per step is
+minor; the temporal / momentum channel is also live. The earlier "genuinely decoupled,
+purely temporal" verdict is superseded. (Note: `r_cross` reports the physical,
+eff∠-scaled fraction; pre-fix runs logged the unit-generator ratio ≈0.4, = physical /
+eff∠.)
 
 ## 17.8 Which temporal effect? `alternate_every` sweep (POET_dev arm J)
 
@@ -1304,5 +1342,8 @@ i.e. averaging longer *lowers* SNR rather than raising it. So mechanism **(b)** 
 the alternating advantage is **per-step fresh re-evaluation**, not a wider averaging
 window. This is the same axis as the frozen-EMA blow-up (`au92x0pj` → 4.22): the
 momentum must keep advancing *and* be re-applied every step; staleness — whether from
-freezing or from long rest — is the killer. Gauge-redundancy stays falsified at every
-k. **Verdict: keep `lie_alternate_every` pinned at 1.**
+freezing or from long rest — is the killer. (The §17.6 frame fix shows
+gauge-redundancy is in fact **supported**, not falsified — but the spatial overlap is
+~constant across k, so it does not drive the k-dependence this sweep isolates; the
+temporal verdict here is unaffected.) **Verdict: keep `lie_alternate_every` pinned at
+1.**
