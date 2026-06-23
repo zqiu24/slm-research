@@ -38,16 +38,18 @@
 # two knobs above (wd=0.0, no_warmup=true) — that is the muon analog of
 # sweep_ngpt_lr_reference.sh.
 #
-# GRID — brackets dense muon's optimum (~4e-3) and extends up toward nGPT-adam's
-# hotter optimum (1e-2), since the hypersphere arch tends to want a hotter lr:
+# GRID — brackets dense muon's optimum (~4e-3) and extends up past nGPT-adam's
+# hotter optimum (1e-2) to 2e-2, since the hypersphere arch tends to want a
+# hotter lr (nGPT-adam pushed its optimum to 1e-2 vs dense adam's 3e-3):
 #   name              lr        note
-#   ngpt_muon_lr10    0.001     muon_kimi cold baseline lr
 #   ngpt_muon_lr20    0.002
 #   ngpt_muon_lr30    0.003
 #   ngpt_muon_lr40    0.004     dense muon_kimi optimum
+#   ngpt_muon_lr50    0.005
 #   ngpt_muon_lr60    0.006
 #   ngpt_muon_lr80    0.008
 #   ngpt_muon_lr100   0.01      nGPT-adam optimum
+#   ngpt_muon_lr200   0.02      hot extension
 #
 # Idempotent: a run is SKIPPED only if its ${LOGDIR}/<name>.log shows it COMPLETED
 # ("after training is done"); missing OR crashed/partial runs are (re-)launched
@@ -64,8 +66,8 @@ codexlog() {
   echo "<<< END   ${name}  (status ${PIPESTATUS[0]})  $(date '+%F %T')"
 }
 
-LRS=(0.001 0.002 0.003 0.004 0.006 0.008 0.01)
-LTAGS=(10 20 30 40 60 80 100)
+LRS=(0.002 0.003 0.004 0.005 0.006 0.008 0.01 0.02)
+LTAGS=(20 30 40 50 60 80 100 200)
 
 for i in "${!LRS[@]}"; do
   lr="${LRS[$i]}"; lt="${LTAGS[$i]}"
