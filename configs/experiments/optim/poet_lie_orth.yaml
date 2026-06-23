@@ -58,7 +58,7 @@ optim:
     use_poet_adam: false
     parameterization: cayley
     q_optimizer: lie_ortho       # selects the standalone LieOrthMomentum optimizer
-    lie_b1: 0.9
+    lie_b1: 0.95                 # champion: higher momentum, only a win WITH nesterov (deconfound: b1 bump alone ~no-op)
     lie_b2: 0.95
     lie_eps: 1.0e-8
     lie_v_mode: elementwise
@@ -66,7 +66,7 @@ optim:
     lie_ortho_method: muon       # 'muon' (quintic NS band, ~5 steps) | 'spectral' (exact, ns~20)
     lie_ortho_ns_steps: 5        # spectral needs ~20; muon plateaus by ~5
     lie_ortho_use_second_moment: false  # first-moment-only by default (docs SS4)
-    lie_ortho_nesterov: false    # Muon-style look-ahead: orthogonalize (1-b1)*g + b1*m instead of m
+    lie_ortho_nesterov: true     # champion: Muon-style look-ahead — orthogonalize (1-b1)*g + b1*m instead of m (nestON_lr4=3.5160 @ b1=0.95, beats non-nesterov champ 3.5231)
     lie_ortho_distributed: true  # shard NS orthogonalization across DP ranks; identical result
     head_aligned_attn: true      # rotate q/k/v/o per attention head (requires unfuse_qkv=true)
     single_step_fast: true       # documented fallback for the R=I fast path (merge_period=1 + cayley)
