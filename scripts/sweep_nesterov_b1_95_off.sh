@@ -6,14 +6,16 @@
 # fixed b1=0.95 isolates whether the gain is the look-ahead or just higher momentum. The
 # b1=0.9 / no-nesterov champion (3.5231) is the third reference point (already have it).
 #
-# gpus=4 → pinned to the SECOND half-node (GPU 4-7, port 6010) so it runs CONCURRENTLY
-# with the ON script (GPU 0-3, port 6000). Same global_batch=1024 → comparable.
-#   bash scripts/sweep_nesterov_b1_95_off.sh       # run alongside the _on script
+# gpus=4: this node has 4 GPUs (0-3), so this uses the SAME GPUs as the _on sweep — run
+# them SEQUENTIALLY (a 4-GPU node can't host two 4-GPU jobs at once): let the _on sweep
+# finish, THEN run this. Same global_batch=1024 → directly comparable.
+#   bash scripts/sweep_nesterov_b1_95_off.sh       # AFTER the _on sweep completes
+# (For an 8-GPU node you could run both concurrently: add CUDA_VISIBLE_DEVICES=4,5,6,7 here
+#  and =0,1,2,3 in the _on script. Not the case here.)
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
-export CUDA_VISIBLE_DEVICES=4,5,6,7          # second half-node
-export MASTER_PORT=6010                       # distinct torchrun rendezvous
+export MASTER_PORT=6010                       # distinct port (harmless; avoids reuse races)
 export CODEX_LOG_DIR="${CODEX_LOG_DIR:-/lustre/home/zqiu/log}"
 mkdir -p "$CODEX_LOG_DIR"
 
