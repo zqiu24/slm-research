@@ -4,6 +4,13 @@
 # lr only. Run on one node (sequential runs, each grabs the whole node and blocks):
 #   bash scripts/sweep_ngpt_muon_lr.sh
 #
+# 8 GPUs: cluster=h100_de (from train_ngpt_dev_muon.sh) sets gpus_per_node=8, so
+# each run is dp=8 (torchrun --nproc_per_node 8), gbs 1024 / mbs 128 -> grad-accum
+# 1. muon_kimi rejects the sharded distributed optimizer, but the launcher only
+# emits --use-distributed-optimizer for adamw (_distributed_optimizer_supported,
+# megatron_args.py:747), so it is auto-disabled here -> pure DDP, no crash. Do NOT
+# pre-pin CUDA_VISIBLE_DEVICES to a subset (the sweep does no pinning, by design).
+#
 # PURPOSE: fill the missing leg of the optimizer-vs-architecture matrix. We have
 #   * dense llama3 + adam   → 3.4935 @ lr 3e-3   (sweep_adam_lr.sh)
 #   * dense llama3 + muon   → 3.4514 @ lr 4e-3   (sweep_muon_kimi_lr.sh, BEST overall)
