@@ -354,6 +354,7 @@ def test_poet_argv_emits_lie_ortho_knobs():
                 "lie_ortho_method": "spectral",
                 "lie_ortho_ns_steps": 20,
                 "lie_ortho_use_second_moment": True,
+                "lie_ortho_angle_dim_exp": -0.5,
             }
         )
     )
@@ -362,6 +363,7 @@ def test_poet_argv_emits_lie_ortho_knobs():
     assert args[args.index("--poet-lie-ortho-method") + 1] == "spectral"
     assert args[args.index("--poet-lie-ortho-ns-steps") + 1] == "20"
     assert "--poet-lie-ortho-use-second-moment" in args
+    assert args[args.index("--poet-lie-ortho-angle-dim-exp") + 1] == "-0.5"
 
 
 def test_poet_argv_lie_ortho_defaults():

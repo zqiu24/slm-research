@@ -483,3 +483,53 @@ def test_decorrelate_rejects_bad_mode():
             decorrelate_sides=True,
             decorrelate_mode="bogus",
         )
+
+
+# --- per-block dimension-dependent angle scaling (angle_dim_exp) -----------
+# gen = ortho_c * (bsz/ref)^p * X. X (the orthogonalized direction) is independent of
+# the scalar, so a block of size b gets its applied update scaled EXACTLY by (b/ref)^p
+# vs p=0. ref defaults to hidden (passed by poet.py); here we pass it explicitly.
+def _applied_norm_for_exp(p, b=8, ref=4, lr=0.05, seed=0):
+    import torch
+
+    torch.manual_seed(seed)
+    ne = b * (b - 1) // 2
+    oin = nn.Parameter(torch.zeros(1, ne))
+    oin.grad = torch.randn(1, ne)
+    opt = LieOrthMomentum(
+        [dict(params=[oin], use_skew=True, side="in", lr=lr)],
+        ortho_c=0.1,
+        angle_dim_exp=p,
+        angle_dim_ref=ref,
+    )
+    opt.step()
+    return oin.data.norm().item()
+
+
+@pytest.mark.parametrize("p", [-1.0, -0.5, 0.5, 1.0])
+def test_angle_dim_exp_scales_block_by_dim_ratio(p):
+    import math
+
+    d0 = _applied_norm_for_exp(0.0)
+    dp = _applied_norm_for_exp(p)
+    assert math.isclose(dp / d0, (8 / 4) ** p, rel_tol=1e-4), (p, dp / d0, (8 / 4) ** p)
+
+
+def test_angle_dim_exp_zero_is_noop():
+    # p=0 (and a missing ref) must reproduce the unscaled champion update exactly.
+    import torch
+
+    torch.manual_seed(1)
+    ne = 8 * 7 // 2
+    a = nn.Parameter(torch.zeros(1, ne))
+    a.grad = torch.randn(1, ne)
+    b = nn.Parameter(a.detach().clone())
+    b.grad = a.grad.clone()
+    LieOrthMomentum([dict(params=[a], use_skew=True, side="in", lr=0.05)], ortho_c=0.1).step()
+    LieOrthMomentum(
+        [dict(params=[b], use_skew=True, side="in", lr=0.05)],
+        ortho_c=0.1,
+        angle_dim_exp=0.0,
+        angle_dim_ref=512,
+    ).step()
+    assert torch.allclose(a.data, b.data, atol=1e-7)

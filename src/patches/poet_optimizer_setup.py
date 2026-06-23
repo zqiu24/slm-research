@@ -62,6 +62,7 @@ def apply() -> None:
         )
         config.poet_lie_ortho_nesterov = getattr(args, "poet_lie_ortho_nesterov", False)
         config.poet_lie_ortho_distributed = getattr(args, "poet_lie_ortho_distributed", False)
+        config.poet_lie_ortho_angle_dim_exp = getattr(args, "poet_lie_ortho_angle_dim_exp", 0.0)
         config.poet_lie_ortho_decorrelate = getattr(args, "poet_lie_ortho_decorrelate", False)
         config.poet_lie_ortho_decorrelate_mode = getattr(
             args, "poet_lie_ortho_decorrelate_mode", "in_off_out"

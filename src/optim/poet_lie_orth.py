@@ -39,6 +39,8 @@ class LieOrthMomentum(torch.optim.Optimizer):
         ortho_method: str = "muon",
         ortho_ns_steps: int = 5,
         ortho_use_second_moment: bool = False,
+        angle_dim_exp: float = 0.0,
+        angle_dim_ref: float | None = None,
         nesterov: bool = False,
         distributed: bool = False,
         dp_world_size: int = 1,
@@ -76,6 +78,14 @@ class LieOrthMomentum(torch.optim.Optimizer):
         self.ortho_method = ortho_method
         self.ortho_ns_steps = int(ortho_ns_steps)
         self.ortho_use_second_moment = bool(ortho_use_second_moment)
+        # Per-block dimension-dependent angle: scale each block's per-plane angle by
+        # (block_size / angle_dim_ref) ** angle_dim_exp. exp=0 (default) => flat angle =
+        # the champion. ref is set by poet.py to hidden_size, so the factor is the block's
+        # dimensionless ratio to hidden (scale-stable across model sizes). Lets the
+        # larger-dim side (e.g. fc-out 1536) rotate more (exp>0) or less (exp<0) than the
+        # smaller side — the in/out asymmetry sweep (POET_dev arm K).
+        self.angle_dim_exp = float(angle_dim_exp)
+        self.angle_dim_ref = float(angle_dim_ref) if angle_dim_ref else None
         # Nesterov look-ahead (Muon-style): orthogonalize the look-ahead direction
         # (1-b1)*g + b1*m instead of the bare first moment m. lie_m is still the same
         # EMA (m = b1*m + (1-b1)*g), so this matches modern Muon's
@@ -211,7 +221,10 @@ class LieOrthMomentum(torch.optim.Optimizer):
                 method=self.ortho_method,
                 ns_steps=self.ortho_ns_steps,
             )
-            gen = skew_to_vec(self.ortho_c * X, bsz)  # (n_blocks, n_elems) float; lr at scatter
+            ang = self.ortho_c
+            if self.angle_dim_exp != 0.0 and self.angle_dim_ref:
+                ang = ang * (bsz / self.angle_dim_ref) ** self.angle_dim_exp
+            gen = skew_to_vec(ang * X, bsz)  # (n_blocks, n_elems) float; lr at scatter
             row_off = 0
             for i, A_dir in bucket:
                 nb = A_dir.shape[0]

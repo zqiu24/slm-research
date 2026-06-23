@@ -98,6 +98,8 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-lie-ortho-c", type=float, default=0.01)
     group.add_argument("--poet-lie-ortho-method", choices=["muon", "spectral"], default="muon")
     group.add_argument("--poet-lie-ortho-ns-steps", type=int, default=5)
+    # Per-block dim-dependent angle: scale each block's angle by (block_size/hidden)^exp.
+    group.add_argument("--poet-lie-ortho-angle-dim-exp", type=float, default=0.0)
     group.add_argument("--poet-lie-ortho-use-second-moment", action="store_true")
     # Muon-style Nesterov look-ahead: orthogonalize (1-b1)*g + b1*m instead of m.
     group.add_argument("--poet-lie-ortho-nesterov", action="store_true")

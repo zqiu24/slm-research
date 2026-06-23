@@ -561,6 +561,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.get("lie_ortho_method", "muon"),
             "--poet-lie-ortho-ns-steps",
             poet.get("lie_ortho_ns_steps", 5),
+            "--poet-lie-ortho-angle-dim-exp",
+            poet.get("lie_ortho_angle_dim_exp", 0.0),
             "--adam-beta1",
             optim.betas[0],
             "--adam-beta2",

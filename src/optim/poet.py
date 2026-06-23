@@ -630,6 +630,8 @@ def get_megatron_poet_lie_momentum_optimizer(
             ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
             ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
             ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
+            angle_dim_exp=getattr(config, "poet_lie_ortho_angle_dim_exp", 0.0),
+            angle_dim_ref=getattr(config, "hidden_size", None),  # per-block angle ∝ (b/hidden)^exp
             nesterov=getattr(config, "poet_lie_ortho_nesterov", False),
             distributed=_lie_ortho_distributed,
             true_single_side=(
