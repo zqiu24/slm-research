@@ -1371,3 +1371,59 @@ gauge-redundancy is in fact **supported**, not falsified — but the spatial ove
 ~constant across k, so it does not drive the k-dependence this sweep isolates; the
 temporal verdict here is unaffected.) **Verdict: keep `lie_alternate_every` pinned at
 1.**
+
+## 17.9 Per-block dimension-dependent angle: `angle_dim_exp` p-sweep (POET_dev arm K)
+
+Tests whether the per-side rotation angle should be **tilted by block dimension** rather
+than purely ‖W‖-proportional. The per-block angle is
+
+  θ_block = lr · scale · ortho_c · (block_size / hidden)^p
+
+so `p=0` recovers the champion (every block's factor = 1, no dimension tilt). `p<0`
+makes **large blocks (fc 1536) rotate LESS** and small blocks (kv 64) rotate MORE; `p>0`
+is the opposite tilt (large blocks rotate MORE). Scripts:
+[`sweep_angle_dim_exp_neg.sh`](scripts/sweep_angle_dim_exp_neg.sh) /
+[`sweep_angle_dim_exp_pos.sh`](scripts/sweep_angle_dim_exp_pos.sh), champion recipe held
+(lr 4e-3, scale 0.5, ortho_c 8, muon, head_aligned off, alternating every 1).
+
+> **Note.** The first attempt (commit `97165af`) silently no-op'd — `b_ref(hidden)` was
+> never put on the `OptimizerConfig`, so every arm equalled the champion. Fixed in
+> `f5f05cc`, which also adds a guard that **crashes loudly** if `b_ref` is missing. The
+> runs below are the genuine (post-fix) sweep where the arms actually scale.
+
+**NEGATIVE half — complete, perfectly monotone (all 4 arms, NODE 1):**
+
+| p | arm | final val/loss | vs champion |
+|---:|---|---:|---:|
+| **0** | (champion) | **3.5181** | — |
+| −0.25 | `angle2_em025` | 3.5296 | +0.0115 |
+| −0.5 | `angle2_em05` | 3.5413 | +0.0232 |
+| −1.0 | `angle2_em10` | 3.5757 | +0.0576 |
+| −1.5 | `angle2_em15` | 3.6130 | +0.0949 |
+
+Strictly monotone: every step more negative is worse, slope flattening toward 0 (last
+0.25 step costs only +0.0115). So **damping the big blocks' rotation hurts** — the
+optimum sits at `p=0` or on the **positive** side.
+
+**POSITIVE half — lost to a node failure, rerun in progress (NODE 2):**
+
+The POS node died at **11:39** (clean node loss/preemption, no traceback): `angle2_ep025`
+(p=+0.25) was killed at iter **8890/9155** before writing its validation line;
+`angle2_ep05` only loaded CUDA modules (110 B); `ep10`/`ep15` never started. The one
+partial signal was suggestive — at matched iter 8880, **p=+0.25 train lm loss 3.4363 vs
+p=−0.25's 3.4502** (+0.25 tracking ~0.014 *better*), consistent with the NEG-side trend
+that the optimum is at or just above `p=0`. The full POS chain was **relaunched** and is
+running (ep025 → ep05 → ep10 → ep15 sequentially, ~45 min/arm on the 8-GPU node);
+b_ref guard passed (angle scaling genuinely active).
+
+| p | arm | status |
+|---:|---|---|
+| +0.25 | `angle2_ep025` | rerun running |
+| +0.5 | `angle2_ep05` | queued |
+| +1.0 | `angle2_ep10` | queued |
+| +1.5 | `angle2_ep15` | queued |
+
+**Verdict (pending POS):** the NEG side is conclusive — champion ≥ all `p<0`, monotone —
+so the dimension tilt should be `p≥0`. Whether a *positive* tilt (large blocks rotate
+more) can beat the champion is the open question the rerun resolves; table to be filled
+in once the four POS arms land.
