@@ -1286,9 +1286,32 @@ buggy read had dismissed. **(ii) Temporal / momentum** — near-white per-step g
 + noise-averaging EMA (supported, unchanged, by `au92x0pj` and the `alternate_every`
 sweep §17.8). The earlier "purely temporal, *not* spatial overlap" conclusion was a
 frame artifact: the directional overlap is real, though its *finite-step physical*
-magnitude (`r_cross` ≤0.7%) is small. Which channel dominates the val-loss gap is now
-open. The `alternate_every` sweep (POET_dev arm **J**) addresses the temporal axis —
-see §17.8.
+magnitude (`r_cross` ≤0.7%) is small.
+
+**Which channel dominates — the decorrelation A/B (`c9l15mmy`).** Run the champion recipe
+*simultaneously* (`lie_alternating=false`, both sides each step) with vs without
+**cross-side decorrelation** (`optim.poet.lie_ortho_decorrelate=true`, mode `in_off_out`),
+which projects each side's generator off the other's weight-space direction so the
+applied-update `cos(D_out,D_in)→0` while leaving per-side Muon whitening intact. Matched
+seed 1234, lr4e-3/c8/head-off:
+
+| arm | config | val/loss |
+|---|---|---|
+| A0 alternating champion (`g9i51g5l`) | `alt=true` | **3.5181** |
+| A1 simultaneous baseline (`1tpkj44a`) | `alt=false`, decorr off | 3.5768 |
+| A2 simultaneous + decorrelate (`c9l15mmy`) | `alt=false`, decorr **on** | **3.5624** |
+
+Decorrelation recovers **A1−A2 = +0.0144 ≈ 25%** of the alternating advantage
+(A1−A0 = 0.0587); residual **A2−A0 = 0.0443 ≈ 75%**. So **both channels are causal and
+temporal dominates ~3:1**: removing the inter-side overlap genuinely helps a simultaneous
+step (the spatial gauge-redundancy is harmful, not benign — first direct causal proof),
+but it recovers only a quarter of the gap; the rest is the **temporal Gauss–Seidel**
+channel (fold one side so the other's gradient sees the moved `W` — a first-order spatial
+projection applied simultaneously can't reproduce fresh re-evaluation), consistent with
+the small `r_cross` and the `alternate_every` sweep (§17.8). ⚠️ single seed each,
+`in_off_out` only — a 2–3-seed + `symmetric`/`out_off_in` confirm would harden the split.
+**Verdict: alternating win ≈ 75% temporal (fresh re-eval) + 25% spatial (gauge-redundancy).**
+The `alternate_every` sweep (POET_dev arm **J**) drills the temporal axis — see §17.8.
 
 ## 17.7 Tier-1 read: are the sides *really* decoupled? (`rba7iepm`) — CORRECTED
 
