@@ -599,8 +599,14 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 [
                     "--poet-lie-ortho-decorrelate-mode",
                     poet.get("lie_ortho_decorrelate_mode", "in_off_out"),
+                    "--poet-lie-ortho-decorrelate-lambda",
+                    str(float(poet.get("lie_ortho_decorrelate_lambda", 1.0))),
+                    "--poet-lie-ortho-decorrelate-cos-threshold",
+                    str(float(poet.get("lie_ortho_decorrelate_cos_threshold", 0.0))),
                 ]
             )
+            if poet.get("lie_ortho_decorrelate_renorm", False):
+                poet_args.append("--poet-lie-ortho-decorrelate-renorm")
         # store_true: head-aligned attention rotation (requires unfused q/k/v).
         if poet.get("head_aligned_attn", False):
             poet_args.append("--poet-head-aligned-attn")

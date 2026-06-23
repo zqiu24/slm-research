@@ -401,11 +401,28 @@ def test_poet_argv_emits_lie_ortho_decorrelate():
                 "q_optimizer": "lie_ortho",
                 "lie_ortho_decorrelate": True,
                 "lie_ortho_decorrelate_mode": "symmetric",
+                "lie_ortho_decorrelate_lambda": 0.5,
+                "lie_ortho_decorrelate_renorm": True,
+                "lie_ortho_decorrelate_cos_threshold": 0.3,
             }
         )
     )
     assert "--poet-lie-ortho-decorrelate" in args
     assert args[args.index("--poet-lie-ortho-decorrelate-mode") + 1] == "symmetric"
+    assert args[args.index("--poet-lie-ortho-decorrelate-lambda") + 1] == "0.5"
+    assert args[args.index("--poet-lie-ortho-decorrelate-cos-threshold") + 1] == "0.3"
+    assert "--poet-lie-ortho-decorrelate-renorm" in args
+
+
+def test_poet_argv_decorrelate_renorm_off_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg({"block_count": 1, "q_optimizer": "lie_ortho", "lie_ortho_decorrelate": True})
+    )
+    # renorm is a store_true flag — absent unless explicitly requested.
+    assert "--poet-lie-ortho-decorrelate-renorm" not in args
+    assert args[args.index("--poet-lie-ortho-decorrelate-lambda") + 1] == "1.0"
 
 
 def test_poet_argv_omits_lie_ortho_decorrelate_by_default():

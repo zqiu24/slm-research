@@ -71,6 +71,17 @@ def apply() -> None:
         config.poet_lie_ortho_decorrelate_mode = getattr(
             args, "poet_lie_ortho_decorrelate_mode", "in_off_out"
         )
+        # Alternating-path overlap-control knobs — MUST be copied here too, else the args
+        # set on the CLI silently never reach the optimizer (the §17.6 silent-no-op trap).
+        config.poet_lie_ortho_decorrelate_lambda = getattr(
+            args, "poet_lie_ortho_decorrelate_lambda", 1.0
+        )
+        config.poet_lie_ortho_decorrelate_renorm = getattr(
+            args, "poet_lie_ortho_decorrelate_renorm", False
+        )
+        config.poet_lie_ortho_decorrelate_cos_threshold = getattr(
+            args, "poet_lie_ortho_decorrelate_cos_threshold", 0.0
+        )
         return config, overrides
 
     def _wrapped_get_optimizer(config, model, **kwargs):

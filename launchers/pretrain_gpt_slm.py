@@ -112,6 +112,12 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         choices=["in_off_out", "out_off_in", "symmetric"],
         default="in_off_out",
     )
+    # Alternating-path overlap control (applied to the alternating champion, not the
+    # simultaneous probe): partial projection fraction, movement-preserving renorm, and a
+    # module-selective |cos(D_out,D_in)| gate. Defaults reproduce full/unscaled behavior.
+    group.add_argument("--poet-lie-ortho-decorrelate-lambda", type=float, default=1.0)
+    group.add_argument("--poet-lie-ortho-decorrelate-renorm", action="store_true")
+    group.add_argument("--poet-lie-ortho-decorrelate-cos-threshold", type=float, default=0.0)
     # Head-aligned attention rotation (opt-in): q/k/v/o rotate their head-
     # structured side per head (block_size=head_dim, identity Psi, no perm);
     # the residual side stays a normal POET rotation. Requires --unfuse-qkv.

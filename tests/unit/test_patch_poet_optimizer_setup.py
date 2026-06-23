@@ -164,6 +164,9 @@ def test_get_config_copies_lie_ortho_knobs(monkeypatch):
         poet_lie_ortho_use_second_moment=True,
         poet_lie_ortho_decorrelate=True,
         poet_lie_ortho_decorrelate_mode="symmetric",
+        poet_lie_ortho_decorrelate_lambda=0.5,
+        poet_lie_ortho_decorrelate_renorm=True,
+        poet_lie_ortho_decorrelate_cos_threshold=0.3,
         poet_lie_ortho_angle_dim_exp=-0.5,
         hidden_size=512,
     )
@@ -178,6 +181,10 @@ def test_get_config_copies_lie_ortho_knobs(monkeypatch):
     # from config, not args) — its absence silently no-op'd the §17.6 A/B.
     assert cfg.poet_lie_ortho_decorrelate is True
     assert cfg.poet_lie_ortho_decorrelate_mode == "symmetric"
+    # Same silent-no-op trap for the alternating-path knobs — they must reach config too.
+    assert cfg.poet_lie_ortho_decorrelate_lambda == 0.5
+    assert cfg.poet_lie_ortho_decorrelate_renorm is True
+    assert cfg.poet_lie_ortho_decorrelate_cos_threshold == 0.3
     assert cfg.poet_lie_ortho_angle_dim_exp == -0.5
     # b_ref (=hidden_size) MUST land on config, else the angle scaling silently no-ops.
     assert cfg.poet_lie_ortho_angle_dim_ref == 512

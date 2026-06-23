@@ -485,6 +485,137 @@ def test_decorrelate_rejects_bad_mode():
         )
 
 
+# --- alternating-mode decorrelation (cross-step over-spend control) ----------
+# Under the alternating champion only one side is written per step, so the inactive
+# side's update buffer is zero and the simultaneous decorrelation is a literal no-op.
+# The alternating path instead sources the inactive side's direction from its
+# MAINTAINED momentum (lie_m) and projects the ACTIVE written side off it ("don't keep
+# pushing along the direction the other side just moved"). Knobs: partial lambda,
+# movement-preserving renorm, and a |cos| module-selective gate.
+def _alt_decorr_dirs(decorrelate, mode="in_off_out", active_iter=1, seed=3, **extra):
+    """One alternating step (active_iter=1 -> 'in' is written). Returns the applied
+    active-in weight-space direction D_in and the inactive-out momentum direction
+    D_out_mom, both in the W frame, plus the applied generator norm ||D_in||."""
+    from poet_torch import alt_state
+
+    from src.diag.poet_coordination_diag import side_directions
+
+    torch.manual_seed(seed)
+    f = b = 12
+    ne = b * (b - 1) // 2
+    oin = nn.Parameter(torch.zeros(1, ne))
+    oin.grad = torch.randn(1, ne)
+    oout = nn.Parameter(torch.zeros(1, ne))
+    oout.grad = torch.randn(1, ne)
+    W = torch.randn(f, f)
+    lr = 0.05
+    kw = dict(
+        decorrelate_sides=decorrelate,
+        decorrelate_mode=mode,
+        layer_pairs=[(oout, oin, W, b, b)] if decorrelate else None,
+    )
+    kw.update(extra)
+    opt = LieOrthMomentum(
+        [
+            dict(params=[oin], use_skew=True, side="in", lr=lr),
+            dict(params=[oout], use_skew=True, side="out", lr=lr),
+        ],
+        ortho_c=0.1,
+        alternating=True,
+        **kw,
+    )
+    alt_state.set_iteration(active_iter)  # 1 -> active 'in'
+    opt.step()
+    alt_state.set_iteration(0)
+    A_in = vec_to_skew(oin.data / lr, b)  # applied generator (oin started at 0)
+    m_out = opt.state[oout]["lie_m"]  # inactive side's maintained momentum
+    A_out_mom = orthogonalize_skew_direction(vec_to_skew(-m_out, b), method="muon", ns_steps=5)
+    d_out_mom, d_in = side_directions(A_out_mom, A_in, W.float())
+    return d_in, d_out_mom
+
+
+def _cos(a, b):
+    a, b = a.flatten(), b.flatten()
+    return (a @ b / (a.norm() * b.norm() + 1e-12)).item()
+
+
+def test_alternating_decorrelate_is_not_a_noop():
+    # current code: alt+decorr skips (inactive buffer is zero) -> applied write identical
+    # to decorrelate-off. The alternating path must instead modify the active write.
+    base, _ = _alt_decorr_dirs(decorrelate=False)
+    dec, _ = _alt_decorr_dirs(decorrelate=True, mode="in_off_out")
+    assert _cos(base, dec) < 0.999, "alternating decorrelation must change the active write"
+
+
+def test_alternating_decorrelate_removes_inactive_momentum_overlap():
+    # in_off_out on an in-write step projects the active in-direction off the inactive
+    # out-side momentum direction -> cos(D_in, D_out_mom) -> 0.
+    d_in_base, d_out_mom = _alt_decorr_dirs(decorrelate=False)
+    base = abs(_cos(d_in_base, d_out_mom))
+    assert base > 0.02, f"baseline inactive-momentum overlap should be non-trivial, got {base}"
+    d_in, d_out_mom2 = _alt_decorr_dirs(decorrelate=True, mode="in_off_out")
+    assert (
+        abs(_cos(d_in, d_out_mom2)) < 1e-3
+    ), "decorrelation must zero the inactive-momentum overlap"
+
+
+@pytest.mark.parametrize("lam", [0.25, 0.5, 1.0])
+def test_alternating_decorrelate_lambda_scales_overlap(lam):
+    # Partial projection leaves a (1-lambda) fraction of the original parallel component:
+    # <D_in', D_out_mom> = (1-lambda) <D_in, D_out_mom>  (exact, renorm off).
+    d_in0, d_mom = _alt_decorr_dirs(decorrelate=False)
+    ip0 = (d_in0.flatten() @ d_mom.flatten()).item()
+    assert abs(ip0) > 1e-3, f"baseline parallel component should be non-trivial, got {ip0}"
+    d_in, d_mom2 = _alt_decorr_dirs(decorrelate=True, mode="in_off_out", decorrelate_lambda=lam)
+    ip = (d_in.flatten() @ d_mom2.flatten()).item()
+    assert ip == pytest.approx((1.0 - lam) * ip0, rel=2e-3, abs=1e-4)
+
+
+def test_alternating_decorrelate_without_renorm_shrinks_movement():
+    d_in0, _ = _alt_decorr_dirs(decorrelate=False)
+    d_in, _ = _alt_decorr_dirs(decorrelate=True, mode="in_off_out", decorrelate_lambda=1.0)
+    assert d_in.norm().item() < 0.999 * d_in0.norm().item(), "projection should reduce ||D_in||"
+
+
+@pytest.mark.parametrize("lam", [0.5, 1.0])
+def test_alternating_decorrelate_renorm_preserves_movement(lam):
+    # Movement normalization restores the active side's realized ||D_in|| to its
+    # pre-projection value (only the direction changes).
+    d_in0, _ = _alt_decorr_dirs(decorrelate=False)
+    n0 = d_in0.norm().item()
+    d_in, _ = _alt_decorr_dirs(
+        decorrelate=True, mode="in_off_out", decorrelate_lambda=lam, decorrelate_renorm=True
+    )
+    assert d_in.norm().item() == pytest.approx(n0, rel=1e-4)
+
+
+def test_alternating_decorrelate_threshold_gates():
+    # |cos| below threshold -> layer untouched; above threshold -> decorrelated.
+    d_in0, d_mom = _alt_decorr_dirs(decorrelate=False)
+    cos = abs(_cos(d_in0, d_mom))
+    assert cos > 0.02, f"need a non-trivial overlap to gate on, got {cos}"
+    skipped, _ = _alt_decorr_dirs(
+        decorrelate=True, mode="in_off_out", decorrelate_cos_threshold=cos + 0.1
+    )
+    assert _cos(d_in0, skipped) > 0.9999, "below-threshold layer must be left untouched"
+    fired, _ = _alt_decorr_dirs(
+        decorrelate=True, mode="in_off_out", decorrelate_cos_threshold=max(cos - 0.1, 0.0)
+    )
+    assert _cos(d_in0, fired) < 0.999, "above-threshold layer must be decorrelated"
+
+
+def test_alternating_decorrelate_mode_targets_active_side():
+    # On an in-write step (active_iter=1 -> 'in'): in_off_out & symmetric modify the
+    # active in-write; out_off_in targets the inactive out side -> no-op.
+    base, _ = _alt_decorr_dirs(decorrelate=False, active_iter=1)
+    in_mode, _ = _alt_decorr_dirs(decorrelate=True, mode="in_off_out", active_iter=1)
+    out_mode, _ = _alt_decorr_dirs(decorrelate=True, mode="out_off_in", active_iter=1)
+    sym, _ = _alt_decorr_dirs(decorrelate=True, mode="symmetric", active_iter=1)
+    assert _cos(base, in_mode) < 0.999, "in_off_out must modify the active in-write"
+    assert _cos(base, out_mode) > 0.9999, "out_off_in must not touch the active in-write"
+    assert _cos(base, sym) < 0.999, "symmetric must modify the active in-write"
+
+
 # --- per-block dimension-dependent angle scaling (angle_dim_exp) -----------
 # gen = ortho_c * (bsz/ref)^p * X. X (the orthogonalized direction) is independent of
 # the scalar, so a block of size b gets its applied update scaled EXACTLY by (b/ref)^p
