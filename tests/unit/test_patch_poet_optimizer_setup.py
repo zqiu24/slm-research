@@ -165,6 +165,7 @@ def test_get_config_copies_lie_ortho_knobs(monkeypatch):
         poet_lie_ortho_decorrelate=True,
         poet_lie_ortho_decorrelate_mode="symmetric",
         poet_lie_ortho_angle_dim_exp=-0.5,
+        hidden_size=512,
     )
     cfg, _ = fake_training.get_megatron_optimizer_config(args)
     assert cfg.poet_q_optimizer == "lie_ortho"
@@ -177,6 +178,9 @@ def test_get_config_copies_lie_ortho_knobs(monkeypatch):
     # from config, not args) — its absence silently no-op'd the §17.6 A/B.
     assert cfg.poet_lie_ortho_decorrelate is True
     assert cfg.poet_lie_ortho_decorrelate_mode == "symmetric"
+    assert cfg.poet_lie_ortho_angle_dim_exp == -0.5
+    # b_ref (=hidden_size) MUST land on config, else the angle scaling silently no-ops.
+    assert cfg.poet_lie_ortho_angle_dim_ref == 512
 
 
 def test_get_config_copies_lie_ortho_distributed(monkeypatch):

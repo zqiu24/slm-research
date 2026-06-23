@@ -63,6 +63,10 @@ def apply() -> None:
         config.poet_lie_ortho_nesterov = getattr(args, "poet_lie_ortho_nesterov", False)
         config.poet_lie_ortho_distributed = getattr(args, "poet_lie_ortho_distributed", False)
         config.poet_lie_ortho_angle_dim_exp = getattr(args, "poet_lie_ortho_angle_dim_exp", 0.0)
+        # b_ref for the per-block angle = hidden_size. The OptimizerConfig has NO hidden_size
+        # (it's a model-config field), so copy it from args here, else poet.py reads None and
+        # the angle scaling silently no-ops (every p arm == champion).
+        config.poet_lie_ortho_angle_dim_ref = getattr(args, "hidden_size", None)
         config.poet_lie_ortho_decorrelate = getattr(args, "poet_lie_ortho_decorrelate", False)
         config.poet_lie_ortho_decorrelate_mode = getattr(
             args, "poet_lie_ortho_decorrelate_mode", "in_off_out"

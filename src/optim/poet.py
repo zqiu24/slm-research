@@ -602,6 +602,17 @@ def get_megatron_poet_lie_momentum_optimizer(
         _dp_rank = mpu.get_data_parallel_rank() if _lie_ortho_distributed else 0
         _dp_group = mpu.get_data_parallel_group() if _lie_ortho_distributed else None
         _lie_ortho_decorrelate = bool(getattr(config, "poet_lie_ortho_decorrelate", False))
+        # b_ref for the per-block angle scaling (= hidden_size, propagated onto config by
+        # poet_optimizer_setup; the OptimizerConfig has no native hidden_size). Guard loudly
+        # so a non-zero exponent can never silently no-op for lack of a reference.
+        _lie_ortho_angle_exp = float(getattr(config, "poet_lie_ortho_angle_dim_exp", 0.0))
+        _lie_ortho_angle_ref = getattr(config, "poet_lie_ortho_angle_dim_ref", None)
+        if _lie_ortho_angle_exp != 0.0 and not _lie_ortho_angle_ref:
+            raise ValueError(
+                "poet_lie_ortho_angle_dim_exp is set but angle_dim_ref (hidden_size) is "
+                "missing on config — the per-block angle scaling would silently no-op. "
+                "Ensure poet_optimizer_setup copies hidden_size onto the OptimizerConfig."
+            )
         logger.info(
             "[POET] Lie-orth: method=%s, ortho_c=%s, ns_steps=%s, second_moment=%s, "
             "nesterov=%s, distributed=%s",
@@ -631,7 +642,7 @@ def get_megatron_poet_lie_momentum_optimizer(
             ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
             ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
             angle_dim_exp=getattr(config, "poet_lie_ortho_angle_dim_exp", 0.0),
-            angle_dim_ref=getattr(config, "hidden_size", None),  # per-block angle ∝ (b/hidden)^exp
+            angle_dim_ref=_lie_ortho_angle_ref,  # per-block angle ∝ (b/hidden)^exp
             nesterov=getattr(config, "poet_lie_ortho_nesterov", False),
             distributed=_lie_ortho_distributed,
             true_single_side=(
