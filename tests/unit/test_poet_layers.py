@@ -55,6 +55,71 @@ def test_init_type_none_preserves_weight_norm():
     assert torch.allclose(new, orig.to(new.dtype), atol=1e-6)
 
 
+def test_normalized_init_unit_row_norm():
+    m = ToyModel()
+    replace_linears_with_poet(
+        m,
+        block_size=8,
+        init_type="normalized",
+        extra_linear_types=(nn.Linear,),
+    )
+    w = m.fc1.poet_linear.weight.detach().float()
+    row_norms = torch.norm(w, dim=1)
+    assert torch.allclose(row_norms, torch.ones_like(row_norms), atol=1e-5)
+
+
+def test_init_scale_scales_norm_preserving_shape():
+    """init_scale is a uniform multiply: it scales the operating norm linearly
+    but leaves the spectrum *shape* (condition number) untouched."""
+    m1, m2 = ToyModel(), ToyModel()
+    # Same RNG so the underlying child weights match before init.
+    torch.manual_seed(0)
+    m1 = ToyModel()
+    torch.manual_seed(0)
+    m2 = ToyModel()
+    replace_linears_with_poet(
+        m1,
+        block_size=8,
+        init_type="normalized",
+        init_scale=1.0,
+        extra_linear_types=(nn.Linear,),
+    )
+    replace_linears_with_poet(
+        m2,
+        block_size=8,
+        init_type="normalized",
+        init_scale=3.0,
+        extra_linear_types=(nn.Linear,),
+    )
+    w1 = m1.fc1.poet_linear.weight.detach().float()
+    w2 = m2.fc1.poet_linear.weight.detach().float()
+    # Norm scales by exactly init_scale.
+    assert torch.allclose(w2, 3.0 * w1, atol=1e-5)
+    # Condition number (spectrum shape) is invariant under a scalar multiply.
+    sv1 = torch.linalg.svdvals(w1)
+    sv2 = torch.linalg.svdvals(w2)
+    assert abs((sv1.max() / sv1.min()) - (sv2.max() / sv2.min())) < 1e-3
+
+
+def test_orthogonal_init_is_well_conditioned_and_matched_norm():
+    """orthogonal init → all singular values equal (condition number ≈ 1), and at
+    init_scale=1 its per-element RMS matches `normalized` (1/√in)."""
+    m = ToyModel()
+    replace_linears_with_poet(
+        m,
+        block_size=8,
+        init_type="orthogonal",
+        extra_linear_types=(nn.Linear,),
+    )
+    w = m.fc1.poet_linear.weight.detach().float()  # (16, 8)
+    sv = torch.linalg.svdvals(w)
+    # All singular values equal ⇒ condition number ≈ 1.
+    assert (sv.max() / sv.min()) < 1.05
+    # Per-element RMS anchored to normalized's 1/√in (in=8).
+    rms = w.pow(2).mean().sqrt().item()
+    assert abs(rms - 1.0 / (8**0.5)) < 1e-4
+
+
 def test_wrapper_shape_and_tuple_convention():
     """Inspect ``POETMegatronLinear`` structurally — its ``forward`` returns a
     2-tuple via :class:`POETMegatronLinear.forward` definition. We can't

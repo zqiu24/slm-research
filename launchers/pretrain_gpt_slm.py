@@ -38,10 +38,15 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     poet_block_group.add_argument("--poet-block-count", type=int, default=None)
     group.add_argument(
         "--poet-init-type",
-        choices=["none", "normalized", "mup_normalized"],
+        choices=["none", "normalized", "mup_normalized", "orthogonal"],
         default="normalized",
     )
     group.add_argument("--poet-mup-alpha", type=float, default=1.0)
+    # Final scalar multiply on the frozen base after init_type (default 1.0 = no-op).
+    # POET freezes W and only rotates it, so this sets the *operating* norm without
+    # touching the spectrum shape (condition number) — the scale axis of the
+    # init_type x init_scale study.
+    group.add_argument("--poet-init-scale", type=float, default=1.0)
     group.add_argument("--poet-merge-period", type=int, default=0)
     # Cadence (optimizer steps) at which the block permutation is resampled AND
     # Adam momentum is reset. 0 = fall back to --poet-merge-period (legacy: fold,

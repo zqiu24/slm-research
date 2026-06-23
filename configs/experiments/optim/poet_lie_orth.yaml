@@ -50,8 +50,9 @@ optim:
   poet:
     block_count: 1
     cache_mode: none
-    init_type: normalized
+    init_type: normalized      # spectrum SHAPE of frozen W: none|normalized|mup_normalized|orthogonal
     mup_alpha: 1.0
+    init_scale: 1.0            # operating NORM: final scalar multiply on frozen W (spectrum-shape-preserving)
     merge_period: 1
     reinit_period: -1
     scale: 0.5

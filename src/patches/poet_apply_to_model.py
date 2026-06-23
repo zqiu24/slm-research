@@ -59,6 +59,7 @@ def _apply_poet_to_chunk(m, args) -> int:
     block_count = getattr(args, "poet_block_count", None)
     init = getattr(args, "poet_init_type", "normalized")
     mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
+    init_scale = getattr(args, "poet_init_scale", 1.0)
     cache_mode = getattr(args, "poet_cache_mode", "none")
     parameterization = getattr(args, "poet_parameterization", "cayley")
     freeze_output_rotation = getattr(args, "poet_freeze_output_rotation", False)
@@ -87,6 +88,7 @@ def _apply_poet_to_chunk(m, args) -> int:
         block_count=block_count,
         init_type=init,
         mup_alpha=mup_alpha,
+        init_scale=init_scale,
         cache_mode=cache_mode,
         parameterization=parameterization,
         freeze_output_rotation=freeze_output_rotation,

@@ -37,6 +37,7 @@ def apply() -> None:
         config.poet_block_size = getattr(args, "poet_block_size", 256)
         config.poet_init_type = getattr(args, "poet_init_type", "normalized")
         config.poet_mup_alpha = getattr(args, "poet_mup_alpha", 1.0)
+        config.poet_init_scale = getattr(args, "poet_init_scale", 1.0)
         config.poet_cache_mode = getattr(args, "poet_cache_mode", "none")
         config.poet_use_poet_adam = getattr(args, "poet_use_poet_adam", False)
         config.poet_q_optimizer = getattr(args, "poet_q_optimizer", "adam")

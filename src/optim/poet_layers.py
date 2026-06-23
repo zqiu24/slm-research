@@ -14,6 +14,7 @@ that automatically.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable
 
 import torch
@@ -41,9 +42,31 @@ _HEAD_ALIGNED_SIDES = {
 }
 
 
-def _copy_and_init_weight(pl, child, init_type, mup_alpha):
+def _copy_and_init_weight(pl, child, init_type, mup_alpha, init_scale=1.0):
     """Copy child's weight (+bias) into the POET layer's frozen base, applying
-    init_type. Shared by the stock and head-aligned branches."""
+    init_type. Shared by the stock and head-aligned branches.
+
+    Because POET freezes ``W`` and only rotates it, ``W``'s singular-value
+    *spectrum* at init is permanent (orthogonal rotation preserves singular
+    values). ``init_type`` therefore controls the **shape** of that frozen
+    spectrum and ``init_scale`` is a final scalar multiply controlling its
+    **operating norm** — a scalar scales every singular value equally, so it
+    moves the norm without touching the condition number. The two axes are
+    independent: ``init_type x init_scale`` separates "POET wants the right
+    operating norm" from "POET wants a well-conditioned base".
+
+    ``init_type``:
+      - ``none``           — raw child weight (Megatron's MP spectrum + residual
+                             ``1/√(2L)`` downscale on proj/fc2; large κ).
+      - ``normalized``     — unit per-row L2 norm (rows equal; per-element RMS
+                             ``1/√in``).
+      - ``mup_normalized`` — row-normalize then spectral-scale to
+                             ``mup_alpha·√(d_out/d_in)``.
+      - ``orthogonal``     — semi-orthogonal base (all sigma equal, kappa=1), anchored at
+                             ``init_scale=1`` to the same per-element RMS as
+                             ``normalized`` so the two are a matched-norm,
+                             different-spectrum A/B.
+    """
     out_f, in_f = child.weight.shape
     has_bias = child.bias is not None and child.bias.numel() > 0
     with torch.no_grad():
@@ -57,6 +80,21 @@ def _copy_and_init_weight(pl, child, init_type, mup_alpha):
             target = mup_alpha * torch.sqrt(d_out / d_in)
             current = torch.linalg.norm(w.float(), ord=2).item()
             w = w * (target / current).to(dtype=w.dtype, device=w.device)
+        elif init_type == "orthogonal":
+            # Fresh semi-orthogonal base: condition number 1 (all sigma equal). Uses
+            # only the child's *shape*, replacing its spectrum entirely. Anchor
+            # the per-element RMS to `normalized`'s (1/√in) so init_scale=1 is a
+            # matched-norm sibling; init_scale then sweeps the operating norm.
+            q = torch.empty(out_f, in_f, dtype=torch.float32)
+            nn.init.orthogonal_(q)
+            cur_rms = q.pow(2).mean().sqrt()
+            target_rms = 1.0 / math.sqrt(in_f)
+            q = q * (target_rms / cur_rms)
+            w = q.to(w.dtype)
+        if init_scale != 1.0:
+            # Uniform scalar: moves the operating norm, leaves the spectrum shape
+            # (condition number) untouched. Compounds with mup_alpha if both set.
+            w = w * init_scale
         pl.weight.copy_(w.to(pl.weight.dtype))
         if has_bias:
             pl.bias.copy_(child.bias.data.to(pl.bias.dtype))
@@ -194,7 +232,7 @@ _EXPERT_ROLE_NAMES = ("linear_fc1", "linear_fc2")  # extend if unfuse adds segme
 
 
 def _install_grouped_poetx(
-    seq_mlp, *, block_count, alternating, alternate_every, init_type, mup_alpha
+    seq_mlp, *, block_count, alternating, alternate_every, init_type, mup_alpha, init_scale=1.0
 ):
     """Replace a SequentialMLP's per-expert POETX linears with one GroupedPOETXLinear
     per role, and swap its forward to run the grouped path. Returns #roles grouped."""
@@ -247,7 +285,7 @@ def _install_grouped_poetx(
                     f"[POET] grouped experts must be homogeneous; expert {e} role "
                     f"{name} is missing or its weight shape != ({out_f}, {in_f})."
                 )
-            _copy_and_init_weight(g.experts[e], child_e, init_type, mup_alpha)
+            _copy_and_init_weight(g.experts[e], child_e, init_type, mup_alpha, init_scale)
             g.experts[e].bake_perms_into_weight()
         g.bind_weights()
         grouped_by_role[name] = g
@@ -295,6 +333,7 @@ def replace_linears_with_poet(
     block_count: int | None = None,
     init_type: str = "normalized",
     mup_alpha: float = 1.0,
+    init_scale: float = 1.0,
     skip_lm_head: bool = True,
     extra_linear_types: Iterable[type] = (),
     cache_mode: str = "none",
@@ -389,7 +428,7 @@ def replace_linears_with_poet(
                             alternating=(single_step_x and lie_alternating),
                             alternate_every=alternate_every,
                         )
-                        _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                        _copy_and_init_weight(pl, child, init_type, mup_alpha, init_scale)
                         pl.bake_perms_into_weight()  # POETX stores the forward frame
                     else:
                         from poet_torch import HeadAlignedPOETLinear
@@ -411,7 +450,7 @@ def replace_linears_with_poet(
                             parameterization=parameterization,
                             **resid_kwargs,
                         )
-                        _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                        _copy_and_init_weight(pl, child, init_type, mup_alpha, init_scale)
                     pl.single_step_fast = single_step_fast or single_step_native or single_step_x
                     wrapper = POETMegatronLinear(
                         pl, skip_bias_add=getattr(child, "skip_bias_add", False)
@@ -531,7 +570,7 @@ def replace_linears_with_poet(
                     # pre-DDP, so oft_R_out is excluded from the grad buffer and the
                     # optimizer param groups (which only take requires_grad params).
                     pl.oft_R_out.requires_grad_(False)
-                _copy_and_init_weight(pl, child, init_type, mup_alpha)
+                _copy_and_init_weight(pl, child, init_type, mup_alpha, init_scale)
                 pl.single_step_fast = single_step_fast
                 if single_step_x:
                     # POETX stores the forward-frame weight; convert the just-copied
@@ -556,6 +595,7 @@ def replace_linears_with_poet(
                     alternate_every=alternate_every,
                     init_type=init_type,
                     mup_alpha=mup_alpha,
+                    init_scale=init_scale,
                 )
             else:
                 _walk(child, full)
@@ -570,6 +610,7 @@ def replace_linears_with_poet(
             alternate_every=alternate_every,
             init_type=init_type,
             mup_alpha=mup_alpha,
+            init_scale=init_scale,
         )
     else:
         _walk(model)

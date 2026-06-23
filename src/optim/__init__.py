@@ -41,6 +41,7 @@ class OptimizerCfg:
     poet_block_size: int = 256
     poet_init_type: str = "normalized"
     poet_mup_alpha: float = 1.0
+    poet_init_scale: float = 1.0
 
     # Muon-specific (carried for slm-research API symmetry; consumed by
     # src.optim.muon which delegates to Megatron-Core's pinned Muon builder).
