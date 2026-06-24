@@ -1372,6 +1372,63 @@ gauge-redundancy is in fact **supported**, not falsified — but the spatial ove
 temporal verdict here is unaffected.) **Verdict: keep `lie_alternate_every` pinned at
 1.**
 
+## 17.9 Decorrelation ON the champion — partial-λ sweep (Stage 1)
+
+§17.6 decorrelated a *simultaneous* step (recovered 25% of the alt-vs-sim gap). The
+sharper question is whether overlap control improves the **actual alternating champion**.
+Under alternating only the active side writes, so the inactive direction is sourced from
+its *maintained momentum* (`orthogonalize(−lie_m)`) and the active write is projected off
+it — "don't keep pushing along the direction the other side just moved" (**cross-step
+over-spend control**). Landed on main `724280d` (impl `_decorrelate_buf_alternating`,
+3 knobs: partial `λ`, movement-preserving `renorm`, module-selective `cos_threshold`).
+
+Stage 1 sweep (`scripts/sweep_alt_decorrelate.sh`): champion recipe (lr4e-3/c8/muon/
+head-off, **alt=true**) + decorrelate `mode=symmetric` (fires every step), `renorm=true`
+(rescale active generator back to its pre-projection ‖D‖ — direction-only change), all
+layers (`cos_threshold=0`), `λ ∈ {0.25, 0.5, 1.0}`. Matched final eval (iter 9155) vs the
+alternating champion `coord_diag_wpermfix`/`g9i51g5l` (**3.5181**):
+
+| arm | λ | val/loss (9155) | it9000 | Δ vs champion |
+|---|---:|---:|---:|---:|
+| **alternating champion** (no decorr) | — | **3.5181** | 3.5246 | — |
+| alt + decorr (sym, renorm) | 0.25 | 3.5156 | 3.5218 | **−0.0025** |
+| alt + decorr (sym, renorm) | **0.50** | **3.5111** | 3.5173 | **−0.0070** |
+| alt + decorr (sym, renorm) | 1.00 | 3.9191 | 3.9244 | **+0.40 (blowup)** |
+
+**(i) Partial decorrelation HELPS the champion — the spatial channel is NOT fully
+captured by alternating.** λ=0.5 beats the champion by **0.0070** (consistent at both
+eval points). So alternating leaves *residual cross-step over-spend* on the table:
+removing ~half of the shared `cos≈0.44` direction claws back a further gain on top of the
+§17.6 75%-temporal + 25%-spatial split. (This refutes the prior "alternating already
+captures the spatial benefit → likely null" expectation.)
+
+**(ii) Full decorrelation (λ=1.0) is catastrophic — the shared direction is partly
+load-bearing.** 3.92, a blow-up. The +0.44 subspace carries real signal; it cannot be
+removed entirely. The mechanism is also a **renorm pathology**: where the active
+generator is strongly aligned with the shared direction, λ=1 projection leaves a tiny
+residual and `renorm` rescales *that* back to full magnitude — a large, noisy rotation
+into the de-shared complement. Stripping the shared component and forcing full-magnitude
+movement into the orthogonal complement destabilizes training.
+
+**(iii) Interior optimum.** Monotone 0.25→0.5, then a cliff to 1.0. Best so far **λ=0.5**;
+true optimum in (0.25, ~0.75), cliff between 0.5 and 1.0.
+
+*Measurement note:* the coord-diag `cos_D_out_D_in` stayed ≈0.47–0.50 in all three arms —
+**not a contradiction**. That diag reads the *momentum* directions (`orthogonalize(−lie_m)`),
+which decorrelation never touches; it modifies only the *written* generator, so the diag
+is blind to the applied-update change. The λ=1.0 blow-up is the proof the intervention bites.
+
+⚠️ **Single seed each.** The λ=0.5 win (0.0070) is real within the run but near the
+seed-noise floor (~0.01–0.02 for 60m/9k); the λ=1.0 blow-up (0.40) is unambiguous. The
+*partial-helps* signal needs a 2–3-seed confirm before promotion.
+
+**Stage 2 (revised by the result):** (1) confirm λ=0.5 at 2–3 seeds (gates everything);
+(2) finer λ ∈ {0.4, 0.6, 0.75} to pin the optimum + map the cliff; (3) λ=1.0 **without**
+renorm — disentangle "removing the shared direction" from "renorm amplifying the
+complement" (if no-renorm λ=1 doesn't blow up, the cliff is a renorm artifact → λ-gate
+renorm); (4) then mode (`in_off_out` vs `out_off_in`) + module gate (`cos_threshold=0.3`,
+the high-overlap attn-out/MLP-down layers) at the best λ.
+
 ## 17.9 Per-block dimension-dependent angle: `angle_dim_exp` p-sweep (POET_dev arm K)
 
 Tests whether the per-side rotation angle should be **tilted by block dimension** rather
