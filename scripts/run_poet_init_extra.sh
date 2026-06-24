@@ -6,13 +6,11 @@
 # 4-GPU (dp=4, global_batch 1024) — same cohort as the original 4-GPU init grid + the 3.5160
 # champion, so directly comparable. All ride the champion recipe at the OPTIMUM angle c6
 # (eff∠ 0.012); per-index cell knobs below.
-# Index plan — finer SCALE at c6, ONLY the cells not already done/running/pending in the grids:
-#   none @ c6 is covered at {1,1.5,2.75,4,5,5.5,6,7,8}; the descent 1.5->4.0 has only 2.75 -> add 2.0/2.5/3.0/3.5
-#   mup  @ c6 is covered at integer 1..6 (hi_mup) -> only the 1->2 gap is open -> add 1.5
-#   (dropped as redundant: none 4.5; mup 2.5/3.5/4.5/5.5 — all sit inside already-covered regions)
-#   0-3  none (raw)  init_scale {2.0, 2.5, 3.0, 3.5}
-#   4    mup         mup_alpha  {1.5}
-# Names use the init_*/scale×100 convention so they auto-merge into the analysis tables.
+# Index plan — non-redundant cells only (skip anything done/running/pending in the grids):
+#   0-3  none (raw) @ c6  init_scale {2.0,2.5,3.0,3.5}  — fills the sparse 1.5->4.0 descent (only 2.75 there)
+#   4-9  mup HIGHER scale × angle: mup_alpha {7,8} × c{2,4,6}  — hi_mup already sweeps a{2..6}×c{2,4,6},
+#        so go ABOVE 6 (mup @ c6 still falling at 4.0=3.4816); cool angles since the optimum slides
+#        cooler as the frozen norm grows. All standard angle columns so they auto-merge into the tables.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 IDX="${1:?usage: run_poet_init_extra.sh <index 0-9>}"
@@ -31,14 +29,20 @@ optim.poet.lie_ortho_distributed=true cluster.gpus_per_node=4"
 
 NAMES=(
   init_none_s200_c6 init_none_s250_c6 init_none_s300_c6 init_none_s350_c6
-  init_mup_a150_c6
+  init_mup_a700_c2 init_mup_a700_c4 init_mup_a700_c6
+  init_mup_a800_c2 init_mup_a800_c4 init_mup_a800_c6
 )
 OVERRIDES=(
   "optim.poet.init_type=none optim.poet.init_scale=2.0 optim.poet.lie_ortho_c=6"
   "optim.poet.init_type=none optim.poet.init_scale=2.5 optim.poet.lie_ortho_c=6"
   "optim.poet.init_type=none optim.poet.init_scale=3.0 optim.poet.lie_ortho_c=6"
   "optim.poet.init_type=none optim.poet.init_scale=3.5 optim.poet.lie_ortho_c=6"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=1.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=7.0 optim.poet.lie_ortho_c=2"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=7.0 optim.poet.lie_ortho_c=4"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=7.0 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=8.0 optim.poet.lie_ortho_c=2"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=8.0 optim.poet.lie_ortho_c=4"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=8.0 optim.poet.lie_ortho_c=6"
 )
 
 if [ "$IDX" -lt 0 ] || [ "$IDX" -ge "${#NAMES[@]}" ]; then
