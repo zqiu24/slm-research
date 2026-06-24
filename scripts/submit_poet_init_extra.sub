@@ -1,9 +1,9 @@
 # POET init EXTRA runs — 10 cells (idx 0-9) on spare 4-GPU machines (HTCondor).
 # Submit:  condor_submit scripts/submit_poet_init_extra.sub
 # Each idx -> scripts/run_poet_init_extra.sh <idx> -> one full 60m/40tpp POET run (dp=4).
-# Finer SCALE resolution at the optimum angle c6 for raw + mup: idx 0-4 none init_scale
-# {2.0,2.5,3.0,3.5,4.5}, idx 5-9 mup mup_alpha {1.5,2.5,3.5,4.5,5.5}. Edit the NAMES/OVERRIDES
-# arrays in run_poet_init_extra.sh to change cells. Tune requirements/request_* below as needed.
+# Finer SCALE at c6, only the NON-redundant gaps: idx 0-3 none init_scale {2.0,2.5,3.0,3.5}
+# (the 1.5->4.0 descent gap), idx 4 mup mup_alpha 1.5 (the 1->2 gap; mup c6 is else integer-covered
+# 1-6 by hi_mup). Edit the NAMES/OVERRIDES arrays in run_poet_init_extra.sh to change cells.
 
 executable = /lustre/fast/fast/zqiu/slm-research/scripts/run_poet_init_extra.sh
 arguments  = $(idx)
@@ -22,4 +22,4 @@ request_gpus   = 4
 # GPUs: only H100 (both variants) and B200 — names from `condor_free` MODEL column.
 requirements = (CUDADeviceName == "NVIDIA H100") || (CUDADeviceName == "NVIDIA H100 80GB HBM3") || (CUDADeviceName == "NVIDIA B200")
 
-queue 1 idx from seq 0 9 |
+queue 1 idx from seq 0 4 |
