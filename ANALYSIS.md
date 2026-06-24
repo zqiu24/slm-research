@@ -1405,25 +1405,30 @@ Strictly monotone: every step more negative is worse, slope flattening toward 0 
 0.25 step costs only +0.0115). So **damping the big blocks' rotation hurts** — the
 optimum sits at `p=0` or on the **positive** side.
 
-**POSITIVE half — lost to a node failure, rerun in progress (NODE 2):**
+**POSITIVE half — complete after a node-failure rerun (all 4 arms, NODE 2):**
 
-The POS node died at **11:39** (clean node loss/preemption, no traceback): `angle2_ep025`
-(p=+0.25) was killed at iter **8890/9155** before writing its validation line;
-`angle2_ep05` only loaded CUDA modules (110 B); `ep10`/`ep15` never started. The one
-partial signal was suggestive — at matched iter 8880, **p=+0.25 train lm loss 3.4363 vs
-p=−0.25's 3.4502** (+0.25 tracking ~0.014 *better*), consistent with the NEG-side trend
-that the optimum is at or just above `p=0`. The full POS chain was **relaunched** and is
-running (ep025 → ep05 → ep10 → ep15 sequentially, ~45 min/arm on the 8-GPU node);
-b_ref guard passed (angle scaling genuinely active).
+The first POS attempt died at **11:39** (clean node loss/preemption, no traceback) with
+only `angle2_ep025` partially run. The full chain was relaunched and completed cleanly
+(ep025 → ep05 → ep10 → ep15 sequentially, ~55 min/arm; b_ref guard passed, so the angle
+scaling is genuinely active):
 
-| p | arm | status |
-|---:|---|---|
-| +0.25 | `angle2_ep025` | rerun running |
-| +0.5 | `angle2_ep05` | queued |
-| +1.0 | `angle2_ep10` | queued |
-| +1.5 | `angle2_ep15` | queued |
+| p | arm | final val/loss | vs champion |
+|---:|---|---:|---:|
+| **+0.25** | `angle2_ep025` | **3.5175** | **−0.0006** |
+| +0.5 | `angle2_ep05` | 3.5475 | +0.0294 |
+| +1.0 | `angle2_ep10` | 3.6235 | +0.1054 |
+| +1.5 | `angle2_ep15` | 3.6823 | +0.1642 |
 
-**Verdict (pending POS):** the NEG side is conclusive — champion ≥ all `p<0`, monotone —
-so the dimension tilt should be `p≥0`. Whether a *positive* tilt (large blocks rotate
-more) can beat the champion is the open question the rerun resolves; table to be filled
-in once the four POS arms land.
+**Full curve (both halves) — clean U, minimum at p≈+0.25:**
+
+| p | −1.5 | −1.0 | −0.5 | −0.25 | **0** | **+0.25** | +0.5 | +1.0 | +1.5 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| val | 3.6130 | 3.5757 | 3.5413 | 3.5296 | **3.5181** | **3.5175** | 3.5475 | 3.6235 | 3.6823 |
+
+**Verdict:** the dimension tilt buys **essentially nothing**. The minimum sits at
+`p≈+0.25` (3.5175) but beats `p=0` by only **0.0006 — within run-to-run noise**, i.e. a
+*tie* with the champion, not a real win. The optimum is a shallow basin spanning
+`[0, +0.25]`; outside it both directions hurt, and the **positive side degrades faster**
+than the negative at matched |p| (+0.5 → +0.0294 vs −0.5 → +0.0232; +1.5 → +0.164 vs
+−1.5 → +0.095). So **‖W‖-proportional rotation (`p=0`) is already at the optimum** — keep
+`angle_dim_exp` pinned at 0 (or +0.25 if a free coin-flip, but the gain is noise).
