@@ -15,7 +15,7 @@
 - **No recursion.** The builder calls the *original* `megatron.core.optimizer.get_megatron_optimizer` for the Adam side, resolved lazily (like `src/optim/poet.py:200-239`). The patch only rebinds `megatron.training.training.get_megatron_optimizer`, so the core call does not re-enter the patch.
 - **Vendored algorithm is verbatim.** `src/optim/_pion.py` is a copy of the upstream algorithm with ONLY the Megatron-import line replaced by a stdlib shim. Do not alter the math.
 - **`optim.type=pion` routes through `--optimizer adam --slm-optimizer pion`** (same as `muon_kimi`: the stock Megatron path builds an `AdamOptimizerConfig`; the patch tags + reroutes).
-- **Pion uses FUSED qkv/fc1.** Unlike `muon_kimi`, the `pion` experiment does NOT unfuse linears — Pion splits qkv per-head and fc1 up/gate internally inside the optimizer. The `pion.yaml` config must NOT set `unfuse_qkv`/`unfuse_fc1` and must NOT list the `model_unfuse_linears` patch.
+- **Pion defaults to FUSED qkv/fc1, with unfusing as an OPT-IN.** By default the `pion` experiment keeps qkv/fc1 fused and Pion splits them per-head / up-gate *internally* (Pion-native granularity, like the upstream reference). Unfusing is supported as an option, mirroring `adam.yaml`: `pion.yaml` lists the `model_unfuse_linears` patch (a no-op unless `base.model.unfuse_qkv`/`unfuse_fc1` are set), and a sibling `pion_unfused.yaml` turns it on. The builder routes BOTH paths correctly with **no code change**: when unfused, the separate q/k/v/up/gate weights do not match `is_qkv_fn`/`is_fc1_up_gate_fn` (which test for `linear_qkv.weight` / `linear_fc1.weight` in the param name), so each is rotated as a plain 2-D matrix; when fused, Pion's internal split applies. Unfusing simply makes Pion's internal split inert (the fused tensor name is gone) — the two are mutually exclusive per tensor and never conflict.
 - **Reference defaults** (from `third_party/pion/megatron-lm/opt_llama_60M_pion.sh`): `pion_scaling=rms`, `pion_rms=0.2`, `pion_update_side=alternate`, `pion_momentum=transported_ambient_ambient`, `pion_degree=2`, `pion_beta1=0.9`, `pion_beta2=0.95`, adam betas `(0.9, 0.95)`, `adam_eps=1e-8`, `lr=1e-3`, `weight_decay=0.1`.
 - **`pion_msign` (the exploration variant) is OUT OF SCOPE.** Only the two core Pion momentum geometries (`lie_lie`, `transported_ambient_ambient`) in `pion.py` are ported.
 - **`src/optim/__init__.py` (`OptimizerCfg`/`get_optimizer`) is NOT touched.** That dispatcher serves the torchtitan/direct path; the Megatron path uses `slm_optimizer` and never reaches it (same as `muon_kimi`, which is absent from `_VALID_KINDS`).
@@ -31,7 +31,9 @@
 | `src/patches/pion_optimizer_setup.py` | Patch: tag `config.slm_optimizer="pion"`, copy `pion_*` args→config, reroute builder. Mirrors `muon_kimi_optimizer_setup.py`. | Create |
 | `launchers/pretrain_gpt_slm.py` | Add `"pion"` to `--slm-optimizer` choices; register `--pion-*` CLI args. | Modify |
 | `src/utils/megatron_args.py` | `_optimizer_args`: add `kind == "pion"` branch emitting the Pion argv. | Modify |
-| `configs/experiments/optim/pion.yaml` | `optim.type=pion` experiment config. Mirrors `muon_kimi.yaml` (minus unfuse). | Create |
+| `configs/experiments/optim/pion.yaml` | `optim.type=pion` experiment config, FUSED default (Pion-native internal split). Lists `model_unfuse_linears` as a no-op-by-default opt-in. | Create |
+| `configs/experiments/optim/pion_unfused.yaml` | Unfused Pion variant: identical to `pion.yaml` but sets `base.model.unfuse_qkv/unfuse_fc1=true` so Pion rotates each separate q/k/v/up/gate as a plain matrix. | Create |
+| `docs/experiments/pion.md`, `docs/experiments/pion_unfused.md` | Required by the `experiment-doc-exists` pre-commit hook (one doc per experiment `name`). | Create |
 | `scripts/train_pion_dev.sh` | Single-GPU dev launcher (`experiment=optim/pion`). Mirrors `train_muon_dev.sh`. | Create |
 | `scripts/sweep_pion_lr.sh` | LR sweep over `optim.lr`, all else at Pion defaults. Mirrors `sweep_muon_kimi_lr.sh`. | Create |
 | `tests/unit/test_pion_optimizer.py` | CPU unit tests for the vendored `PionOptimizer` (spectrum preservation, determinism, both momentum modes). | Create |
@@ -202,6 +204,7 @@ git commit -m "feat(pion): vendor Pion optimizer algorithm + CPU unit tests"
 **Interfaces:**
 - Consumes: `PionOptimizer` from `src/optim/_pion.py`; lazily-resolved Megatron primitives `_get_param_groups`, `get_megatron_optimizer`, `ChainedOptimizer`, `Float16OptimizerWithFloat16Params`, `FP32Optimizer` (from `megatron.core.optimizer` / `megatron.core.optimizer.optimizer`).
 - Produces: `get_megatron_pion_optimizer(config, model_chunks, *, config_overrides=None, use_gloo_process_groups=True) -> MegatronOptimizer` (a `ChainedOptimizer`). Signature MUST match what the patch passes (Task 3) — same kwargs as `get_megatron_muon_kimi_optimizer` in `src/optim/muon_kimi.py:53-59`.
+- **Fused/unfused routing (no code branch needed):** the param walk tags `param.is_qkv = True` only when `"linear_qkv.weight" in name` and `param.is_fc1_up_gate = True` only when `"linear_fc1.weight" in name`. With the FUSED architecture (default) those tags fire and Pion splits internally; with the UNFUSED architecture (`base.model.unfuse_qkv/unfuse_fc1=true`) the fused names are absent, the tags never fire, and each separate q/k/v/up/gate is a plain 2-D matrix param routed to Pion's `main`-block update. Both are correct; the builder code is identical.
 
 This task has no standalone CPU unit test (a full build needs a real Megatron model on GPU). It is verified by import-compile here, by the patch test in Task 3 (which monkeypatches the builder), and by the GPU smoke in Task 9. Mirror the upstream builder (`third_party/pion/megatron-lm/megatron/core/optimizer/pion.py:777-949`), adapted per the Global Constraints.
 
@@ -981,18 +984,19 @@ git commit -m "feat(pion): emit pion argv from optim.type=pion in megatron_args"
 
 ---
 
-## Task 6: Pion experiment config (`configs/experiments/optim/pion.yaml`)
+## Task 6: Pion experiment configs (fused default + unfused variant)
 
 **Files:**
-- Create: `configs/experiments/optim/pion.yaml`
+- Create: `configs/experiments/optim/pion.yaml` (FUSED default — Pion-native internal split)
+- Create: `configs/experiments/optim/pion_unfused.yaml` (UNFUSED variant — opt-in ablation)
 
 **Interfaces:**
-- Consumes: the `optim.type=pion` argv branch (Task 5) and the `pion_optimizer_setup` patch (Task 3).
-- Produces: a Hydra experiment selectable via `experiment=optim/pion`.
+- Consumes: the `optim.type=pion` argv branch (Task 5), the `pion_optimizer_setup` patch (Task 3), and the always-no-op-unless-flagged `model_unfuse_linears` patch.
+- Produces: two Hydra experiments selectable via `experiment=optim/pion` (fused) and `experiment=optim/pion_unfused` (unfused).
 
-- [ ] **Step 1: Write the config**
+- [ ] **Step 1: Write the fused (default) config**
 
-Create `configs/experiments/optim/pion.yaml`:
+Create `configs/experiments/optim/pion.yaml`. Note it LISTS `model_unfuse_linears` (a no-op unless `base.model.unfuse_qkv`/`unfuse_fc1` are set — same pattern as `adam.yaml:16-19`), so a fused-default run can opt into unfusing at the CLI without editing the config:
 
 ```yaml
 # @package _global_
@@ -1002,9 +1006,13 @@ Create `configs/experiments/optim/pion.yaml`:
 # matrix exponential); a chained Megatron AdamW drives embeddings, norms, biases,
 # and the LM head. Defaults match third_party/pion/.../opt_llama_60M_pion.sh.
 #
-# Unlike muon_kimi, Pion keeps qkv/fc1 FUSED — it splits qkv per-head and fc1
-# up/gate INTERNALLY in the optimizer — so this config does NOT unfuse linears
-# and does NOT list the model_unfuse_linears patch.
+# FUSED by default: Pion splits qkv per-head and fc1 up/gate INTERNALLY in the
+# optimizer (Pion-native granularity). The model_unfuse_linears patch is listed
+# but is a NO-OP unless base.model.unfuse_qkv / unfuse_fc1 are set — so you can
+# opt into the unfused path on the CLI (base.model.unfuse_qkv=true
+# base.model.unfuse_fc1=true) or via experiment=optim/pion_unfused. When unfused,
+# Pion's internal split goes inert (the fused linear_qkv/linear_fc1 names are
+# gone) and each separate q/k/v/up/gate is rotated as a plain matrix.
 experiment:
   name: pion
   family: optim
@@ -1012,11 +1020,12 @@ experiment:
     Pion: a spectrum-preserving optimizer via orthogonal equivalence
     transformation (Shi, Li, Qiu, Wen, Buchholz, Liu). Matrix weights rotated by
     two Lie generators; non-matrix params on AdamW. Single base LR for both
-    sides. Single-GPU dev.
+    sides. Single-GPU dev. Fused qkv/fc1 (Pion-native internal split).
   references:
     - "Pion (Sphere-AI-Lab/pion) — transported_ambient_ambient + lie_lie"
   patches:
     - pion_optimizer_setup
+    - model_unfuse_linears    # NO-OP unless base.model.unfuse_qkv/unfuse_fc1 set
     - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
     - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
   required_capabilities: []
@@ -1038,19 +1047,134 @@ optim:
     eps: 1.0e-8
 ```
 
-- [ ] **Step 2: Verify the config resolves**
+- [ ] **Step 2: Write the unfused variant config**
+
+Create `configs/experiments/optim/pion_unfused.yaml` — identical to `pion.yaml` except `experiment.name`, the description, and the added `base.model` unfuse flags (this turns the `model_unfuse_linears` patch ON, so Pion rotates each separate q/k/v/up/gate as a whole matrix — the muon-like granularity, for ablation against the fused default):
+
+```yaml
+# @package _global_
+# UNFUSED Pion variant. Identical to optim/pion.yaml but unfuses qkv/fc1 at
+# model-build time (model_unfuse_linears patch), so Pion treats each separate
+# q/k/v/up/gate projection as a plain 2-D matrix instead of splitting a fused
+# weight internally. Use to ablate Pion's internal per-head/up-gate split
+# (fused, the default) against whole-projection rotation (unfused).
+experiment:
+  name: pion_unfused
+  family: optim
+  description: |
+    Pion (unfused): qkv/fc1 unfused at build time so each separate projection is
+    rotated as a plain matrix (muon-like granularity). Ablation against the fused
+    optim/pion default, which splits qkv per-head and fc1 up/gate internally.
+  references:
+    - "Pion (Sphere-AI-Lab/pion) — transported_ambient_ambient + lie_lie"
+  patches:
+    - pion_optimizer_setup
+    - model_unfuse_linears    # ACTIVE here: base.model.unfuse_* are set below
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: pion
+  lr: 1.0e-3
+  weight_decay: 0.1
+  pion_scaling: rms
+  pion_rms: 0.2
+  pion_update_side: alternate
+  pion_momentum: transported_ambient_ambient
+  pion_degree: 2
+  pion_beta1: 0.9
+  pion_beta2: 0.95
+  pion_use_second_momentum: false
+  adam:
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+
+# Unfuse fused qkv/fc1 into separate projections (forward-equivalent). Applied by
+# the model_unfuse_linears patch above; turns Pion's internal split inert.
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true
+```
+
+- [ ] **Step 3: Write the matching experiment docs (REQUIRED by the `experiment-doc-exists` pre-commit hook)**
+
+`tools/check_experiment_docs.py` (pre-commit hook `experiment-doc-exists`) fails the commit unless every `configs/experiments/*.yaml` has a `docs/experiments/<experiment.name>.md` AND a non-empty `experiment.description`. Create both docs (mirror `docs/experiments/muon_kimi.md`):
+
+Create `docs/experiments/pion.md`:
+
+```markdown
+# pion
+
+Pion optimizer (`src/optim/_pion.py`, vendored from Sphere-AI-Lab/pion) — a
+spectrum-preserving optimizer via orthogonal equivalence transformation. Matrix
+weights are rotated by two Lie generators `W <- W exp(A_in) + exp(A_out) W - W`
+(truncated matrix exponential); a chained Megatron AdamW drives the rest.
+
+- **Scope:** single GPU (DP=TP=PP=1). The builder (`src/optim/pion.py`) raises on
+  tensor parallelism, pipeline parallelism, the distributed optimizer, or fp16.
+- **Param routing:** 2-D non-embedding/output weights → Pion; embeddings,
+  lm_head, norms, biases → chained AdamW (`ChainedOptimizer`, like POET).
+- **Fused (default):** qkv split per-head and fc1 up/gate split happen INSIDE the
+  optimizer. The `model_unfuse_linears` patch is listed but no-op unless
+  `base.model.unfuse_qkv`/`unfuse_fc1` are set — see `pion_unfused` for the
+  opt-in unfused variant.
+- **LR:** one `optim.lr` for both sides (the Pion side is RMS-scaled internally by
+  `pion_rms*sqrt(m*n)`).
+- **Defaults:** `pion_momentum=transported_ambient_ambient`,
+  `pion_update_side=alternate`, `pion_scaling=rms`, `pion_rms=0.2`,
+  `pion_degree=2`, betas `(0.9, 0.95)` — from `opt_llama_60M_pion.sh`.
+- **Wiring:** `--optimizer adam --slm-optimizer pion`, rerouted by the
+  `pion_optimizer_setup` patch.
+
+Run on the 60m dev model with `scripts/train_pion_dev.sh`; sweep LR with
+`scripts/sweep_pion_lr.sh`.
+```
+
+Create `docs/experiments/pion_unfused.md`:
+
+```markdown
+# pion_unfused
+
+Unfused variant of `pion` (see `docs/experiments/pion.md`). Identical Pion
+optimizer and defaults, but `base.model.unfuse_qkv`/`unfuse_fc1` are set so the
+`model_unfuse_linears` patch splits the fused qkv/fc1 weights into separate
+projections at model-build time.
+
+- **Effect:** Pion's internal per-head qkv / up-gate split goes inert (the fused
+  `linear_qkv`/`linear_fc1` tensors no longer exist); each separate q/k/v/up/gate
+  is instead rotated as a plain 2-D matrix (muon-like granularity).
+- **Use:** ablation against the fused `pion` default to compare internal-split vs
+  whole-projection rotation. Same single-GPU scope and wiring as `pion`.
+
+Run with `scripts/train_pion_dev.sh experiment=optim/pion_unfused`.
+```
+
+- [ ] **Step 4: Verify both configs resolve + the doc hook passes**
 
 Run:
 ```bash
-python -c "from omegaconf import OmegaConf; c=OmegaConf.load('configs/experiments/optim/pion.yaml'); print(c.optim.type, c.optim.pion_momentum, c.experiment.patches)"
+python -c "
+from omegaconf import OmegaConf
+f = OmegaConf.load('configs/experiments/optim/pion.yaml')
+u = OmegaConf.load('configs/experiments/optim/pion_unfused.yaml')
+print('fused  :', f.optim.type, f.optim.pion_momentum, list(f.experiment.patches))
+print('unfused:', u.optim.type, u.experiment.name, bool(u.base.model.unfuse_qkv), bool(u.base.model.unfuse_fc1))
+assert 'model_unfuse_linears' in f.experiment.patches
+assert u.base.model.unfuse_qkv is True and u.base.model.unfuse_fc1 is True
+print('OK')
+"
+python3 tools/check_experiment_docs.py && echo "DOC HOOK OK"
 ```
-Expected: prints `pion transported_ambient_ambient ['pion_optimizer_setup', 'training_log_eta', 'wandb_metric_normalize']`.
+Expected: prints the fused/unfused summaries, `OK`, then `DOC HOOK OK` (exit 0). The fused config must NOT define `base.model.unfuse_qkv` (defaults off); the unfused config must set both flags True.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add configs/experiments/optim/pion.yaml
-git commit -m "feat(pion): add optim/pion experiment config (reference defaults)"
+git add configs/experiments/optim/pion.yaml configs/experiments/optim/pion_unfused.yaml \
+        docs/experiments/pion.md docs/experiments/pion_unfused.md
+git commit -m "feat(pion): add optim/pion (fused) + optim/pion_unfused experiment configs + docs"
 ```
 
 ---
@@ -1063,6 +1187,7 @@ git commit -m "feat(pion): add optim/pion experiment config (reference defaults)
 
 **Interfaces:**
 - Consumes: `experiment=optim/pion`, the 60m dev scale, `ablation_40x` regime. Mirrors `scripts/train_muon_dev.sh` exactly (single-GPU dev), differing only in `experiment=optim/pion` and the comment header.
+- The script ends with `"$@"`, so the **unfused** path is reachable without a second script: either select the variant config — `scripts/train_pion_dev.sh experiment=optim/pion_unfused` — or override the fused default in place — `scripts/train_pion_dev.sh base.model.unfuse_qkv=true base.model.unfuse_fc1=true`.
 
 - [ ] **Step 1: Write the script**
 
@@ -1154,21 +1279,23 @@ Expected: no output.
 
 - [ ] **Step 3: Add the train-script test**
 
-In `tests/unit/test_train_scripts.py`, add (mirror `test_muon_script_supports_deepseek`; `_run` invokes the script with a dry/echo path used by the existing tests — match the existing helper's call convention exactly):
+`_run` (in `tests/unit/test_train_scripts.py:11-25`) calls the script with `--dry-run cluster.nodes=1 cluster.gpus_per_node=1` and `check=True`; the launcher's `--dry-run` prints the resolved command JSON (containing `"command"` and the full argv) instead of launching training, so it runs fine on the CPU dev box (the script still sources `load_cuda13_2_nccl_env.sh`, which succeeds without a GPU). Mirror `test_muon_kimi_dev_script_routes_to_kimi_optimizer` (`:67-72`) exactly:
 
 ```python
-def test_pion_script_supports_llama3():
+def test_pion_dev_script_routes_to_pion_optimizer():
     proc = _run("train_pion_dev.sh", "llama3")
-    assert proc.returncode == 0
+    assert '"command"' in proc.stdout
+    assert "--slm-optimizer" in proc.stdout
     assert "pion" in proc.stdout
+    assert "slm-zeju-dev" in proc.stdout
 ```
 
-NOTE: if the existing `_run` helper executes the script for real (sourcing the CUDA env and launching python), instead assert on a dry-run path — check how the sibling `test_muon_script_supports_*` tests avoid launching training (e.g. an env guard like `SLM_DRYRUN`/`--help`, or that they assert on a fast-failing arg-parse). Match whatever the muon cases do; do NOT introduce a new mechanism.
+This dry-run transitively exercises `_optimizer_args` (Task 5) and resolves `experiment=optim/pion` (Task 6), so both must be complete before this test passes.
 
 - [ ] **Step 4: Run the test**
 
 Run: `python -m pytest tests/unit/test_train_scripts.py -k pion -q`
-Expected: `1 passed`. (If the muon sibling tests are skipped without GPU/env, accept the same skip behavior for the pion case.)
+Expected: `1 passed`.
 
 - [ ] **Step 5: Shellcheck + commit**
 
@@ -1278,7 +1405,17 @@ codexlog pion_smoke scripts/train_pion_dev.sh \
 ```
 Acceptance: process reaches the first optimizer step and logs `pion: N matrix params (2D non-embedding), M adamw params` with N>0; loss is finite and decreasing across the 20 iters; no `does not support` guard fires; run completes and writes a run dir under `runs/pion-*`.
 
-- [ ] **Step 3: On green, record in the tracker + memory**
+- [ ] **Step 3: Hand the user the UNFUSED smoke command (validates the opt-in unfuse path)**
+
+Provide:
+```bash
+# Same smoke, unfused architecture (Pion rotates each separate q/k/v/up/gate).
+codexlog pion_unfused_smoke scripts/train_pion_dev.sh experiment=optim/pion_unfused \
+  training.train_iters=20 training.eval_interval=10 wandb.mode=disabled
+```
+Acceptance: same as Step 2, AND the matrix-param count `N` is LARGER than the fused run (qkv → 3 separate weights, fc1 → 2), confirming the unfuse patch fired and Pion routed the split projections. Loss finite + decreasing.
+
+- [ ] **Step 4: On green, record in the tracker + memory**
 
 After the user confirms the smoke is green, append a Pion entry to the optimizer tracker (`POET_dev.md` / `CHANGELOG.md` per the repo's convention) and add a `pion-optimizer-integration` memory noting branch state, that CPU tests are green, and that the single-GPU smoke passed.
 
@@ -1288,22 +1425,33 @@ After the user confirms the smoke is green, append a Pion entry to the optimizer
 
 **1. Spec coverage:**
 - "clone pion into third_party" → done during planning (`third_party/pion`); the plan vendors from it (Task 1) and references it (Tasks 1-2, 8).
-- "mimic adamw or muon to give configs/training scripts" → Task 6 (config mirrors `muon_kimi.yaml`), Task 7 (script mirrors `train_muon_dev.sh`).
+- "mimic adamw or muon to give configs/training scripts" → Task 6 (configs mirror `muon_kimi.yaml`/`adam.yaml`), Task 7 (script mirrors `train_muon_dev.sh`).
 - "mimic the muon_dev scripts" → Task 7 is a direct mirror of `scripts/train_muon_dev.sh`.
 - "create an lr sweep script" → Task 8 mirrors `scripts/sweep_muon_kimi_lr.sh`.
+- "add the possibilities to unfuse" → Task 6 lists `model_unfuse_linears` on the fused default (no-op unless flagged) AND adds `pion_unfused.yaml`; Task 7's `"$@"` makes both paths reachable; Task 2's interface note documents the no-branch dual routing; Task 9 Step 3 smoke-validates the unfused path. Global Constraints updated from "must NOT unfuse" to "fused default, unfuse opt-in."
 - "use superpower plan writing first" → this document.
-- Implicit requirement to actually RUN: Tasks 1-6 wire the optimizer end-to-end (vendor → builder → patch → args → config), Task 9 validates on GPU.
+- Implicit requirement to actually RUN: Tasks 1-6 wire the optimizer end-to-end (vendor → builder → patch → args → config), Task 9 validates fused + unfused on GPU.
 
-**2. Placeholder scan:** No TBD/TODO/"add error handling"/"similar to Task N". Every code step has complete code; Task 1's verbatim extraction gives exact line ranges + the exact replacement header; Task 7 notes the one place (`_run` helper convention) the implementer must match to the existing muon sibling test rather than invent.
+**2. Placeholder scan:** No TBD/TODO/"add error handling"/"similar to Task N". Every code step has complete code; Task 1's verbatim extraction gives exact upstream line ranges + the exact replacement header; Task 7's test is a verified mirror of `test_muon_kimi_dev_script_routes_to_kimi_optimizer` (`_run` confirmed to use `--dry-run`).
+
+**2b. Hook/gate scan (final-review additions):**
+- `experiment-doc-exists` pre-commit hook (`tools/check_experiment_docs.py`) requires `docs/experiments/<name>.md` for every experiment YAML → Task 6 Step 3 creates `pion.md` + `pion_unfused.md`, and Step 5 stages them in the same commit.
+- Patch-target collision: `pion_optimizer_setup` and `model_unfuse_linears` target different functions (optimizer-builder vs model-builder), so listing both in one config is safe — `muon_kimi.yaml` already lists `model_unfuse_linears` alongside its optimizer-setup patch. Never list two `*_optimizer_setup` patches together (registry raises `PatchConflict`); `pion.yaml`/`pion_unfused.yaml` list only `pion_optimizer_setup`.
+- Arg/attr coverage: every `--pion-*` flag emitted by Task 5 is registered in Task 4; `--adam-*`/`--optimizer` come from Megatron-LM / `add_slm_args`. The builder's `getattr(config, "pion_*", default)` reads are satisfied either by `_PION_CONFIG_ATTRS` copy (Task 3) or by safe defaults (`pion_first/second/12_momentum="none"` → ignored when `pion_momentum` is set; `adam_eps` is a real OptimizerConfig field already copied by the stock path).
 
 **3. Type consistency:**
 - Builder name `get_megatron_pion_optimizer` is identical across Task 2 (definition), Task 3 (patch import), and Task 3's test (`fake_pion_builder`).
 - Vendored class `PionOptimizer` identical across Task 1 (def) and Task 2 (import).
-- Patch name `"pion_optimizer_setup"` identical across Task 3 (register), its test, and Task 6 (config `patches:`).
+- Patch name `"pion_optimizer_setup"` identical across Task 3 (register), its test, and both Task 6 configs (`patches:`); `model_unfuse_linears` (an existing patch) is listed in both configs and is no-op-by-default on the fused one.
 - `--slm-optimizer pion` value identical across Task 3 (tag check), Task 4 (choice), Task 5 (argv emit).
 - `_PION_CONFIG_ATTRS` (Task 3) is a superset of the args registered in Task 4 and emitted in Task 5 — every emitted/registered `pion_*` flag is copied onto the config; extras in the tuple are harmless (`hasattr` guard).
 - Builder signature `(config, model_chunks, *, config_overrides=None, use_gloo_process_groups=True)` matches the patch's call in Task 3 and the `muon_kimi` analog.
 
 ## Execution Handoff
 
-(Filled in after save.)
+Two execution options:
+
+1. **Subagent-Driven (recommended)** — a fresh subagent per task, two-stage review between tasks, fast iteration. CPU tests run automatically; the single-GPU smokes (Task 9 Steps 2-3) are handed to the user.
+2. **Inline Execution** — execute tasks in this session via superpowers:executing-plans, batched with review checkpoints.
+
+Tasks 1-8 are CPU-only and fully verifiable in-session; Task 9 is the user-run GPU validation.
