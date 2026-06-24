@@ -4,9 +4,9 @@
 # The 4-GPU grid found raw init best (none_s400_c6 = 3.4818, eff∠0.012/scale4.0) and STILL
 # FALLING with scale at the top edge, with c6 ≥ c8 ≥ c10 (cooler better). This extends both
 # frontiers on a full 8-GPU node (dp=8, global_batch 1024 — same as the 8-GPU champions):
-#   NORM  = optim.poet.init_scale {4.0,5.5,7.0,9.0}  -> row_rms ~0.064..0.144
-#   ANGLE = optim.poet.lie_ortho_c {4,5,6} -> eff∠ {0.008,0.010,0.012} (cooler than the c6 floor)
-# = 12 runs. The hi_none_s400_c6 cell reproduces the 4-GPU best (3.4818) on 8 GPU -> the
+#   NORM  = optim.poet.init_scale {4,5,6,7,8}  -> row_rms ~0.064..0.128 (integer steps)
+#   ANGLE = optim.poet.lie_ortho_c {2,4,6} -> eff∠ {0.004,0.008,0.012} (cooler than the c6 floor)
+# = 15 runs. The hi_none_s4_c6 cell reproduces the 4-GPU best (3.4818) on 8 GPU -> the
 # built-in 4<->8 GPU sanity check (≈no difference expected). Baseline to beat: 3.5160.
 #   bash scripts/sweep_poet_init_normal_hi.sh        # one 8-GPU machine
 set -uo pipefail
@@ -37,12 +37,12 @@ run () {  # <name> <init_scale> <lie_ortho_c>
     optim.poet.init_scale="$2" optim.poet.lie_ortho_c="$3" experiment.name="$1"
 }
 
-SCALES=("s400:4.0" "s550:5.5" "s700:7.0" "s900:9.0")   # row_rms ~0.064..0.144
-CVALS=("c4:4" "c5:5" "c6:6")                            # eff∠ 0.008/0.010/0.012
+SCALES=("s4:4" "s5:5" "s6:6" "s7:7" "s8:8")   # row_rms ~0.064..0.128 (integer +1 steps)
+CVALS=("c2:2" "c4:4" "c6:6")                   # eff∠ 0.004/0.008/0.012
 for sc in "${SCALES[@]}"; do
   for cc in "${CVALS[@]}"; do
     run "hi_none_${sc%%:*}_${cc%%:*}" "${sc##*:}" "${cc##*:}"
   done
 done
 
-echo "=== POET init/normal HI sweep complete: 12 runs (hi_none_s400_c6 = 8-GPU parity vs 3.4818) ==="
+echo "=== POET init/normal HI sweep complete: 15 runs (hi_none_s4_c6 = 8-GPU parity vs 3.4818) ==="
