@@ -61,7 +61,7 @@ exclude = ["tests*", "third_party*"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["third_party", "src/optim/_kimi_muon.py"]
+extend-exclude = ["third_party", "src/optim/_kimi_muon.py", "src/optim/_pion.py"]
 force-exclude = true
 
 [tool.ruff.lint]
