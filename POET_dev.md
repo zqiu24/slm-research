@@ -655,3 +655,65 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 - **Pull results** from each run's W&B summary: `runs/<dir>/**/wandb-summary.json`, keys `val/loss` / `train/loss` / `val/ppl` / `_step`. Treat `_step < 9000` as crashed/short for this cohort (full run = 9155 steps).
 - **Settings** come from `runs/<dir>/resolved_config.yaml` (`optim.lr`, `optim.poet.*`, `training.tokens_per_param`).
 - **Data-quality caveats from this snapshot:** the vanilla `poet` family had a high crash rate (many `_step ≪ 9155`); duplicate rows in the raw scan are same-setting reruns (e.g. the two `poet_lie_rms` lr-3e-3/c-4 dirs); `poet_h_exp_rms_c8` crashed at step 4256.
+
+## 2.9 Init sweep — full per-type grids (live, keep filling)
+
+> **One table per init type.** Rows = base-norm axis (`init_scale` for `none`/`normalized`/`orthogonal`, `mup_alpha` for `mup`); columns = rotation angle `c` with **eff∠ = lr·poet_scale·c = 0.004·0.5·c = 0.002·c** (so eff∠ depends only on `c`, not on the base norm). Cells are completed **`val/loss`** (60m/40tpp, seed 42, the champion `lie_ortho`+alt+head-off+Nesterov-b1.95 recipe at lr 4e-3 / scale 0.5 / wd 0.1 / cosine min_lr 0.01). `▶` = running, blank = not yet run. The original grid was 4-GPU (`init_*`, fractional scales, c{6,8,10}); the hi-extension is 8-GPU (`hi_*`, integer scales, cooler c{2,4,6}). **`row_rms` (per-element weight RMS) scales linearly with the norm axis:** `none` ≈ 0.016·scale, `normalized` ≈ 0.044·scale, `orthogonal` ≈ 0.044·scale; `mup` is set by the spectral-norm target α.
+>
+> **Best so far: `none` scale 3.5–4.0 @ c6 (eff∠ 0.012) ≈ 3.480** (`init_none_s350_c6` = 3.4802 ≈ `hi_none_s4_c6` = 3.4804, 8-GPU parity twin `init_none_s400_c6` = 3.4818) — a flat plateau across scale 3–4. `normalized` (s1.4 = 3.4871) and `mup` (α4 = 3.4816) trail by ~0.005–0.007; `orthogonal` is the weakest shape (κ=1). **c6 (eff∠ 0.012) ≥ c8 ≥ c10 everywhere**, and angles ≥ eff∠ 0.016 hurt more as the base norm grows (`mup α7/α8` blow up at c8). **To refresh:** scan `runs/{init,hi}_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000` = complete) and drop into the cell.
+
+#### `init_type = none`  (init_scale × angle)
+
+| init_scale | c2 (∠0.004) | c4 (∠0.008) | c6 (∠0.012) | c8 (∠0.016) | c10 (∠0.020) |
+|---|---|---|---|---|---|
+| 1 |  |  | 3.5585 | 3.5569 | 3.5587 |
+| 1.5 |  |  | 3.5219 | 3.5314 | 3.5446 |
+| 2 |  |  | 3.5053 |  |  |
+| 2.5 |  |  | 3.4963 |  |  |
+| 2.75 |  |  | 3.4923 | 3.5028 | 3.5262 |
+| 3 |  |  | 3.4878 |  |  |
+| 3.5 |  |  | **3.4802** |  |  |
+| 4 | 3.5503 | 3.4896 | **3.4804** | 3.4963 | 3.5298 |
+| 5 | 3.5521 | 3.4914 | ▶ |  |  |
+| 5.5 |  |  | 3.4842 | 3.5108 | 3.6087 |
+| 6 |  |  |  |  |  |
+| 7 |  |  |  |  |  |
+| 8 |  |  |  |  |  |
+
+#### `init_type = normalized`  (init_scale × angle)
+
+| init_scale | c2 (∠0.004) | c4 (∠0.008) | c6 (∠0.012) | c8 (∠0.016) | c10 (∠0.020) |
+|---|---|---|---|---|---|
+| 0.5 |  |  | 3.5430 | 3.5460 | 3.5628 |
+| 0.7 |  |  | 3.5323 | 3.5398 | 3.5529 |
+| 1 | 3.5897 | 3.5261 | 3.5100 | 3.5150 | 3.5308 |
+| 1.4 |  |  | **3.4871** | ▶ |  |
+| 2 | 3.5520 | 3.4902 | ▶ |  |  |
+| 3 |  |  |  |  |  |
+| 4 |  |  |  |  |  |
+| 5 |  |  |  |  |  |
+
+#### `init_type = mup`  (mup_alpha × angle)
+
+| mup_alpha | c2 (∠0.004) | c4 (∠0.008) | c6 (∠0.012) | c8 (∠0.016) | c10 (∠0.020) |
+|---|---|---|---|---|---|
+| α 0.25 |  |  | 3.6711 | 3.6373 | 3.6273 |
+| α 0.5 |  |  | 3.5988 | 3.6009 | 3.6055 |
+| α 1 |  |  | 3.5482 | 3.5485 | 3.5627 |
+| α 2 | 3.5919 | 3.5269 | 3.5120 | 3.5168 | 3.5314 |
+| α 3 | 3.5573 | 3.4947 | ▶ |  |  |
+| α 4 |  |  | **3.4816** | 3.4878 | 3.5285 |
+| α 5 |  |  |  |  |  |
+| α 6 |  |  |  |  |  |
+| α 7 |  | 3.5361 | 3.5554 | 4.0032 |  |
+| α 8 |  | 3.5576 | 3.6127 | 3.8523 |  |
+
+#### `init_type = orthogonal`  (init_scale × angle, κ=1 — dropped, weakest shape)
+
+| init_scale | c2 (∠0.004) | c4 (∠0.008) | c6 (∠0.012) | c8 (∠0.016) | c10 (∠0.020) |
+|---|---|---|---|---|---|
+| 0.5 |  |  | 3.6086 | 3.5998 | 3.6103 |
+| 0.7 |  |  | 3.5902 | 3.5857 | 3.5930 |
+| 1 |  |  | 3.5603 | 3.5605 | 3.5737 |
+| 1.4 |  |  | 3.5346 | 3.5394 | 3.5537 |
+| 2 |  |  | 3.5240 | 3.5350 | 3.5633 |
