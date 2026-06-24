@@ -188,6 +188,11 @@ def get_megatron_pion_optimizer(
         group["pion_use_second_momentum"] = pion_use_second_momentum
         group["pion_update_side"] = pion_update_side
         group["pion_qkv_split_granularity"] = pion_qkv_split_granularity
+        # The next five knobs are intentionally NOT plumbed through the slm-research
+        # CLI/patch: the legacy momentum-blend selectors (12/first/second_momentum)
+        # and the per-update CSV diagnostics are out of scope for this dev port. They
+        # always resolve to their upstream defaults ("none"/None/1); the group dict is
+        # still populated so the vendored PionOptimizer reads a complete config.
         group["pion_12_momentum"] = getattr(config, "pion_12_momentum", "none")
         group["pion_first_momentum"] = getattr(config, "pion_first_momentum", "none")
         group["pion_second_momentum"] = getattr(config, "pion_second_momentum", "none")
