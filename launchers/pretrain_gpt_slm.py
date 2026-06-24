@@ -25,7 +25,7 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--slm-config-path", type=str, required=True)
     group.add_argument(
         "--slm-optimizer",
-        choices=["adamw", "muon", "poet", "ngpt_adamw", "muon_kimi"],
+        choices=["adamw", "muon", "poet", "ngpt_adamw", "muon_kimi", "pion"],
         default="adamw",
     )
     group.add_argument("--poet", action="store_true")
@@ -157,6 +157,51 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # the ``model_unfuse_linears`` patch at model-build time.
     group.add_argument("--unfuse-qkv", action="store_true")
     group.add_argument("--unfuse-fc1", action="store_true")
+    # --- Pion optimizer (src/optim/pion.py; --slm-optimizer pion). Registered
+    # here (not in the Megatron-LM submodule) so Pion lives entirely in
+    # slm-research. Copied onto the OptimizerConfig at runtime by the
+    # pion_optimizer_setup patch (the pion_* names are not OptimizerConfig
+    # fields). Defaults match third_party/pion/.../opt_llama_60M_pion.sh. ---
+    group.add_argument("--pion-scaling", type=str, default="rms", choices=["rms", "none"])
+    group.add_argument("--pion-rms", type=float, default=0.2)
+    group.add_argument(
+        "--pion-update-side",
+        type=str,
+        default="both",
+        choices=["both", "alternate", "in", "out"],
+    )
+    group.add_argument(
+        "--pion-momentum",
+        type=str,
+        default="transported_ambient_ambient",
+        choices=["lie_lie", "transported_ambient_ambient"],
+    )
+    group.add_argument("--pion-degree", type=int, default=2)
+    group.add_argument("--pion-beta1", type=float, default=0.9)
+    group.add_argument("--pion-beta2", type=float, default=0.999)
+    group.add_argument("--pion-use-second-momentum", action="store_true")
+    # QKV update granularity: head | qkv | group. None follows the per-head default.
+    group.add_argument(
+        "--pion-qkv-split-granularity",
+        type=str,
+        default=None,
+        choices=["head", "qkv", "group"],
+    )
+    group.add_argument(
+        "--pion-no-split-qkv", action="store_false", dest="pion_split_qkv", default=True
+    )
+    group.add_argument(
+        "--pion-no-split-gate", action="store_false", dest="pion_split_gate", default=True
+    )
+    group.add_argument(
+        "--pion-no-split-qkv-per-head",
+        action="store_false",
+        dest="pion_split_qkv_per_head",
+        default=True,
+    )
+    group.add_argument(
+        "--pion-exp-map", type=str, default="exp_truncated", choices=["exp_truncated", "taylor"]
+    )
     # Sandwich-norm (architectural; applied by the sandwich_norm_apply patch).
     group.add_argument("--use-sandwich-norm", action="store_true")
     group.add_argument("--attn-post-norm-scale", type=float, default=1.0)
