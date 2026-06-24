@@ -109,3 +109,11 @@ def test_poet_lie_orth_script_supports_llama3():
     assert "--poet-q-optimizer" in proc.stdout and "lie_ortho" in proc.stdout
     assert "--poet-lie-ortho-c" in proc.stdout
     assert "--poet-lie-ortho-method" in proc.stdout
+
+
+def test_pion_dev_script_routes_to_pion_optimizer():
+    proc = _run("train_pion_dev.sh", "llama3")
+    assert '"command"' in proc.stdout
+    assert "--slm-optimizer" in proc.stdout
+    assert "pion" in proc.stdout
+    assert "slm-zeju-dev" in proc.stdout
