@@ -1,5 +1,5 @@
 # POET init EXTRA runs — 10 cells (idx 0-9) on spare 4-GPU machines (HTCondor).
-# Submit:  condor_submit scripts/submit_poet_init_extra.sub
+# Submit:  condor_submit_bid scripts/submit_poet_init_extra.sub 100   (100 = bid/priority)
 # Each idx -> scripts/run_poet_init_extra.sh <idx> -> one full 60m/40tpp POET run (dp=4).
 # Non-redundant cells: idx 0-3 none @ c6 init_scale {2.0,2.5,3.0,3.5} (1.5->4.0 descent gap);
 # idx 4-9 mup HIGHER scale mup_alpha {7,8} x c{4,6,8} (above hi_mup's a6, mup @c6 still falling).
