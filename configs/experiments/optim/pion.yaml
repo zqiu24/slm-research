@@ -1,0 +1,46 @@
+# @package _global_
+# Pion optimizer (vendored src/optim/_pion.py, routed via --slm-optimizer pion).
+# Single-GPU dev only. Pion drives 2-D matrix (non-embedding) weights via the
+# orthogonal-equivalence update W <- W exp(A_in) + exp(A_out) W - W (truncated
+# matrix exponential); a chained Megatron AdamW drives embeddings, norms, biases,
+# and the LM head. Defaults match third_party/pion/.../opt_llama_60M_pion.sh.
+#
+# FUSED by default: Pion splits qkv per-head and fc1 up/gate INTERNALLY in the
+# optimizer (Pion-native granularity). The model_unfuse_linears patch is listed
+# but is a NO-OP unless base.model.unfuse_qkv / unfuse_fc1 are set — so you can
+# opt into the unfused path on the CLI (base.model.unfuse_qkv=true
+# base.model.unfuse_fc1=true) or via experiment=optim/pion_unfused. When unfused,
+# Pion's internal split goes inert (the fused linear_qkv/linear_fc1 names are
+# gone) and each separate q/k/v/up/gate is rotated as a plain matrix.
+experiment:
+  name: pion
+  family: optim
+  description: |
+    Pion: a spectrum-preserving optimizer via orthogonal equivalence
+    transformation (Shi, Li, Qiu, Wen, Buchholz, Liu). Matrix weights rotated by
+    two Lie generators; non-matrix params on AdamW. Single base LR for both
+    sides. Single-GPU dev. Fused qkv/fc1 (Pion-native internal split).
+  references:
+    - "Pion (Sphere-AI-Lab/pion) — transported_ambient_ambient + lie_lie"
+  patches:
+    - pion_optimizer_setup
+    - model_unfuse_linears    # NO-OP unless base.model.unfuse_qkv/unfuse_fc1 set
+    - training_log_eta        # prepend "ETA: HhMMm" to the per-iteration log
+    - wandb_metric_normalize  # canonicalize W&B metric keys + add tokens_seen / step_time
+  required_capabilities: []
+
+optim:
+  type: pion
+  lr: 1.0e-3
+  weight_decay: 0.1
+  pion_scaling: rms
+  pion_rms: 0.2
+  pion_update_side: alternate
+  pion_momentum: transported_ambient_ambient
+  pion_degree: 2
+  pion_beta1: 0.9
+  pion_beta2: 0.95
+  pion_use_second_momentum: false
+  adam:
+    betas: [0.9, 0.95]
+    eps: 1.0e-8

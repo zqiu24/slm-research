@@ -1,0 +1,44 @@
+# @package _global_
+# UNFUSED Pion variant. Identical to optim/pion.yaml but unfuses qkv/fc1 at
+# model-build time (model_unfuse_linears patch), so Pion treats each separate
+# q/k/v/up/gate projection as a plain 2-D matrix instead of splitting a fused
+# weight internally. Use to ablate Pion's internal per-head/up-gate split
+# (fused, the default) against whole-projection rotation (unfused).
+experiment:
+  name: pion_unfused
+  family: optim
+  description: |
+    Pion (unfused): qkv/fc1 unfused at build time so each separate projection is
+    rotated as a plain matrix (muon-like granularity). Ablation against the fused
+    optim/pion default, which splits qkv per-head and fc1 up/gate internally.
+  references:
+    - "Pion (Sphere-AI-Lab/pion) — transported_ambient_ambient + lie_lie"
+  patches:
+    - pion_optimizer_setup
+    - model_unfuse_linears    # ACTIVE here: base.model.unfuse_* are set below
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: pion
+  lr: 1.0e-3
+  weight_decay: 0.1
+  pion_scaling: rms
+  pion_rms: 0.2
+  pion_update_side: alternate
+  pion_momentum: transported_ambient_ambient
+  pion_degree: 2
+  pion_beta1: 0.9
+  pion_beta2: 0.95
+  pion_use_second_momentum: false
+  adam:
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+
+# Unfuse fused qkv/fc1 into separate projections (forward-equivalent). Applied by
+# the model_unfuse_linears patch above; turns Pion's internal split inert.
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true
