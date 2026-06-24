@@ -229,32 +229,31 @@ Best completed run per setting, ranked by `val/loss` (60m / 40 tokens-per-param)
 | 2 | nGPT (architecture, lr 1e-2) | 3.4583 | 31.76 | 3.3573 | **1e-2** | — | — | normalized-GPT *architecture* (`ngpt_lr100`/`5zycv3p5`) — co-best (−0.007 behind muon_kimi); beats tuned adam by −0.035, best POET by −0.022 |
 | 3 | **poet_lie_orth (+alt, no-head, Nesterov b1.95, init_none scale 4, c6)** | **3.4804** | 32.47 | 3.3782 | **4e-3** | 6 (**0.012**) | **no** | 🥇 **NEW BEST POET / best PEFT** (`hi_none_s4_c6`, 8-GPU; 4-GPU twin `init_none_s400_c6` = 3.4818). The §2.5-K init sweep: **raw init scaled UP `init_scale=4.0`** (row_rms 0.064) + **cooler angle c6** on the Nesterov-b1.95 champion. **Beats tuned dense adam (3.4935) by −0.013 and nGPT+Muon (3.4882) by −0.008** → POET now 3rd overall; only −0.022/−0.029 behind nGPT/muon_kimi. ⚠️ single seed; sweep still filling higher-scale cells |
 | 4 | poet_lie_orth (+alt, no-head, Nesterov b1.95, init_mup α4, c6) | 3.4816 | 32.51 | 3.3780 | 4e-3 | 6 (0.012) | no | `init_mup_a400_c6` — μP-spectral init at α=4 ≈ ties the raw-scaled best (Δ0.001); mup_normalized reaches the same norm/angle optimum. Also beats adam/nGPT+Muon |
-| 5 | poet_lie_orth (+alt, no-head, Nesterov b1.95, init_none scale 5.5, c6) | 3.4842 | 32.59 | 3.3825 | 4e-3 | 6 (0.012) | no | `init_none_s550_c6` — scale 5.5 (row_rms 0.088) slightly past the scale-4 optimum (+0.004); still beats adam/nGPT+Muon |
-| 6 | **nGPT + muon_kimi** (lr 8e-3) | **3.4882** | 32.73 | 3.3932 | **8e-3** | — | — | nGPT *architecture* trained with Muon ([`ngpt_muon_lr80`](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_ngpt_muon_lr.sh), flat optimum lr 6–8e-3). **Anti-synergy:** worse than BOTH nGPT-adam (#2, +0.030) and dense-muon (#1, +0.037) — the two wins cancel; +0.008 behind best POET (#3). See [ngpt_muon.md](/lustre/fast/fast/zqiu/slm-research/docs/experiments/ngpt_muon.md) |
-| 7 | adam (dense, lr 3e-3) | 3.4935 | 32.90 | 3.3935 | **3e-3** | — | — | re-tuned dense baseline (`ebndt1qj`); −0.042 behind muon_kimi, now **+0.013 behind best POET (init-scaled)** |
-| 8 | poet_lie_orth (+alt, no-head, **Nesterov b1.95**, lr4e-3/c8, default init) — legacy | **3.5152** | 33.62 | 3.4148 | **4e-3** | 8 (**0.016**) | **no** | prior best-POET recipe (`ut682296`, side-branch `lie_nesterov`); confirmed on main by `nestON_lr4`=3.5160 (#9). Now superseded by the init-scaled #3 (−0.035). This is the recipe baked into config defaults (init still `normalized`/scale 1.0) |
-| 9 | poet_lie_orth (+alt, no-head, **Nesterov b1.95**, lr4e-3/c8, default init) — current main | **3.5160** | 33.65 | 3.4218 | **4e-3** | 8 (**0.016**) | **no** | **current-main default-init champion** (`nestON_lr4`, `lie_ortho_nesterov=true lie_b1=0.95`); reproduces legacy 3.5152 (Δ0.0008). Deconfound: nestOFF b1.95 best = 3.5247 ≈ b1=0.9 champ → the gain is the look-ahead, NOT the b1 bump. Superseded by init-scaling (#3, −0.036) |
-| 10 | poet_lie_orth (+alt, no-head, Nesterov b1.95, lr3e-3/c8) | 3.5208 | 33.81 | 3.4255 | 3e-3 | 8 (0.012) | no | `nestON_lr3` — 2nd-best default-init Nesterov cell |
-| 11 | poet_lie_orth (+alt, no-head, lr4e-3/c8) | 3.5231 | 33.89 | 3.4233 | **4e-3** | 8 (**0.016**) | **no** | prior **non-Nesterov** champ (`ghsu7t8y`, cosine grid); superseded by Nesterov b1.95 (#8/#9) by −0.007 |
-| 12 | poet_lie_orth (+alt, no-head, current Nesterov **b1=0.9**, lr6e-3/c8) | 3.5271 | 34.02 | 3.4264 | **6e-3** | 8 (**0.024**) | no | best `lie_b1=0.9` Nesterov cell (`nest_lr0.006` / `fnuit4pe`); b1=0.9 misses by +0.004 — the **b1=0.95** bump is what makes Nesterov a win (#8/#9) |
-| 13 | poet_lie_orth (+alt, no-head, lr3e-3/c12) | 3.5274 | 34.04 | 3.4277 | 3e-3 | 12 (0.018) | no | `owcyd976` — angle 0.018 also stable+strong (old doc wrongly called 0.018 divergent) |
-| 14 | poet_lie_orth (+alt, no-head, lr4e-3/s0.25/c12) | 3.5288 | 34.08 | 3.4278 | 4e-3 | 12 (0.012) | no | `q60mrt7u` — at angle 0.012, dense-lr 4e-3 beats 3e-3 (hotter dense helps) |
-| 15 | muon_kimi (lr 1e-3 — old baseline) | 3.5321 | 34.20 | 3.4219 | 1e-3 | — | — | under-tuned; lr 4e-3 + wd 0.1 (#1) is **−0.081** better (`of4bakqd`; `ijq33tle` rerun 3.5251) |
-| 16 | poet_lie_orth (+alt, no-head, lr3e-3/c8) | 3.5332 | 34.23 | 3.4334 | 3e-3 | 8 (0.012) | no | prior best POET (`1ynrrimu`); reproduced by `li3sflwl`, `wj68pgey` |
-| 17 | poet_lie_orth (c8, no-head, both-sides) | 3.5528 | 34.91 | 3.4557 | 3e-3 | 8 (0.012) | no | both-sides head-off (`dwynpk9y`; fresh rerun `f4f49v4f` = 3.5504) |
-| 18 | adam (dense, lr 1e-3 — old baseline) | 3.5570 | 35.06 | 3.4575 | 1e-3 | — | — | under-tuned; lr 3e-3 (#5) is −0.064 better (`ylrd45af`) |
-| 19 | poet_lie_orth (c8, head) | 3.5667 | 35.40 | 3.4693 | 3e-3 | 8 (0.012) | yes | head-aligned twin (`7lncmww7`, distributed=true) |
-| 20 | muon_hybrid | 3.5698 | 35.51 | 3.4705 | — | — | — | |
-| 21 | poet_lie_orth (c4) | 3.5715 | 35.57 | 3.4701 | 3e-3 | 4 (0.006) | yes | run `z1gpz9y7` |
-| 22 | poet_lie_rms | 3.6193 | 37.31 | 3.5220 | 3e-3 | 4 (rms) | no | best RMS-family (`98293d1u`; head-aligned twin `l2pzawa4` 3.6335 — worse) |
-| 23 | poet_dense_rms (c8) | 3.6344 | 37.88 | 3.5367 | 1e-3 | 8 (rms) | no | |
-| 24 | poet_lie_rms (c8) | 3.6404 | 38.11 | 3.5367 | 1e-3 | 8 (rms) | no | |
-| 25 | poet_lie | 3.6474 | 38.37 | 3.5437 | 1e-3 | — | no | Stage 1 |
-| 26 | poet_lie_rms (c4) | 3.6496 | 38.46 | 3.5478 | 1e-3 | 4 (rms) | no | same as #22 but lr 1e-3 |
-| 27 | poet0 | 3.6518 | 38.55 | 3.5484 | 1e-3 | — | no | |
-| 28 | **poet_h_noperm_rms_c8** | 3.6536 | 38.61 | 3.5578 | 1e-3 | 8 (rms) | **yes** | best head-aligned (RMS family) |
-| 29 | poet_h_rms_c8 | 3.6541 | 38.63 | 3.5588 | 1e-3 | 8 (rms) | yes | |
-| 30 | poet (vanilla, cayley) | ≈3.70 | ≈40.6 | ≈3.60 | 1e-3 | — | no | weakest POET family |
+| 5 | **nGPT + muon_kimi** (lr 8e-3) | **3.4882** | 32.73 | 3.3932 | **8e-3** | — | — | nGPT *architecture* trained with Muon ([`ngpt_muon_lr80`](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_ngpt_muon_lr.sh), flat optimum lr 6–8e-3). **Anti-synergy:** worse than BOTH nGPT-adam (#2, +0.030) and dense-muon (#1, +0.037) — the two wins cancel; +0.008 behind best POET (#3). See [ngpt_muon.md](/lustre/fast/fast/zqiu/slm-research/docs/experiments/ngpt_muon.md) |
+| 6 | adam (dense, lr 3e-3) | 3.4935 | 32.90 | 3.3935 | **3e-3** | — | — | re-tuned dense baseline (`ebndt1qj`); −0.042 behind muon_kimi, now **+0.013 behind best POET (init-scaled)** |
+| 7 | poet_lie_orth (+alt, no-head, **Nesterov b1.95**, lr4e-3/c8, default init) — legacy | **3.5152** | 33.62 | 3.4148 | **4e-3** | 8 (**0.016**) | **no** | prior best-POET recipe (`ut682296`, side-branch `lie_nesterov`); confirmed on main by `nestON_lr4`=3.5160 (#8). Now superseded by the init-scaled #3 (−0.035). This is the recipe baked into config defaults (init still `normalized`/scale 1.0) |
+| 8 | poet_lie_orth (+alt, no-head, **Nesterov b1.95**, lr4e-3/c8, default init) — current main | **3.5160** | 33.65 | 3.4218 | **4e-3** | 8 (**0.016**) | **no** | **current-main default-init champion** (`nestON_lr4`, `lie_ortho_nesterov=true lie_b1=0.95`); reproduces legacy 3.5152 (Δ0.0008). Deconfound: nestOFF b1.95 best = 3.5247 ≈ b1=0.9 champ → the gain is the look-ahead, NOT the b1 bump. Superseded by init-scaling (#3, −0.036) |
+| 9 | poet_lie_orth (+alt, no-head, Nesterov b1.95, lr3e-3/c8) | 3.5208 | 33.81 | 3.4255 | 3e-3 | 8 (0.012) | no | `nestON_lr3` — 2nd-best default-init Nesterov cell |
+| 10 | poet_lie_orth (+alt, no-head, lr4e-3/c8) | 3.5231 | 33.89 | 3.4233 | **4e-3** | 8 (**0.016**) | **no** | prior **non-Nesterov** champ (`ghsu7t8y`, cosine grid); superseded by Nesterov b1.95 (#7/#8) by −0.007 |
+| 11 | poet_lie_orth (+alt, no-head, current Nesterov **b1=0.9**, lr6e-3/c8) | 3.5271 | 34.02 | 3.4264 | **6e-3** | 8 (**0.024**) | no | best `lie_b1=0.9` Nesterov cell (`nest_lr0.006` / `fnuit4pe`); b1=0.9 misses by +0.004 — the **b1=0.95** bump is what makes Nesterov a win (#7/#8) |
+| 12 | poet_lie_orth (+alt, no-head, lr3e-3/c12) | 3.5274 | 34.04 | 3.4277 | 3e-3 | 12 (0.018) | no | `owcyd976` — angle 0.018 also stable+strong (old doc wrongly called 0.018 divergent) |
+| 13 | poet_lie_orth (+alt, no-head, lr4e-3/s0.25/c12) | 3.5288 | 34.08 | 3.4278 | 4e-3 | 12 (0.012) | no | `q60mrt7u` — at angle 0.012, dense-lr 4e-3 beats 3e-3 (hotter dense helps) |
+| 14 | muon_kimi (lr 1e-3 — old baseline) | 3.5321 | 34.20 | 3.4219 | 1e-3 | — | — | under-tuned; lr 4e-3 + wd 0.1 (#1) is **−0.081** better (`of4bakqd`; `ijq33tle` rerun 3.5251) |
+| 15 | poet_lie_orth (+alt, no-head, lr3e-3/c8) | 3.5332 | 34.23 | 3.4334 | 3e-3 | 8 (0.012) | no | prior best POET (`1ynrrimu`); reproduced by `li3sflwl`, `wj68pgey` |
+| 16 | poet_lie_orth (c8, no-head, both-sides) | 3.5528 | 34.91 | 3.4557 | 3e-3 | 8 (0.012) | no | both-sides head-off (`dwynpk9y`; fresh rerun `f4f49v4f` = 3.5504) |
+| 17 | adam (dense, lr 1e-3 — old baseline) | 3.5570 | 35.06 | 3.4575 | 1e-3 | — | — | under-tuned; lr 3e-3 (#6) is −0.064 better (`ylrd45af`) |
+| 18 | poet_lie_orth (c8, head) | 3.5667 | 35.40 | 3.4693 | 3e-3 | 8 (0.012) | yes | head-aligned twin (`7lncmww7`, distributed=true) |
+| 19 | muon_hybrid | 3.5698 | 35.51 | 3.4705 | — | — | — | |
+| 20 | poet_lie_orth (c4) | 3.5715 | 35.57 | 3.4701 | 3e-3 | 4 (0.006) | yes | run `z1gpz9y7` |
+| 21 | poet_lie_rms | 3.6193 | 37.31 | 3.5220 | 3e-3 | 4 (rms) | no | best RMS-family (`98293d1u`; head-aligned twin `l2pzawa4` 3.6335 — worse) |
+| 22 | poet_dense_rms (c8) | 3.6344 | 37.88 | 3.5367 | 1e-3 | 8 (rms) | no | |
+| 23 | poet_lie_rms (c8) | 3.6404 | 38.11 | 3.5367 | 1e-3 | 8 (rms) | no | |
+| 24 | poet_lie | 3.6474 | 38.37 | 3.5437 | 1e-3 | — | no | Stage 1 |
+| 25 | poet_lie_rms (c4) | 3.6496 | 38.46 | 3.5478 | 1e-3 | 4 (rms) | no | same as #21 but lr 1e-3 |
+| 26 | poet0 | 3.6518 | 38.55 | 3.5484 | 1e-3 | — | no | |
+| 27 | **poet_h_noperm_rms_c8** | 3.6536 | 38.61 | 3.5578 | 1e-3 | 8 (rms) | **yes** | best head-aligned (RMS family) |
+| 28 | poet_h_rms_c8 | 3.6541 | 38.63 | 3.5588 | 1e-3 | 8 (rms) | yes | |
+| 29 | poet (vanilla, cayley) | ≈3.70 | ≈40.6 | ≈3.60 | 1e-3 | — | no | weakest POET family |
 | — | poet `exp` / Muon-on-Q / true-single-side (`au92x0pj` 4.22) / WSD df0.2 (`lodwi7cw` 3.5699) | 3.57–4.22 | — | — | — | — | no | regressions / dead-ends |
 
 **Conclusions (what's useful):**
