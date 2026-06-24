@@ -29,9 +29,9 @@ nGPT regime).
 
 ## Scope / caveats
 - Single GPU (the `muon_kimi` builder rejects TP/PP/distributed-optimizer/fp16).
-- LR defaults to the `muon_kimi` baseline (`1e-3`); the nGPT+Muon combo likely
-  wants its own sweep — nGPT's `15e-4` is for AdamW-on-sphere, not Muon's
-  RMS-scaled update. Use `scripts/sweep_muon_kimi_lr.sh` as a starting point.
+- LR defaults to the `muon_kimi` baseline (`1e-3`), which is cold for this combo;
+  it has been swept separately via `scripts/sweep_ngpt_muon_lr.sh` (optimum
+  ≈6–8e-3) — see **Results** below.
 
 ## How to run
 ```bash
@@ -43,3 +43,59 @@ python -m launchers.submit \
     training_regime=ablation_40x cluster=h100_de seed=42
 ```
 Config: [configs/experiments/arch/ngpt_muon.yaml](../../configs/experiments/arch/ngpt_muon.yaml).
+
+## Results — LR sweep (`scripts/sweep_ngpt_muon_lr.sh`)
+
+llama3-60m / `ablation_40x` (40 tpp, seq 256, gbs 1024) / 8×H100 DDP, final eval
+@ iter 9155. Recipe matched to the *tuned dense `muon_kimi`* baseline so the only
+difference vs dense muon is the nGPT architecture: `optim.weight_decay=0.1`,
+`optim.ngpt.no_warmup=false` (1% warmup), momentum 0.95 + nesterov, ns_steps 5.
+Grid brackets dense-muon's optimum (4e-3) and extends past nGPT-adam's (1e-2).
+
+| lr     | run    | val loss   |
+|--------|--------|------------|
+| 0.002  | lr20   | 3.5209     |
+| 0.003  | lr30   | 3.5074     |
+| 0.004  | lr40   | 3.4981     |
+| 0.005  | lr50   | 3.4926     |
+| 0.006  | lr60   | 3.4884     |
+| 0.008  | lr80   | **3.4882** ← best |
+| 0.010  | lr100  | 3.4928     |
+| 0.020  | lr200  | 3.5282     |
+
+Optimum is a **flat basin at lr 6e-3–8e-3** (lr60/lr80 tied within noise → 3.488).
+The hypersphere arch wants a hotter lr than dense muon (4e-3) but cooler than
+nGPT-adam (1e-2), as predicted.
+
+### The completed optimizer × architecture matrix
+
+|              | adam            | muon                 |
+|--------------|-----------------|----------------------|
+| dense llama3 | 3.4935 (3e-3)   | **3.4514** (4e-3) ← best overall |
+| nGPT         | 3.4583 (1e-2)   | 3.4882 (6–8e-3)      |
+
+(adam = `sweep_adam_lr` / `sweep_ngpt_lr`; dense muon = `muon_kimi.log`; all four
+verified from the `/lustre/home/zqiu/log` sweep logs.)
+
+### Finding — nGPT and Muon are anti-synergistic
+nGPT+Muon (3.4882) is the **worst of the four combos**, landing essentially back
+at the plain dense+adam baseline (3.4935). The two gains do not add — they cancel:
+
+- nGPT arch alone helps adam: **−0.035** (3.4935 → 3.4583)
+- Muon alone helps dense: **−0.042** (3.4935 → 3.4514)
+- Stacking them: nGPT *hurts* Muon **+0.037** (3.4514 → 3.4882); Muon *hurts*
+  nGPT **+0.030** (3.4583 → 3.4882)
+
+Mechanically consistent: Muon already controls update geometry (Newton-Schulz
+orthogonalization + RMS scaling) and nGPT constrains weights/reps to the
+hypersphere. Two overlapping geometric constraints are redundant/conflicting, not
+complementary. **The best single recipe stays dense llama3 + Muon (3.4514).**
+
+### Caveat — leaderboard-matched leg, not reference-nGPT leg
+This sweep used `wd=0.1` (matched to `muon_kimi`/leaderboard). Because the
+composition drops `ngpt_optimizer_setup`, there is no zero-WD bucketing, so
+`wd=0.1` also decays the nGPT scaling vectors (alpha/sqk/suv/sz). The vs-dense-muon
+comparison is still apples-to-apples (both `wd=0.1`). The pure nGPT-reference A/B
+(`optim.weight_decay=0.0 optim.ngpt.no_warmup=true`) at lr≈6–8e-3 has **not** been
+run — that is the one remaining variant if the anti-synergy result warrants
+confirmation under nGPT's native zero-WD regime.
