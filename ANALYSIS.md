@@ -1432,3 +1432,19 @@ scaling is genuinely active):
 than the negative at matched |p| (+0.5 → +0.0294 vs −0.5 → +0.0232; +1.5 → +0.164 vs
 −1.5 → +0.095). So **‖W‖-proportional rotation (`p=0`) is already at the optimum** — keep
 `angle_dim_exp` pinned at 0 (or +0.25 if a free coin-flip, but the gain is noise).
+
+**What `p=0` actually means (angle vs realized update).** Two quantities are easy to
+conflate. (1) The **per-plane rotation angle** θ = lr·scale·ortho_c·(bsz/hidden)^p is what
+this knob sets; at `p=0` it is **flat** — identical angle for every block regardless of
+dimension. (2) The **realized weight update** is *not* flat: POET applies the rotation
+multiplicatively (W ← R·W), so ‖ΔW‖ ≈ θ·‖W‖ — the step a block takes is **proportional to
+its own row norm**. Hence at `p=0` the two sides (and small-head vs big-fc blocks) already
+move by *different* amounts, but that asymmetry is driven **automatically by ‖W‖**, not by
+the angle (this is why `p=0` is labeled "‖W‖-proportional"). `angle_dim_exp` adds a
+*second*, deliberate asymmetry keyed to block **dimension** (bsz) on top of that baseline:
+`p>0` gives larger-dim blocks more angle than ‖W‖-proportional, `p<0` less. The sweep's
+result is therefore: **the automatic norm-driven asymmetry is already optimal; overriding
+it with a dimension-driven one — in either direction — only hurts.** (This is *not* the
+same as an independent per-side rotation lr; that distinct knob is the in/out-only sweep,
+[`sweep_poet_lie_orth_in_only.sh`](scripts/sweep_poet_lie_orth_in_only.sh) /
+[`out_only`](scripts/sweep_poet_lie_orth_out_only.sh).)
