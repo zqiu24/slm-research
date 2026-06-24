@@ -15,11 +15,11 @@
 # optim.lr for BOTH the Pion side (scaled internally by pion_rms*sqrt(m*n)) and
 # the chained-AdamW side.
 #
-#   lr      note
-#   5e-4    cooler probe
-#   1e-3    reference default (opt_llama_60M_pion.sh)
-#   2e-3    hotter probe
-#   3e-3    hottest probe
+#   lr           note
+#   5e-4         cooler probe
+#   1e-3         reference default (opt_llama_60M_pion.sh)
+#   2e-3, 3e-3   hotter probes
+#   4e-3..1e-2   hot-range extension (7 steps) probing for a higher optimum
 # Each run uses experiment.name=pion (distinct run dirs by timestamp).
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
@@ -33,7 +33,7 @@ codexlog() {
   echo "<<< END   ${name}  (status ${PIPESTATUS[0]})  $(date '+%F %T')"
 }
 
-LRS=(0.0005 0.001 0.002 0.003)
+LRS=(0.0005 0.001 0.002 0.003 0.004 0.005 0.006 0.007 0.008 0.009 0.01)
 
 for lr in "${LRS[@]}"; do
   name="pion_lr${lr}"
