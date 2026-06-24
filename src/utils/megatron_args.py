@@ -369,6 +369,42 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             argv.append("--muon-use-nesterov")
         return _sequence(argv)
 
+    if kind == "pion":
+        adam = optim.get("adam", {})
+        betas = adam.get("betas", [0.9, 0.95])
+        argv = [
+            "--optimizer",
+            "adam",
+            "--slm-optimizer",
+            "pion",
+            "--pion-scaling",
+            optim.get("pion_scaling", "rms"),
+            "--pion-rms",
+            optim.get("pion_rms", 0.2),
+            "--pion-update-side",
+            optim.get("pion_update_side", "both"),
+            "--pion-momentum",
+            optim.get("pion_momentum", "transported_ambient_ambient"),
+            "--pion-degree",
+            optim.get("pion_degree", 2),
+            "--pion-beta1",
+            optim.get("pion_beta1", 0.9),
+            "--pion-beta2",
+            optim.get("pion_beta2", 0.999),
+            "--adam-beta1",
+            betas[0],
+            "--adam-beta2",
+            betas[1],
+            "--adam-eps",
+            adam.get("eps", 1.0e-8),
+        ]
+        granularity = optim.get("pion_qkv_split_granularity", None)
+        if granularity is not None:
+            argv += ["--pion-qkv-split-granularity", granularity]
+        if bool(optim.get("pion_use_second_momentum", False)):
+            argv.append("--pion-use-second-momentum")
+        return _sequence(argv)
+
     if kind == "poet":
         poet = optim.poet
         # POET wraps per-module ColumnParallelLinear / RowParallelLinear. Grouped-GEMM

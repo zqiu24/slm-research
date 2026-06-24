@@ -597,6 +597,63 @@ def test_muon_kimi_argv_routes_through_adam_and_sets_muon_knobs():
     assert "--muon-use-nesterov" in args
 
 
+def test_pion_argv_routes_through_adam_and_sets_pion_knobs():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "pion",
+                "lr": 1.0e-3,
+                "weight_decay": 0.1,
+                "pion_scaling": "rms",
+                "pion_rms": 0.2,
+                "pion_update_side": "alternate",
+                "pion_momentum": "transported_ambient_ambient",
+                "pion_degree": 2,
+                "pion_beta1": 0.9,
+                "pion_beta2": 0.95,
+                "pion_use_second_momentum": False,
+                "adam": {"betas": [0.9, 0.95], "eps": 1.0e-8},
+            }
+        }
+    )
+    args = _optimizer_args(cfg)
+    amap = {args[i]: args[i + 1] for i in range(0, len(args) - 1)}
+    assert amap["--optimizer"] == "adam"
+    assert amap["--slm-optimizer"] == "pion"
+    assert amap["--pion-scaling"] == "rms"
+    assert amap["--pion-rms"] == "0.2"
+    assert amap["--pion-update-side"] == "alternate"
+    assert amap["--pion-momentum"] == "transported_ambient_ambient"
+    assert amap["--pion-degree"] == "2"
+    assert amap["--pion-beta1"] == "0.9"
+    assert amap["--pion-beta2"] == "0.95"
+    assert amap["--adam-beta1"] == "0.9"
+    assert amap["--adam-beta2"] == "0.95"
+    assert "--pion-use-second-momentum" not in args
+
+
+def test_pion_argv_emits_second_momentum_flag_when_enabled():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    cfg = OmegaConf.create(
+        {
+            "optim": {
+                "type": "pion",
+                "lr": 1e-3,
+                "weight_decay": 0.1,
+                "pion_use_second_momentum": True,
+            }
+        }
+    )
+    assert "--pion-use-second-momentum" in _optimizer_args(cfg)
+
+
 def test_poet_argv_includes_parameterization_when_set():
     from omegaconf import OmegaConf
 
