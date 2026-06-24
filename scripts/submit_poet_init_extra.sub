@@ -8,9 +8,9 @@
 executable = /lustre/fast/fast/zqiu/slm-research/scripts/run_poet_init_extra.sh
 arguments  = $(idx)
 
-error  = /lustre/home/zqiu/log/poet_init_extra.$(idx).err
-output = /lustre/home/zqiu/log/poet_init_extra.$(idx).out
-log    = /lustre/home/zqiu/log/poet_init_extra.condor.log
+error  = /lustre/fast/fast/zqiu/slm-research/logs/condor/poet_init_extra.$(idx).err
+output = /lustre/fast/fast/zqiu/slm-research/logs/condor/poet_init_extra.$(idx).out
+log    = /lustre/fast/fast/zqiu/slm-research/logs/condor/poet_init_extra.condor.log
 
 getenv = True
 # 60m/4-GPU needs little host RAM; kept modest so the 4-GPU H100 nodes (g187-g200, ~1007GB
