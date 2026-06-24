@@ -4,10 +4,13 @@
 # Submitted via scripts/submit_poet_init_extra.sub (queue idx 0-9).
 #
 # 4-GPU (dp=4, global_batch 1024) — same cohort as the original 4-GPU init grid + the 3.5160
-# champion, so directly comparable. All ride the champion recipe; per-index cell knobs below.
-# Index plan (targets the two co-leaders none_s400_c6=3.4818 / mup_a400_c6=3.4816):
-#   0-3  angle refinement c5/c7 (eff∠ 0.010/0.014) around each leader — pin the angle optimum
-#   4-9  3-seed confirmation (seeds 1234/2024/777) of both leaders — kill the single-seed caveat
+# champion, so directly comparable. All ride the champion recipe at the OPTIMUM angle c6
+# (eff∠ 0.012); per-index cell knobs below.
+# Index plan — finer SCALE resolution at c6 for the two best shapes (raw + mup), to pin the
+# scale optimum between the existing coarse points (none peaks ~4-5.5; mup still rising at 4):
+#   0-4  none (raw)  init_scale {2.0, 2.5, 3.0, 3.5, 4.5}
+#   5-9  mup         mup_alpha  {1.5, 2.5, 3.5, 4.5, 5.5}
+# Names use the init_*/scale×100 convention so they auto-merge into the analysis tables.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 IDX="${1:?usage: run_poet_init_extra.sh <index 0-9>}"
@@ -25,21 +28,20 @@ optim.poet.lie_ortho_nesterov=true optim.poet.lie_b1=0.95 \
 optim.poet.lie_ortho_distributed=true cluster.gpus_per_node=4"
 
 NAMES=(
-  ext_none_s4_c5 ext_none_s4_c7 ext_mup_a4_c5 ext_mup_a4_c7
-  ext_none_s4_c6_s1234 ext_none_s4_c6_s2024 ext_none_s4_c6_s777
-  ext_mup_a4_c6_s1234 ext_mup_a4_c6_s2024 ext_mup_a4_c6_s777
+  init_none_s200_c6 init_none_s250_c6 init_none_s300_c6 init_none_s350_c6 init_none_s450_c6
+  init_mup_a150_c6 init_mup_a250_c6 init_mup_a350_c6 init_mup_a450_c6 init_mup_a550_c6
 )
 OVERRIDES=(
-  "optim.poet.init_type=none optim.poet.init_scale=4 optim.poet.lie_ortho_c=5"
-  "optim.poet.init_type=none optim.poet.init_scale=4 optim.poet.lie_ortho_c=7"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=4 optim.poet.lie_ortho_c=5"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=4 optim.poet.lie_ortho_c=7"
-  "optim.poet.init_type=none optim.poet.init_scale=4 optim.poet.lie_ortho_c=6 seed=1234"
-  "optim.poet.init_type=none optim.poet.init_scale=4 optim.poet.lie_ortho_c=6 seed=2024"
-  "optim.poet.init_type=none optim.poet.init_scale=4 optim.poet.lie_ortho_c=6 seed=777"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=4 optim.poet.lie_ortho_c=6 seed=1234"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=4 optim.poet.lie_ortho_c=6 seed=2024"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=4 optim.poet.lie_ortho_c=6 seed=777"
+  "optim.poet.init_type=none optim.poet.init_scale=2.0 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=none optim.poet.init_scale=2.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=none optim.poet.init_scale=3.0 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=none optim.poet.init_scale=3.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=none optim.poet.init_scale=4.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=1.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=2.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=3.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=4.5 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=5.5 optim.poet.lie_ortho_c=6"
 )
 
 if [ "$IDX" -lt 0 ] || [ "$IDX" -ge "${#NAMES[@]}" ]; then

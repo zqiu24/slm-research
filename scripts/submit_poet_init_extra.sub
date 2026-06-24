@@ -1,9 +1,9 @@
 # POET init EXTRA runs — 10 cells (idx 0-9) on spare 4-GPU machines (HTCondor).
 # Submit:  condor_submit scripts/submit_poet_init_extra.sub
 # Each idx -> scripts/run_poet_init_extra.sh <idx> -> one full 60m/40tpp POET run (dp=4).
-# Targets the two co-leaders (none_s400_c6 / mup_a400_c6): idx 0-3 angle refinement (c5/c7),
-# idx 4-9 three-seed confirmation. Edit the NAMES/OVERRIDES arrays in run_poet_init_extra.sh
-# to change cells. Tune requirements/request_* below to whatever the 4-GPU pool needs.
+# Finer SCALE resolution at the optimum angle c6 for raw + mup: idx 0-4 none init_scale
+# {2.0,2.5,3.0,3.5,4.5}, idx 5-9 mup mup_alpha {1.5,2.5,3.5,4.5,5.5}. Edit the NAMES/OVERRIDES
+# arrays in run_poet_init_extra.sh to change cells. Tune requirements/request_* below as needed.
 
 executable = /lustre/fast/fast/zqiu/slm-research/scripts/run_poet_init_extra.sh
 arguments  = $(idx)
