@@ -8,9 +8,9 @@
 # (eff∠ 0.012); per-index cell knobs below.
 # Index plan — non-redundant cells only (skip anything done/running/pending in the grids):
 #   0-3  none (raw) @ c6  init_scale {2.0,2.5,3.0,3.5}  — fills the sparse 1.5->4.0 descent (only 2.75 there)
-#   4-9  mup HIGHER scale × angle: mup_alpha {7,8} × c{2,4,6}  — hi_mup already sweeps a{2..6}×c{2,4,6},
-#        so go ABOVE 6 (mup @ c6 still falling at 4.0=3.4816); cool angles since the optimum slides
-#        cooler as the frozen norm grows. All standard angle columns so they auto-merge into the tables.
+#   4-9  mup HIGHER scale × angle: mup_alpha {7,8} × c{4,6,8}  — hi_mup already sweeps a{2..6}×c{2,4,6},
+#        so go ABOVE 6 (mup @ c6 still falling at 4.0=3.4816); angles bracket the c6 optimum (c4/c6/c8).
+#        All standard angle columns so they auto-merge into the tables.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 IDX="${1:?usage: run_poet_init_extra.sh <index 0-9>}"
@@ -29,20 +29,20 @@ optim.poet.lie_ortho_distributed=true cluster.gpus_per_node=4"
 
 NAMES=(
   init_none_s200_c6 init_none_s250_c6 init_none_s300_c6 init_none_s350_c6
-  init_mup_a700_c2 init_mup_a700_c4 init_mup_a700_c6
-  init_mup_a800_c2 init_mup_a800_c4 init_mup_a800_c6
+  init_mup_a700_c4 init_mup_a700_c6 init_mup_a700_c8
+  init_mup_a800_c4 init_mup_a800_c6 init_mup_a800_c8
 )
 OVERRIDES=(
   "optim.poet.init_type=none optim.poet.init_scale=2.0 optim.poet.lie_ortho_c=6"
   "optim.poet.init_type=none optim.poet.init_scale=2.5 optim.poet.lie_ortho_c=6"
   "optim.poet.init_type=none optim.poet.init_scale=3.0 optim.poet.lie_ortho_c=6"
   "optim.poet.init_type=none optim.poet.init_scale=3.5 optim.poet.lie_ortho_c=6"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=7.0 optim.poet.lie_ortho_c=2"
   "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=7.0 optim.poet.lie_ortho_c=4"
   "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=7.0 optim.poet.lie_ortho_c=6"
-  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=8.0 optim.poet.lie_ortho_c=2"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=7.0 optim.poet.lie_ortho_c=8"
   "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=8.0 optim.poet.lie_ortho_c=4"
   "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=8.0 optim.poet.lie_ortho_c=6"
+  "optim.poet.init_type=mup_normalized optim.poet.mup_alpha=8.0 optim.poet.lie_ortho_c=8"
 )
 
 if [ "$IDX" -lt 0 ] || [ "$IDX" -ge "${#NAMES[@]}" ]; then
