@@ -530,6 +530,7 @@ codexlog poet_nest_b195_lr4 bash scripts/train_poet_lie_orth.sh llama3 \
 | poet0 | [poet0-…20260603T165332Z](/lustre/fast/fast/zqiu/slm-research/runs/poet0-llama3-60m-s42-20260603T165332Z) | 3.6518 | 38.55 | lr 1e-3 |
 | head-aligned | [poet_h_noperm_rms_c8-…20260605T112512Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_h_noperm_rms_c8-llama3-60m-s42-20260605T112512Z) | 3.6536 | 38.61 | lr 1e-3, c=8, noperm |
 | poet (vanilla) | `runs/poet-llama3-60m-s42-*` | ≈3.70 | ≈40.6 | lr 1e-3, merge_period 400 |
+| **pion (matrix optimizer, untuned)** | [pion-…20260625T152410Z](/lustre/fast/fast/zqiu/slm-research/runs/pion-llama3-60m-s42-20260625T152410Z) (`gkh8zu5k`) | **3.7688** | 43.33 | **lr 1e-3**, wd 0.1; reference defaults (`pion_momentum=transported_ambient_ambient`, `update_side=alternate`, `scaling=rms`, `rms=0.2`, `degree=2`, betas 0.9/0.95, cosine min_lr 0.1) — **last overall**. Only LR was swept (1e-3 best, 2e-3 = 3.7742, divergence ≥8e-3); everything else at the vendored Pion defaults. **+0.069 behind vanilla POET, +0.275 behind adam, +0.288 behind best POET, +0.318 behind muon_kimi.** Captured only after the checkpoint-save fix (commit 3abe19d) let the iter-9155 eval log; the earlier LR-sweep dirs stop at iter 9000. Command: `codexlog pion_lr0.001_full scripts/train_pion_dev.sh optim.lr=0.001 experiment.name=pion` |
 
 ## 2.7 Weight-norm monitoring — POET vs Adam vs Muon (no weight decay)
 
