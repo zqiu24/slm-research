@@ -663,6 +663,15 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 >
 > **Best so far: all three structured shapes converge to ≈3.480 at their norm optimum — a statistical tie within 4↔8-GPU parity noise (~±0.0015).** `none` s3.5–4 @ c6 (`init_none_s350_c6` = 3.4802 ≈ `hi_none_s4_c6` = 3.4804; 4-GPU twin `init_none_s400_c6` = 3.4818); `normalized` s2 @ c6 (`hi_norm_s2_c6` = 3.4809; 4-GPU twin `init_norm_s200_c6` = **3.4787**, the single lowest cell in the whole sweep); `mup` α4 @ c6 (`init_mup_a400_c6` = 3.4816; 8-GPU twin `hi_mup_a4_c6` = **3.4803**). `orthogonal` (κ=1) stays the weakest shape **and is the only one that *degrades* as the base norm rises** (s2/c6 3.5240 → s3 3.5364 → s4 3.5840 → s6/c6 3.9551) — confirming conditioning, not norm, is its limiter. **Each of the other three shapes has a single norm optimum, NOT a broad plateau:** `none` is the flattest (s3–5 = 3.488 / 3.480 / 3.482, then rising 3.491 / 3.505 / 3.535 at s6 / 7 / 8); `normalized` peaks sharply at s2 and degrades fast (s3 3.512, s4 3.614, s5 3.742); `mup` peaks at α4 (α3 3.4827, α5 3.4914, α6 3.5088). **c6 (eff∠ 0.012) ≥ c8 ≥ c10 everywhere**, and angles ≥ eff∠ 0.016 hurt more as the base norm grows (`mup α7/α8` blow up at c8). **To refresh:** scan `runs/{init,hi}_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000` = complete) and drop into the cell.
 
+**Best config per init type** — the grid minimum for each shape (all at angle `c6` / eff∠ 0.012, the optimum column). "Best scale" = the norm-axis value (`init_scale`, or `mup_alpha` for `mup`) that minimizes `val/loss`:
+
+| init type | best val/loss | best scale (row_rms) | run | note |
+|---|---|---|---|---|
+| `none` | **3.4802** (s4 8-GPU twin 3.4804) | **scale 3.5** (≈0.056) | `init_none_s350_c6` | 🥇 overall best POET; flat plateau s3–5, rises past s5. The 8-GPU-confirmed champion is the s4 twin (3.4804) baked into §2.3 #3 |
+| `normalized` | 3.4809 (4-GPU twin **3.4787**) | **scale 2** (≈0.088) | `hi_norm_s2_c6` | ties `none` within parity noise; sharp peak at s2, degrades fast past it |
+| `mup` | 3.4816 (8-GPU twin 3.4803) | **α 4** (≈0.064) | `init_mup_a400_c6` | ties `none`/`normalized`; single peak at α4 |
+| `orthogonal` | 3.5240 | **scale 2** (≈0.088) | `init_ortho_s200_c6` | weakest shape (κ=1); the only one that *degrades* as norm rises past s2 → conditioning, not norm, is its limiter |
+
 #### `init_type = none`  (init_scale × angle)
 
 | init_scale | c2 (∠0.004) | c4 (∠0.008) | c6 (∠0.012) | c8 (∠0.016) | c10 (∠0.020) |
