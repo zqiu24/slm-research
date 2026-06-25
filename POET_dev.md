@@ -667,7 +667,7 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 
 | init type | best val/loss | best scale (row_rms) | run | note |
 |---|---|---|---|---|
-| `none` | **3.4802** (s4 8-GPU twin 3.4804) | **scale 3.5** (≈0.056) | `init_none_s350_c6` | 🥇 overall best POET; flat plateau s3–5, rises past s5. The 8-GPU-confirmed champion is the s4 twin (3.4804) baked into §2.3 #3 |
+| `none` | **3.4804** (s3.5 grid-min twin 3.4802) | **scale 4** (≈0.064) | `hi_none_s4_c6` | 🥇 overall best POET (§2.3 #3, 8-GPU); flat plateau s3–5, rises past s5. 4-GPU s4 twin `init_none_s400_c6` = 3.4818 |
 | `normalized` | 3.4809 (4-GPU twin **3.4787**) | **scale 2** (≈0.088) | `hi_norm_s2_c6` | ties `none` within parity noise; sharp peak at s2, degrades fast past it |
 | `mup` | 3.4816 (8-GPU twin 3.4803) | **α 4** (≈0.064) | `init_mup_a400_c6` | ties `none`/`normalized`; single peak at α4 |
 | `orthogonal` | 3.5240 | **scale 2** (≈0.088) | `init_ortho_s200_c6` | weakest shape (κ=1); the only one that *degrades* as norm rises past s2 → conditioning, not norm, is its limiter |
