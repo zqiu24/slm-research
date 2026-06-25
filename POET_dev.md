@@ -660,7 +660,7 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 
 > **One table per init type.** Rows = base-norm axis (`init_scale` for `none`/`normalized`/`orthogonal`, `mup_alpha` for `mup`); columns = rotation angle `c` with **eff∠ = lr·poet_scale·c = 0.004·0.5·c = 0.002·c** (so eff∠ depends only on `c`, not on the base norm). Cells are completed **`val/loss`** (60m/40tpp, seed 42, the champion `lie_ortho`+alt+head-off+Nesterov-b1.95 recipe at lr 4e-3 / scale 0.5 / wd 0.1 / cosine min_lr 0.01). `▶` = running, blank = not yet run. The original grid was 4-GPU (`init_*`, fractional scales, c{6,8,10}); the hi-extension is 8-GPU (`hi_*`, integer scales, cooler c{2,4,6}). **`row_rms` (per-element weight RMS) scales linearly with the norm axis:** `none` ≈ 0.016·scale, `normalized` ≈ 0.044·scale, `orthogonal` ≈ 0.044·scale; `mup` is set by the spectral-norm target α.
 >
-> **Best so far: all three structured shapes converge to ≈3.480 at their norm optimum — a statistical tie within 4↔8-GPU parity noise (~±0.0015).** `none` s3.5–4 @ c6 (`init_none_s350_c6` = 3.4802 ≈ `hi_none_s4_c6` = 3.4804; 4-GPU twin `init_none_s400_c6` = 3.4818); `normalized` s2 @ c6 (`hi_norm_s2_c6` = 3.4809; 4-GPU twin `init_norm_s200_c6` = **3.4787**, the single lowest cell in the whole sweep); `mup` α4 @ c6 (`init_mup_a400_c6` = 3.4816; 8-GPU twin `hi_mup_a4_c6` = **3.4803**). `orthogonal` (κ=1) stays the weakest shape. **Each shape has a single norm optimum, NOT a broad plateau:** `none` is the flattest (s3–5 = 3.488 / 3.480 / 3.482, then rising 3.491 / 3.505 / 3.535 at s6 / 7 / 8); `normalized` peaks sharply at s2 and degrades fast (s3 3.512, s4 3.614, s5 3.742); `mup` peaks at α4 (α3 3.4827, α5 3.4914, α6 3.5088). **c6 (eff∠ 0.012) ≥ c8 ≥ c10 everywhere**, and angles ≥ eff∠ 0.016 hurt more as the base norm grows (`mup α7/α8` blow up at c8). **To refresh:** scan `runs/{init,hi}_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000` = complete) and drop into the cell.
+> **Best so far: all three structured shapes converge to ≈3.480 at their norm optimum — a statistical tie within 4↔8-GPU parity noise (~±0.0015).** `none` s3.5–4 @ c6 (`init_none_s350_c6` = 3.4802 ≈ `hi_none_s4_c6` = 3.4804; 4-GPU twin `init_none_s400_c6` = 3.4818); `normalized` s2 @ c6 (`hi_norm_s2_c6` = 3.4809; 4-GPU twin `init_norm_s200_c6` = **3.4787**, the single lowest cell in the whole sweep); `mup` α4 @ c6 (`init_mup_a400_c6` = 3.4816; 8-GPU twin `hi_mup_a4_c6` = **3.4803**). `orthogonal` (κ=1) stays the weakest shape **and is the only one that *degrades* as the base norm rises** (s2/c6 3.5240 → s3 3.5364 → s4 3.5840 → s6/c6 3.9551) — confirming conditioning, not norm, is its limiter. **Each of the other three shapes has a single norm optimum, NOT a broad plateau:** `none` is the flattest (s3–5 = 3.488 / 3.480 / 3.482, then rising 3.491 / 3.505 / 3.535 at s6 / 7 / 8); `normalized` peaks sharply at s2 and degrades fast (s3 3.512, s4 3.614, s5 3.742); `mup` peaks at α4 (α3 3.4827, α5 3.4914, α6 3.5088). **c6 (eff∠ 0.012) ≥ c8 ≥ c10 everywhere**, and angles ≥ eff∠ 0.016 hurt more as the base norm grows (`mup α7/α8` blow up at c8). **To refresh:** scan `runs/{init,hi}_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000` = complete) and drop into the cell.
 
 #### `init_type = none`  (init_scale × angle)
 
@@ -708,7 +708,7 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | α 7 |  | 3.5361 | 3.5554 | 4.0032 |  |
 | α 8 |  | 3.5576 | 3.6127 | 3.8523 |  |
 
-#### `init_type = orthogonal`  (init_scale × angle, κ=1 — dropped, weakest shape)
+#### `init_type = orthogonal`  (init_scale × angle, κ=1 — weakest shape; unlike the others it degrades as scale rises past s2)
 
 | init_scale | c2 (∠0.004) | c4 (∠0.008) | c6 (∠0.012) | c8 (∠0.016) | c10 (∠0.020) |
 |---|---|---|---|---|---|
@@ -716,4 +716,8 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | 0.7 |  |  | 3.5902 | 3.5857 | 3.5930 |
 | 1 |  |  | 3.5603 | 3.5605 | 3.5737 |
 | 1.4 |  |  | 3.5346 | 3.5394 | 3.5537 |
-| 2 |  |  | 3.5240 | 3.5350 | 3.5633 |
+| 2 |  |  | **3.5240** | 3.5350 | 3.5633 |
+| 3 |  | ▶ | 3.5364 |  |  |
+| 4 |  | 3.5730 | 3.5840 |  |  |
+| 5 |  | 3.6244 | 3.7889 |  |  |
+| 6 |  | 3.8261 | 3.9551 |  |  |
