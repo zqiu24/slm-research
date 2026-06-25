@@ -660,7 +660,7 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 
 > **One table per init type.** Rows = base-norm axis (`init_scale` for `none`/`normalized`/`orthogonal`, `mup_alpha` for `mup`); columns = rotation angle `c` with **eff∠ = lr·poet_scale·c = 0.004·0.5·c = 0.002·c** (so eff∠ depends only on `c`, not on the base norm). Cells are completed **`val/loss`** (60m/40tpp, seed 42, the champion `lie_ortho`+alt+head-off+Nesterov-b1.95 recipe at lr 4e-3 / scale 0.5 / wd 0.1 / cosine min_lr 0.01). `▶` = running, blank = not yet run. The original grid was 4-GPU (`init_*`, fractional scales, c{6,8,10}); the hi-extension is 8-GPU (`hi_*`, integer scales, cooler c{2,4,6}). **`row_rms` (per-element weight RMS) scales linearly with the norm axis:** `none` ≈ 0.016·scale, `normalized` ≈ 0.044·scale, `orthogonal` ≈ 0.044·scale; `mup` is set by the spectral-norm target α.
 >
-> **Best so far: `none` scale 3.5–4.0 @ c6 (eff∠ 0.012) ≈ 3.480** (`init_none_s350_c6` = 3.4802 ≈ `hi_none_s4_c6` = 3.4804, 8-GPU parity twin `init_none_s400_c6` = 3.4818) — a flat plateau across scale 3–5 (s3.5 3.4802 / s4 3.4804 / s5 3.4815). `normalized` (s2 = 3.4809) and `mup` (α4 = 3.4816) have now **nearly caught `none`** (within ~0.001), and like `none` keep improving as scale rises (normalized s1→1.4→2: 3.510→3.487→3.481); `orthogonal` is the weakest shape (κ=1). **c6 (eff∠ 0.012) ≥ c8 ≥ c10 everywhere**, and angles ≥ eff∠ 0.016 hurt more as the base norm grows (`mup α7/α8` blow up at c8). **To refresh:** scan `runs/{init,hi}_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000` = complete) and drop into the cell.
+> **Best so far: all three structured shapes converge to ≈3.480 at their norm optimum — a statistical tie within 4↔8-GPU parity noise (~±0.0015).** `none` s3.5–4 @ c6 (`init_none_s350_c6` = 3.4802 ≈ `hi_none_s4_c6` = 3.4804; 4-GPU twin `init_none_s400_c6` = 3.4818); `normalized` s2 @ c6 (`hi_norm_s2_c6` = 3.4809; 4-GPU twin `init_norm_s200_c6` = **3.4787**, the single lowest cell in the whole sweep); `mup` α4 @ c6 (`init_mup_a400_c6` = 3.4816; 8-GPU twin `hi_mup_a4_c6` = **3.4803**). `orthogonal` (κ=1) stays the weakest shape. **Each shape has a single norm optimum, NOT a broad plateau:** `none` is the flattest (s3–5 = 3.488 / 3.480 / 3.482, then rising 3.491 / 3.505 / 3.535 at s6 / 7 / 8); `normalized` peaks sharply at s2 and degrades fast (s3 3.512, s4 3.614, s5 3.742); `mup` peaks at α4 (α3 3.4827, α5 3.4914, α6 3.5088). **c6 (eff∠ 0.012) ≥ c8 ≥ c10 everywhere**, and angles ≥ eff∠ 0.016 hurt more as the base norm grows (`mup α7/α8` blow up at c8). **To refresh:** scan `runs/{init,hi}_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000` = complete) and drop into the cell.
 
 #### `init_type = none`  (init_scale × angle)
 
@@ -676,9 +676,9 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | 4 | 3.5503 | 3.4896 | **3.4804** | 3.4963 | 3.5298 |
 | 5 | 3.5521 | 3.4914 | 3.4815 |  |  |
 | 5.5 |  |  | 3.4842 | 3.5108 | 3.6087 |
-| 6 | 3.5552 | 3.4947 | ▶ |  |  |
-| 7 |  |  |  |  |  |
-| 8 |  |  |  |  |  |
+| 6 | 3.5552 | 3.4947 | 3.4905 |  |  |
+| 7 | 3.5655 | 3.5074 | 3.5046 |  |  |
+| 8 | 3.5766 | 3.5193 | 3.5354 |  |  |
 
 #### `init_type = normalized`  (init_scale × angle)
 
@@ -688,10 +688,10 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | 0.7 |  |  | 3.5323 | 3.5398 | 3.5529 |
 | 1 | 3.5897 | 3.5261 | 3.5100 | 3.5150 | 3.5308 |
 | 1.4 |  |  | **3.4871** | 3.4918 | 3.5113 |
-| 2 | 3.5520 | 3.4902 | **3.4809** |  |  |
-| 3 | 3.5781 | 3.5176 | ▶ |  |  |
-| 4 |  |  |  |  |  |
-| 5 |  |  |  |  |  |
+| 2 | 3.5520 | 3.4902 | **3.4809** | 3.4873 | 3.5250 |
+| 3 | 3.5781 | 3.5176 | 3.5123 |  |  |
+| 4 | 3.6088 | 3.5638 | 3.6142 |  |  |
+| 5 | 3.6600 | 3.6449 | 3.7422 |  |  |
 
 #### `init_type = mup`  (mup_alpha × angle)
 
@@ -703,8 +703,8 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | α 2 | 3.5919 | 3.5269 | 3.5120 | 3.5168 | 3.5314 |
 | α 3 | 3.5573 | 3.4947 | 3.4827 |  |  |
 | α 4 | 3.5573 | 3.4937 | **3.4816** | 3.4878 | 3.5285 |
-| α 5 |  |  |  |  |  |
-| α 6 |  |  |  |  |  |
+| α 5 | 3.5684 | 3.5053 | 3.4914 |  |  |
+| α 6 | 3.5801 | 3.5155 | 3.5088 |  |  |
 | α 7 |  | 3.5361 | 3.5554 | 4.0032 |  |
 | α 8 |  | 3.5576 | 3.6127 | 3.8523 |  |
 
