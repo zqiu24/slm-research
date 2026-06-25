@@ -19,7 +19,47 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
+import torch
+
 logger = logging.getLogger(__name__)
+
+
+class _StripPionStateShardingMixin:
+    """Make the Pion optimizer safe to dist-checkpoint with Megatron.
+
+    Pion keeps per-BLOCK momentum buffers in ``optimizer.state[p]`` — the per-head
+    QKV split stores a ``(kv_channels, hidden)`` buffer for each head of a
+    ``(qkv_out, hidden)`` weight, and the swiglu fc1 split stores ``(ffn, hidden)``
+    buffers for a ``(2*ffn, hidden)`` weight. Megatron's ``sharded_state_dict`` runs
+    *every* per-param optimizer-state tensor through ``make_sharded_optimizer_tensor``,
+    which asserts the tensor shape equals the model param shape (only ``step`` is
+    excluded). The block buffers fail that assert
+    (``Optimizer shape ((64, 512) does not match model shape ((1536, 512))``) during
+    the end-of-training ``save_checkpoint`` (fired at the last step because
+    ``save_interval`` is large but ``iteration % save_interval != 0``). That crash
+    also aborts the post-training validation, so the final-step eval is never logged.
+
+    Fix: drop the per-param tensor momentum buffers while the sharded state dict is
+    built, then restore them. Pion re-creates the buffers lazily on the first step
+    after a (re)load, so omitting them from the checkpoint is safe for this
+    single-GPU dev scope — the checkpoint carries the model weights + ``step`` and a
+    resumed run cold-starts the Pion momentum. The per-param ``step`` (int) is kept;
+    Megatron folds it into a shared ``common_step``. Mirrors
+    ``muon_kimi._StripUseMuonShardingMixin``.
+    """
+
+    def sharded_state_dict(self, *args, **kwargs):
+        stashed = []
+        for state in self.optimizer.state.values():
+            for key in list(state.keys()):
+                if torch.is_tensor(state[key]):
+                    stashed.append((state, key, state.pop(key)))
+        try:
+            return super().sharded_state_dict(*args, **kwargs)
+        finally:
+            for state, key, value in stashed:
+                state[key] = value
+
 
 # Lazy handles; populated by _resolve_megatron_handles on first build. Kept as
 # module globals so unit tests can monkeypatch them without importing Megatron.
@@ -230,12 +270,24 @@ def get_megatron_pion_optimizer(
                 if len(opt.state[p]) == 0:
                     opt.state[p]["step"] = 0
 
+    # Wrap with the mixin so Pion's block-shaped momentum buffers are hidden while
+    # Megatron builds the sharded checkpoint (otherwise the end-of-training save
+    # crashes on the shape-match assert and the final-step validation is skipped —
+    # see the mixin docstring).
     if config.bf16:
-        wrapped = Float16OptimizerWithFloat16Params(
-            pion_optimizer, config, None, pion_init_state_fn
+        cls = type(
+            "PionFloat16Optimizer",
+            (_StripPionStateShardingMixin, Float16OptimizerWithFloat16Params),
+            {},
         )
+        wrapped = cls(pion_optimizer, config, None, pion_init_state_fn)
     else:
-        wrapped = FP32Optimizer(pion_optimizer, config, pion_init_state_fn)
+        cls = type(
+            "PionFP32Optimizer",
+            (_StripPionStateShardingMixin, FP32Optimizer),
+            {},
+        )
+        wrapped = cls(pion_optimizer, config, pion_init_state_fn)
 
     optimizers: list[Any] = [wrapped]
 
