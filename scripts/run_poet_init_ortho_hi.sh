@@ -16,6 +16,17 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 IDX="${1:?usage: run_poet_init_ortho_hi.sh <index 0-7>}"
 
+# Env bootstrap: condor lands each array job on a different machine and
+# getenv=True only inherits the SUBMIT-host env, so set up the venv + CUDA
+# here. Without the venv, `python` falls back to system 3.10 and the launcher
+# dies on `from datetime import UTC` (py3.11+) before training starts.
+SLM_VENV="${SLM_VENV:-/lustre/fast/fast/zqiu/slm_env/.venv}"
+if [ "${VIRTUAL_ENV:-}" != "$SLM_VENV" ] && [ -f "$SLM_VENV/bin/activate" ]; then
+  # shellcheck disable=SC1091
+  source "$SLM_VENV/bin/activate"
+fi
+source /lustre/fast/fast/zqiu/slm-research/load_cuda13_2_nccl_env.sh
+
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"   # Condor sets this to the 4 allocated GPUs
 export MASTER_PORT="${MASTER_PORT:-$((6000 + IDX))}"            # distinct rendezvous per index
 export CODEX_LOG_DIR="${CODEX_LOG_DIR:-/lustre/home/zqiu/log}"
