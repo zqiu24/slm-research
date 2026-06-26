@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from omegaconf import OmegaConf
 
 from launchers.submit import _parse_overrides
@@ -430,6 +431,58 @@ def test_poet_argv_omits_lie_ortho_decorrelate_by_default():
 
     args = _optimizer_args(_poet_cfg({"block_size": 256}))
     assert "--poet-lie-ortho-decorrelate" not in args
+
+
+def test_poet_argv_emits_lie_ortho_update_rms_knobs():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg(
+            {
+                "block_count": 1,
+                "merge_period": 1,
+                "scale": 1.0,
+                "q_optimizer": "lie_ortho_update_rms",
+                "lie_alternating": True,
+                "lie_ortho_update_rms": 0.25,
+                "lie_ortho_max_angle": 0.02,
+                "lie_ortho_rms_mode": "weight",
+            }
+        )
+    )
+    assert args[args.index("--poet-q-optimizer") + 1] == "lie_ortho_update_rms"
+    assert args[args.index("--poet-lie-ortho-update-rms") + 1] == "0.25"
+    assert args[args.index("--poet-lie-ortho-max-angle") + 1] == "0.02"
+    assert args[args.index("--poet-lie-ortho-rms-mode") + 1] == "weight"
+    assert "--poet-lie-alternating" in args
+
+
+def test_poet_lie_orth_update_rms_yaml_emits_expected_knobs():
+    cfg = _parse_overrides(["experiment=optim/poet_lie_orth_update_rms"])
+    args = _args_to_map(build_megatron_args(cfg))
+    assert args["--poet-q-optimizer"] == "lie_ortho_update_rms"
+    assert args["--poet-scale"] == "1.0"
+    assert args["--poet-lie-ortho-update-rms"] == "0.2"
+    assert args["--poet-lie-ortho-max-angle"] == "0.024"
+    assert args["--poet-lie-ortho-rms-mode"] == "weight"
+    assert args["--poet-lie-alternating"] is True
+
+
+def test_poet_lie_orth_update_rms_rejects_poet_scale():
+    from src.utils.megatron_args import _optimizer_args
+
+    with pytest.raises(ValueError, match=r"set optim\.poet\.scale=1\.0"):
+        _optimizer_args(
+            _poet_cfg(
+                {
+                    "block_count": 1,
+                    "merge_period": 1,
+                    "scale": 0.5,
+                    "q_optimizer": "lie_ortho_update_rms",
+                    "lie_alternating": True,
+                }
+            )
+        )
 
 
 def test_wsd_scheduler_emits_wsd_flags():

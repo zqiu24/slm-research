@@ -56,6 +56,9 @@ def apply() -> None:
         config.poet_lie_rms = getattr(args, "poet_lie_rms", False)
         config.poet_lie_rms_c = getattr(args, "poet_lie_rms_c", 0.2)
         config.poet_lie_ortho_c = getattr(args, "poet_lie_ortho_c", 0.01)
+        config.poet_lie_ortho_update_rms = getattr(args, "poet_lie_ortho_update_rms", 0.2)
+        config.poet_lie_ortho_max_angle = getattr(args, "poet_lie_ortho_max_angle", 0.024)
+        config.poet_lie_ortho_rms_mode = getattr(args, "poet_lie_ortho_rms_mode", "weight")
         config.poet_lie_ortho_method = getattr(args, "poet_lie_ortho_method", "muon")
         config.poet_lie_ortho_ns_steps = getattr(args, "poet_lie_ortho_ns_steps", 5)
         config.poet_lie_ortho_use_second_moment = getattr(

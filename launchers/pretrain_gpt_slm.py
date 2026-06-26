@@ -74,7 +74,7 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--poet-q-optimizer",
-        choices=["adam", "muon", "lie_algebra", "lie_ortho"],
+        choices=["adam", "muon", "lie_algebra", "lie_ortho", "lie_ortho_update_rms"],
         default="adam",
     )
     group.add_argument("--poet-muon-theta", type=float, default=0.1)
@@ -101,6 +101,13 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # so the planes turn by ~the same angle (= lr*ortho_c). method='muon' (quintic NS,
     # band, ~5 steps) | 'spectral' (exact A(-A^2)^-1/2, sigma=1, needs ~20 steps).
     group.add_argument("--poet-lie-ortho-c", type=float, default=0.01)
+    group.add_argument("--poet-lie-ortho-update-rms", type=float, default=0.2)
+    group.add_argument("--poet-lie-ortho-max-angle", type=float, default=0.024)
+    group.add_argument(
+        "--poet-lie-ortho-rms-mode",
+        choices=["weight", "direction"],
+        default="weight",
+    )
     group.add_argument("--poet-lie-ortho-method", choices=["muon", "spectral"], default="muon")
     group.add_argument("--poet-lie-ortho-ns-steps", type=int, default=5)
     # Per-block dim-dependent angle: scale each block's angle by (block_size/hidden)^exp.

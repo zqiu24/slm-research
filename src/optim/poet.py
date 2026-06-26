@@ -296,6 +296,64 @@ def _sync_oft_R_grads_across_dp(layers) -> None:  # noqa: N802
         g.copy_(synced)
 
 
+def _build_lie_update_rms_param_groups(model_chunks, lr, min_lr):
+    """Per-layer skew groups for q_optimizer=lie_ortho_update_rms.
+
+    Each trainable ``oft_R_in`` / ``oft_R_out`` gets its own group carrying the
+    owner frozen/effective ``weight`` and side-specific block size. Non-skew
+    trainable params stay in one AdamW group at the normal dense LR.
+    """
+    groups = []
+    skew_ids: set[int] = set()
+    for mc in model_chunks:
+        for mod in mc.modules():
+            weight = getattr(mod, "weight", None)
+            for side in ("in", "out"):
+                p = getattr(mod, f"oft_R_{side}", None)
+                if p is None or not getattr(p, "requires_grad", False):
+                    continue
+                block_size = getattr(mod, f"block_size_{side}", None)
+                if weight is None or block_size is None:
+                    raise ValueError(
+                        "lie_ortho_update_rms found a trainable oft_R param without "
+                        f"owner weight/block_size metadata (side={side})."
+                    )
+                groups.append(
+                    dict(
+                        params=[p],
+                        use_skew=True,
+                        side=side,
+                        weight=weight,
+                        block_size=int(block_size),
+                        lr=lr,
+                        max_lr=lr,
+                        min_lr=min_lr,
+                    )
+                )
+                skew_ids.add(id(p))
+
+    adamw_params = []
+    seen: set[int] = set()
+    for mc in model_chunks:
+        for _name, p in mc.named_parameters():
+            if not p.requires_grad or id(p) in skew_ids or id(p) in seen:
+                continue
+            adamw_params.append(p)
+            seen.add(id(p))
+    if adamw_params:
+        groups.append(
+            dict(
+                params=adamw_params,
+                use_skew=False,
+                side=None,
+                lr=lr,
+                max_lr=lr,
+                min_lr=min_lr,
+            )
+        )
+    return groups
+
+
 def _flush_poet_caches_for_step() -> None:
     """Walk live POET layers, flush each one's R-leaf grads into
     oft_R.main_grad (or .grad fallback), then all-reduce across DP."""
@@ -558,31 +616,62 @@ def get_megatron_poet_lie_momentum_optimizer(
     if mpu.get_pipeline_model_parallel_world_size() > 1:
         raise ValueError("POET Lie-momentum does not support pipeline parallelism > 1.")
 
-    skew_in, skew_out, adamw_params = _split_poet_lie_params(model_chunks)
+    q_optimizer = getattr(config, "poet_q_optimizer", "lie_algebra")
     scale = getattr(config, "poet_scale", 1.0)
     min_lr = getattr(config, "min_lr", 0.0)
-    logger.info(
-        "[POET] Lie-momentum: %d in + %d out skew (oft_R) params, %d adamw "
-        "(b1=%s, b2=%s, v_mode=%s, scale=%s, alternating=%s, alternate_every=%s, "
-        "rms=%s, rms_c=%s)",
-        len(skew_in),
-        len(skew_out),
-        len(adamw_params),
-        getattr(config, "poet_lie_b1", 0.9),
-        getattr(config, "poet_lie_b2", 0.95),
-        getattr(config, "poet_lie_v_mode", "elementwise"),
-        scale,
-        getattr(config, "poet_lie_alternating", False),
-        getattr(config, "poet_lie_alternate_every", 1),
-        getattr(config, "poet_lie_rms", False),
-        getattr(config, "poet_lie_rms_c", 0.2),
-    )
-    if not (skew_in or skew_out):
-        logger.warning("[POET] Lie-momentum: no oft_R params found — skew branch is a no-op.")
+    if q_optimizer == "lie_ortho_update_rms":
+        if scale != 1.0:
+            raise ValueError(
+                "lie_ortho_update_rms owns the rotation scale; set optim.poet.scale=1.0"
+            )
+        if not getattr(config, "poet_lie_alternating", False):
+            raise ValueError("lie_ortho_update_rms requires lie_alternating=true")
+        if getattr(config, "poet_merge_period", None) != 1:
+            raise ValueError("lie_ortho_update_rms requires merge_period=1")
+        param_groups = _build_lie_update_rms_param_groups(model_chunks, config.lr, min_lr)
+        skew_count = sum(1 for group in param_groups if group.get("use_skew"))
+        adamw_count = sum(
+            len(group["params"]) for group in param_groups if not group.get("use_skew")
+        )
+        logger.info(
+            "[POET] Lie-orth update-RMS: %d per-layer skew groups, %d adamw params "
+            "(b1=%s, update_rms=%s, max_angle=%s, rms_mode=%s, alternating=%s)",
+            skew_count,
+            adamw_count,
+            getattr(config, "poet_lie_b1", 0.9),
+            getattr(config, "poet_lie_ortho_update_rms", 0.2),
+            getattr(config, "poet_lie_ortho_max_angle", 0.024),
+            getattr(config, "poet_lie_ortho_rms_mode", "weight"),
+            getattr(config, "poet_lie_alternating", False),
+        )
+        if skew_count == 0:
+            logger.warning(
+                "[POET] Lie-orth update-RMS: no oft_R params found — skew branch is a no-op."
+            )
+    else:
+        skew_in, skew_out, adamw_params = _split_poet_lie_params(model_chunks)
+        logger.info(
+            "[POET] Lie-momentum: %d in + %d out skew (oft_R) params, %d adamw "
+            "(b1=%s, b2=%s, v_mode=%s, scale=%s, alternating=%s, alternate_every=%s, "
+            "rms=%s, rms_c=%s)",
+            len(skew_in),
+            len(skew_out),
+            len(adamw_params),
+            getattr(config, "poet_lie_b1", 0.9),
+            getattr(config, "poet_lie_b2", 0.95),
+            getattr(config, "poet_lie_v_mode", "elementwise"),
+            scale,
+            getattr(config, "poet_lie_alternating", False),
+            getattr(config, "poet_lie_alternate_every", 1),
+            getattr(config, "poet_lie_rms", False),
+            getattr(config, "poet_lie_rms_c", 0.2),
+        )
+        if not (skew_in or skew_out):
+            logger.warning("[POET] Lie-momentum: no oft_R params found — skew branch is a no-op.")
 
-    param_groups = _build_lie_param_groups(
-        skew_in, skew_out, adamw_params, config.lr, min_lr, scale
-    )
+        param_groups = _build_lie_param_groups(
+            skew_in, skew_out, adamw_params, config.lr, min_lr, scale
+        )
     shared_kwargs = dict(
         b1=getattr(config, "poet_lie_b1", 0.9),
         b2=getattr(config, "poet_lie_b2", 0.95),
@@ -594,7 +683,7 @@ def get_megatron_poet_lie_momentum_optimizer(
         adamw_eps=config.adam_eps,
         adamw_wd=config.weight_decay,
     )
-    if getattr(config, "poet_q_optimizer", "lie_algebra") == "lie_ortho":
+    if q_optimizer == "lie_ortho":
         from src.optim.poet_lie_orth import LieOrthMomentum
 
         _lie_ortho_distributed = bool(getattr(config, "poet_lie_ortho_distributed", False))
@@ -667,6 +756,37 @@ def get_megatron_poet_lie_momentum_optimizer(
                 config, "poet_lie_ortho_decorrelate_cos_threshold", 0.0
             ),
             layer_pairs=_build_decorrelate_pairs(model_chunks) if _lie_ortho_decorrelate else None,
+            **shared_kwargs,
+        )
+    elif q_optimizer == "lie_ortho_update_rms":
+        from src.optim.poet_lie_orth_update_rms import LieOrthUpdateRMSMomentum
+
+        _lie_ortho_distributed = bool(getattr(config, "poet_lie_ortho_distributed", False))
+        _dp_world = mpu.get_data_parallel_world_size() if _lie_ortho_distributed else 1
+        _dp_rank = mpu.get_data_parallel_rank() if _lie_ortho_distributed else 0
+        _dp_group = mpu.get_data_parallel_group() if _lie_ortho_distributed else None
+        logger.info(
+            "[POET] Lie-orth update-RMS: method=%s, ns_steps=%s, second_moment=%s, "
+            "nesterov=%s, distributed=%s",
+            getattr(config, "poet_lie_ortho_method", "muon"),
+            getattr(config, "poet_lie_ortho_ns_steps", 5),
+            getattr(config, "poet_lie_ortho_use_second_moment", False),
+            getattr(config, "poet_lie_ortho_nesterov", False),
+            _lie_ortho_distributed,
+        )
+        optimizer = LieOrthUpdateRMSMomentum(
+            param_groups,
+            update_rms=getattr(config, "poet_lie_ortho_update_rms", 0.2),
+            max_angle=getattr(config, "poet_lie_ortho_max_angle", 0.024),
+            rms_mode=getattr(config, "poet_lie_ortho_rms_mode", "weight"),
+            ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
+            ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),
+            ortho_use_second_moment=getattr(config, "poet_lie_ortho_use_second_moment", False),
+            nesterov=getattr(config, "poet_lie_ortho_nesterov", False),
+            distributed=_lie_ortho_distributed,
+            dp_world_size=_dp_world,
+            dp_rank=_dp_rank,
+            dp_group=_dp_group,
             **shared_kwargs,
         )
     else:
@@ -749,7 +869,11 @@ def get_megatron_poet_optimizer(
     poet_scale = getattr(config, "poet_scale", 1.0)
     poet_cache_mode = getattr(config, "poet_cache_mode", "none")
 
-    if getattr(config, "poet_q_optimizer", "adam") in ("lie_algebra", "lie_ortho"):
+    if getattr(config, "poet_q_optimizer", "adam") in (
+        "lie_algebra",
+        "lie_ortho",
+        "lie_ortho_update_rms",
+    ):
         return get_megatron_poet_lie_momentum_optimizer(
             config,
             model_chunks,

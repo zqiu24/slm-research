@@ -1,0 +1,68 @@
+# @package _global_
+# poet_lie_orth_update_rms: standalone Lie-Orth optimizer with a Muon/Kimi-style
+# update-RMS angle target. This is separate from q_optimizer=lie_ortho and does not
+# use poet.scale or lie_ortho_c for rotation magnitude.
+experiment:
+  name: poet_lie_orth_update_rms
+  family: optim
+  description: |
+    POET x Lie-Orth update-RMS: a standalone optimizer
+    (q_optimizer=lie_ortho_update_rms) that orthogonalizes the Lie momentum
+    direction, then picks each active layer's angle as lr * rho / RMS(W), clamped
+    by lie_ortho_max_angle. Alternating and merge_period=1 are required so the
+    one-sided small-angle update uses the folded/effective weight norm.
+  references:
+    - "POET"
+    - "Muon"
+    - "Kimi"
+  patches:
+    - model_unfuse_linears
+    - poet_optimizer_setup
+    - poet_unfuse_te_impl
+    - poet_apply_to_model
+    - poet_merge_step
+    - training_log_eta
+    - wandb_metric_normalize
+  required_capabilities: []
+
+optim:
+  type: poet
+  lr: 5.0e-3
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  poet:
+    block_count: 1
+    cache_mode: none
+    init_type: mup_normalized
+    mup_alpha: 4.0
+    init_scale: 1.0
+    merge_period: 1
+    reinit_period: -1
+    scale: 1.0
+    use_poet_adam: false
+    parameterization: cayley
+    q_optimizer: lie_ortho_update_rms
+    lie_b1: 0.95
+    lie_b2: 0.95
+    lie_eps: 1.0e-8
+    lie_v_mode: elementwise
+    lie_alternating: true
+    lie_alternate_every: 1
+    lie_ortho_update_rms: 0.2
+    lie_ortho_max_angle: 0.024
+    lie_ortho_rms_mode: weight
+    lie_ortho_method: muon
+    lie_ortho_ns_steps: 5
+    lie_ortho_use_second_moment: false
+    lie_ortho_nesterov: true
+    lie_ortho_distributed: true
+    head_aligned_attn: false
+    single_step_fast: true
+    single_step_native: true
+    train_output_rotation: true
+
+base:
+  model:
+    unfuse_qkv: true
+    unfuse_fc1: true

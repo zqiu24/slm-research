@@ -222,3 +222,43 @@ def test_get_config_copies_lie_ortho_distributed(monkeypatch):
     )
     cfg, _ = fake_training.get_megatron_optimizer_config(args)
     assert cfg.poet_lie_ortho_distributed is True
+
+
+def test_get_config_copies_lie_ortho_update_rms_knobs(monkeypatch):
+    _reset_for_tests()
+    sys.modules.pop("src.patches.poet_optimizer_setup", None)
+    patch_mod = importlib.import_module("src.patches.poet_optimizer_setup")
+
+    fake_training = types.SimpleNamespace()
+    fake_training.get_megatron_optimizer_config = lambda args: (
+        types.SimpleNamespace(optimizer="adam", lr=1e-3),
+        {},
+    )
+    fake_training.get_megatron_optimizer = lambda config, model, **kwargs: "adam-optimizer"
+
+    fake_megatron = types.ModuleType("megatron")
+    fake_megatron_training_pkg = types.ModuleType("megatron.training")
+    fake_megatron_training_pkg.training = fake_training
+    fake_megatron.training = fake_megatron_training_pkg
+    monkeypatch.setitem(sys.modules, "megatron", fake_megatron)
+    monkeypatch.setitem(sys.modules, "megatron.training", fake_megatron_training_pkg)
+    monkeypatch.setitem(sys.modules, "megatron.training.training", fake_training)
+
+    patch_mod.apply()
+    args = types.SimpleNamespace(
+        slm_optimizer="poet",
+        poet_merge_period=1,
+        poet_scale=1.0,
+        poet_block_size=256,
+        poet_init_type="mup_normalized",
+        poet_mup_alpha=4.0,
+        poet_q_optimizer="lie_ortho_update_rms",
+        poet_lie_ortho_update_rms=0.25,
+        poet_lie_ortho_max_angle=0.02,
+        poet_lie_ortho_rms_mode="weight",
+    )
+    cfg, _ = fake_training.get_megatron_optimizer_config(args)
+    assert cfg.poet_q_optimizer == "lie_ortho_update_rms"
+    assert cfg.poet_lie_ortho_update_rms == 0.25
+    assert cfg.poet_lie_ortho_max_angle == 0.02
+    assert cfg.poet_lie_ortho_rms_mode == "weight"

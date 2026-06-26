@@ -544,6 +544,22 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
                 raise ValueError(
                     "optim.poet.single_step_x_one_sided does not support group_experts=true."
                 )
+        if poet.get("q_optimizer", "adam") == "lie_ortho_update_rms":
+            if float(poet.get("scale", 1.0)) != 1.0:
+                raise ValueError(
+                    "optim.poet.q_optimizer=lie_ortho_update_rms owns the rotation scale; "
+                    "set optim.poet.scale=1.0."
+                )
+            if not poet.get("lie_alternating", False):
+                raise ValueError(
+                    "optim.poet.q_optimizer=lie_ortho_update_rms requires "
+                    "optim.poet.lie_alternating=true."
+                )
+            if merge_period != 1:
+                raise ValueError(
+                    "optim.poet.q_optimizer=lie_ortho_update_rms requires "
+                    f"optim.poet.merge_period=1; got {merge_period}."
+                )
         # block_count (decoupled block sizes) takes precedence over block_size.
         block_count = poet.get("block_count", None)
         if block_count is not None:
@@ -595,6 +611,12 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.get("lie_rms_c", 0.2),
             "--poet-lie-ortho-c",
             poet.get("lie_ortho_c", 0.01),
+            "--poet-lie-ortho-update-rms",
+            poet.get("lie_ortho_update_rms", 0.2),
+            "--poet-lie-ortho-max-angle",
+            poet.get("lie_ortho_max_angle", 0.024),
+            "--poet-lie-ortho-rms-mode",
+            poet.get("lie_ortho_rms_mode", "weight"),
             "--poet-lie-ortho-method",
             poet.get("lie_ortho_method", "muon"),
             "--poet-lie-ortho-ns-steps",

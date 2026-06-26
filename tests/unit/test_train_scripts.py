@@ -111,6 +111,14 @@ def test_poet_lie_orth_script_supports_llama3():
     assert "--poet-lie-ortho-method" in proc.stdout
 
 
+def test_poet_lie_orth_update_rms_script_supports_llama3():
+    proc = _run("train_poet_lie_orth_update_rms.sh", "llama3")
+    assert "--poet-q-optimizer" in proc.stdout and "lie_ortho_update_rms" in proc.stdout
+    assert "--poet-lie-ortho-update-rms" in proc.stdout
+    assert "--poet-lie-ortho-max-angle" in proc.stdout
+    assert "--poet-lie-ortho-rms-mode" in proc.stdout
+
+
 def test_pion_dev_script_routes_to_pion_optimizer():
     proc = _run("train_pion_dev.sh", "llama3")
     assert '"command"' in proc.stdout

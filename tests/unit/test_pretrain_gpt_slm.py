@@ -274,6 +274,29 @@ def test_add_slm_args_accepts_lie_ortho_distributed():
     assert off.poet_lie_ortho_distributed is False
 
 
+def test_add_slm_args_accepts_lie_ortho_update_rms():
+    parser = argparse.ArgumentParser()
+    add_slm_args(parser)
+    args = parser.parse_args(
+        [
+            "--slm-config-path",
+            "x.yaml",
+            "--poet-q-optimizer",
+            "lie_ortho_update_rms",
+            "--poet-lie-ortho-update-rms",
+            "0.25",
+            "--poet-lie-ortho-max-angle",
+            "0.02",
+            "--poet-lie-ortho-rms-mode",
+            "weight",
+        ]
+    )
+    assert args.poet_q_optimizer == "lie_ortho_update_rms"
+    assert args.poet_lie_ortho_update_rms == 0.25
+    assert args.poet_lie_ortho_max_angle == 0.02
+    assert args.poet_lie_ortho_rms_mode == "weight"
+
+
 def test_add_slm_args_accepts_sandwich_flags():
     parser = argparse.ArgumentParser()
     add_slm_args(parser)
