@@ -460,6 +460,7 @@ def test_poet_argv_emits_lie_ortho_update_rms_knobs():
 def test_poet_lie_orth_update_rms_yaml_emits_expected_knobs():
     cfg = _parse_overrides(["experiment=optim/poet_lie_orth_update_rms"])
     args = _args_to_map(build_megatron_args(cfg))
+    assert "poet_update_rms_log" in cfg.experiment.patches
     assert args["--poet-q-optimizer"] == "lie_ortho_update_rms"
     assert args["--poet-scale"] == "1.0"
     assert args["--poet-lie-ortho-update-rms"] == "0.2"

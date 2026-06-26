@@ -20,6 +20,11 @@ The first reproduction target is the current best POET run near `lr=5e-3`
 (`lrsc_mup_lr5_ps50`, val/loss 3.4766), using `init_type=mup_normalized`,
 `mup_alpha=4`, Nesterov Lie-Orth, and `max_angle=0.024`.
 
+The experiment enables `poet_update_rms_log`, which logs:
+`poet_update_rms/theta_mean`, `theta_max`, `theta_p95`,
+`weight_rms_mean`, `clamp_fraction`, and `implied_rho_mean`. In unclamped
+`rms_mode=weight`, `implied_rho_mean` should stay near the configured `rho`.
+
 Suggested first run:
 
 ```bash

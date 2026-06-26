@@ -21,6 +21,7 @@ experiment:
     - poet_unfuse_te_impl
     - poet_apply_to_model
     - poet_merge_step
+    - poet_update_rms_log
     - training_log_eta
     - wandb_metric_normalize
   required_capabilities: []
