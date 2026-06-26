@@ -922,15 +922,27 @@ W&B ids (8-GPU, seed 42): r0.1 — alt `359jhtfo`, both `vjxf1hbx`, in `uq6omaf0
 ## 2.14 update-RMS × cross-side decorrelation — `lambda` sweep (live, filling)
 
 The "split, with a scale": the §J.3 partial-λ cross-side decorrelation, ported into the
-update-RMS champion (`q_optimizer=lie_ortho_update_rms`, alternating path). Stacked on the
-**symmetric** baseline (`mup_normalized` α4 / ρ0.30 / **side_γ=0** / lr5 / max∠0.024) so the
-measured delta is decorrelation alone. `mode=symmetric`, `renorm=true`, all layers
-(`cos_threshold=0`); λ=1.0 excluded (catastrophic in §J.3) (NB: `decorrelate_lambda` defaults to 1.0 — the sweep sets it per-arm, but any manual run must pass it explicitly). **Baseline = 3.4758** (§2.11).
-Run: `bash scripts/sweep_update_rms_decorrelate.sh`.
+update-RMS champion (`q_optimizer=lie_ortho_update_rms`, alternating path). Stacked on each
+init's **symmetric** baseline (`side_γ=0`, lr5, max∠0.024) so the measured delta is
+decorrelation alone. `mode=symmetric`, `renorm=true`, all layers (`cos_threshold=0`); λ=1.0
+excluded (catastrophic in §J.3) (NB: `decorrelate_lambda` defaults to 1.0 — the sweeps set
+it per-arm, but any manual run must pass it explicitly). One script per init, 3 runs each:
 
-| `decorrelate_lambda` | run dir / W&B | val/loss | Δ vs 3.4758 |
-|---|---|---|---|
-| 0 (baseline) | §2.11 `mup` ρ0.30 | 3.4758 | — |
-| 0.25 | ▶ | | |
-| 0.50 | ▶ | | |
-| 0.75 | ▶ | | |
+- **mup** (`mup_normalized` α4, ρ0.30): `bash scripts/sweep_update_rms_decorrelate_mup.sh` — baseline **3.4758** (§2.11)
+- **normalized** (`init_scale=2.0`, ρ0.30): `bash scripts/sweep_update_rms_decorrelate_normalized.sh` — baseline **3.4765** (`ybykexu1`)
+- **none** (`init_scale=4.0`, **ρ0.20** — `none` prefers low ρ): `bash scripts/sweep_update_rms_decorrelate_none.sh` — baseline **3.4782** (`ufz71nt1`)
+
+| init | `decorrelate_lambda` | run dir / W&B | val/loss | Δ vs baseline |
+|---|---|---|---|---|
+| mup | 0 (baseline) | §2.11 `mup` ρ0.30 | 3.4758 | — |
+| mup | 0.25 | ▶ | | |
+| mup | 0.50 | ▶ | | |
+| mup | 0.75 | ▶ | | |
+| normalized | 0 (baseline) | `ybykexu1` | 3.4765 | — |
+| normalized | 0.25 | ▶ | | |
+| normalized | 0.50 | ▶ | | |
+| normalized | 0.75 | ▶ | | |
+| none | 0 (baseline) | `ufz71nt1` | 3.4782 | — |
+| none | 0.25 | ▶ | | |
+| none | 0.50 | ▶ | | |
+| none | 0.75 | ▶ | | |
