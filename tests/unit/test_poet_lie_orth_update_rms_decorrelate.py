@@ -135,7 +135,7 @@ def test_threshold_gates_module():
     )
     assert _cos(d_in0, skipped) > 0.9999, "below-threshold layer must be left untouched"
     fired, _ = _alt_decorr_dirs(
-        decorrelate=True, mode="in_off_out", decorrelate_cos_threshold=max(cos - 0.1, 0.0)
+        decorrelate=True, mode="in_off_out", decorrelate_cos_threshold=cos * 0.5
     )
     assert _cos(d_in0, fired) < 0.999, "above-threshold layer must be decorrelated"
 

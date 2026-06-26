@@ -311,6 +311,7 @@ class LieOrthMomentum(torch.optim.Optimizer):
         in_off_out -> in-write steps only; out_off_in -> out-write steps only; symmetric
         -> every step (full projection, no 0.5 split since only one side moves). Mutates
         buf in place."""
+        # Mirrored in LieOrthUpdateRMSMomentum._decorrelate_buf_alternating (poet_lie_orth_update_rms.py) — keep in sync.
         if not self._decorr_pairs or active is None:
             return
         from src.diag.poet_coordination_diag import block_diag_skew, side_directions

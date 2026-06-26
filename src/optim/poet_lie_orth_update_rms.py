@@ -330,7 +330,8 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         just moved." Modifies only the active side. `decorrelate_mode` selects WHICH
         active-side steps are treated: in_off_out -> in-write steps; out_off_in -> out-write
         steps; symmetric -> every step. Mutates buf in place. (Ported from
-        LieOrthMomentum; slices here are 3-tuples (off, n, p).)"""
+        LieOrthMomentum; slices here are 3-tuples (off, n, p).)
+        keep in sync with LieOrthMomentum._decorrelate_buf_alternating in poet_lie_orth.py."""
         if not self._decorr_pairs or active is None:
             return
         from src.diag.poet_coordination_diag import block_diag_skew, side_directions
@@ -359,6 +360,9 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
             m_inact = self.state[inact_p].get("lie_m")
             if m_inact is None:
                 continue
+            # Active generator from buf; inactive direction = orthogonalize(-m) (the
+            # direction the inactive side WOULD write), the same transform the optimizer
+            # uses, so the projection reflects real weight-space movement.
             A_act = vec_to_skew(buf[act_off : act_off + act_n].view(act_p.shape[0], -1), act_bsz)
             A_inact = orthogonalize_skew_direction(
                 vec_to_skew(-m_inact.float(), inact_bsz),
@@ -368,11 +372,15 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
             if active == "in":
                 d_out, d_in = side_directions(A_inact, A_act, W)
                 d_act = d_in  # the active (in) side's weight-space direction
+                # <D_out, D_in>_F = <block_skew(W^T D_out), A_in>: project A_in off it.
                 g = block_diag_skew(W.transpose(-2, -1) @ d_out, act_bsz)
             else:
                 d_out, d_in = side_directions(A_act, A_inact, W)
                 d_act = d_out  # the active (out) side's weight-space direction
+                # <D_out, D_in>_F = <block_skew(D_in W^T), A_out>: project A_out off it.
                 g = block_diag_skew(d_in @ W.transpose(-2, -1), act_bsz)
+            # Module-selective gate: only intervene where the inter-side overlap is large
+            # enough (preserve useful shared directions elsewhere).
             if self.decorrelate_cos_threshold > 0.0:
                 denom = (d_out.norm() * d_in.norm()).clamp_min(eps)
                 if (
@@ -383,6 +391,8 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
             c = (A_act.flatten() @ g.flatten()) / (g.flatten() @ g.flatten()).clamp_min(eps)
             A_act = A_act - self.decorrelate_lambda * c * g
             if self.decorrelate_renorm:
+                # Preserve the active side's realized ||D|| (direction-only change). D is
+                # linear in A, so the scalar computed in weight-space applies to A directly.
                 if active == "in":
                     _, d_act_new = side_directions(A_inact, A_act, W)
                 else:

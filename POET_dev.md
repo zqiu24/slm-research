@@ -925,7 +925,7 @@ The "split, with a scale": the §J.3 partial-λ cross-side decorrelation, ported
 update-RMS champion (`q_optimizer=lie_ortho_update_rms`, alternating path). Stacked on the
 **symmetric** baseline (`mup_normalized` α4 / ρ0.30 / **side_γ=0** / lr5 / max∠0.024) so the
 measured delta is decorrelation alone. `mode=symmetric`, `renorm=true`, all layers
-(`cos_threshold=0`); λ=1.0 excluded (catastrophic in §J.3). **Baseline = 3.4758** (§2.11).
+(`cos_threshold=0`); λ=1.0 excluded (catastrophic in §J.3) (NB: `decorrelate_lambda` defaults to 1.0 — the sweep sets it per-arm, but any manual run must pass it explicitly). **Baseline = 3.4758** (§2.11).
 Run: `bash scripts/sweep_update_rms_decorrelate.sh`.
 
 | `decorrelate_lambda` | run dir / W&B | val/loss | Δ vs 3.4758 |
