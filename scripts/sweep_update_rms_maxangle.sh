@@ -32,11 +32,12 @@ for INIT in mup norm; do
     TAG="${MA/./p}"                      # 0.016 -> 0p016
     NAME="urms_maxangle_${INIT}_a${TAG}"
     echo ">>> ${NAME} (${INIT}, ρ0.30, max_angle=${MA}) starting"
-    codexlog "${NAME}" scripts/train_poet_lie_orth_update_rms.sh llama3 ${COMMON} \
+    scripts/train_poet_lie_orth_update_rms.sh llama3 ${COMMON} \
       $(init_flags "$INIT") \
       optim.poet.lie_ortho_max_angle="${MA}" \
-      experiment.name="${NAME}"
-    echo "<<< ${NAME} done (status $?)"
+      experiment.name="${NAME}" \
+      2>&1 | tee "${CODEX_LOG_DIR}/${NAME}.log"
+    echo "<<< ${NAME} done (status ${PIPESTATUS[0]}) — log: ${CODEX_LOG_DIR}/${NAME}.log"
   done
 done
 echo "=== update-RMS max_angle sweep complete: {mup,norm} × {0.012,0.016,0.024,0.032}; anchor max∠0.024 = mup 3.4758 / norm 3.4765 ==="

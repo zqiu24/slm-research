@@ -33,11 +33,12 @@ for INIT in mup norm; do
     TAG="${LR/./p}"                      # 0.004 -> 0p004
     NAME="urms_lr_${INIT}_${TAG}"
     echo ">>> ${NAME} (${INIT}, ρ0.30, lr=${LR}) starting"
-    codexlog "${NAME}" scripts/train_poet_lie_orth_update_rms.sh llama3 ${COMMON} \
+    scripts/train_poet_lie_orth_update_rms.sh llama3 ${COMMON} \
       $(init_flags "$INIT") \
       optim.lr="${LR}" \
-      experiment.name="${NAME}"
-    echo "<<< ${NAME} done (status $?)"
+      experiment.name="${NAME}" \
+      2>&1 | tee "${CODEX_LOG_DIR}/${NAME}.log"
+    echo "<<< ${NAME} done (status ${PIPESTATUS[0]}) — log: ${CODEX_LOG_DIR}/${NAME}.log"
   done
 done
 echo "=== update-RMS lr sweep complete: {mup,norm} × {4e-3,5e-3,6e-3}; anchor lr5 = mup 3.4758 / norm 3.4765 ==="

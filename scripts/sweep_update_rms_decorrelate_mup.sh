@@ -36,13 +36,14 @@ for LAM in 0.25 0.50 0.75; do
   TAG="${LAM/./p}"                       # 0.25 -> 0p25
   NAME="urms_decorr_mup_l${TAG}"
   echo ">>> ${NAME} (mup, rho0.30, lambda=${LAM}) starting — baseline 3.4758"
-  codexlog "${NAME}" scripts/train_poet_lie_orth_update_rms.sh llama3 ${HELD} \
+  scripts/train_poet_lie_orth_update_rms.sh llama3 ${HELD} \
     optim.poet.lie_ortho_decorrelate=true \
     optim.poet.lie_ortho_decorrelate_mode=symmetric \
     optim.poet.lie_ortho_decorrelate_renorm=true \
     optim.poet.lie_ortho_decorrelate_lambda="${LAM}" \
     optim.poet.lie_ortho_decorrelate_cos_threshold=0.0 \
-    experiment.name="${NAME}"
-  echo "<<< ${NAME} done (status $?)"
+    experiment.name="${NAME}" \
+    2>&1 | tee "${CODEX_LOG_DIR}/${NAME}.log"
+  echo "<<< ${NAME} done (status ${PIPESTATUS[0]}) — log: ${CODEX_LOG_DIR}/${NAME}.log"
 done
 echo "=== update-RMS decorrelation (MUP α4, ρ0.30) sweep complete: λ {0.25,0.50,0.75} vs baseline 3.4758 ==="

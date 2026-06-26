@@ -50,12 +50,13 @@ for INIT in mup norm; do
       RTAG="${RENORM:0:1}"               # true->t, false->f
       NAME="urms_decorr_gp25_${INIT}_l${LTAG}_rn${RTAG}"
       echo ">>> ${NAME} (${INIT}, side_γ+0.25, λ=${LAM}, renorm=${RENORM}) starting"
-      codexlog "${NAME}" scripts/train_poet_lie_orth_update_rms.sh llama3 ${COMMON} \
+      scripts/train_poet_lie_orth_update_rms.sh llama3 ${COMMON} \
         $(init_flags "$INIT") \
         optim.poet.lie_ortho_decorrelate_lambda="${LAM}" \
         optim.poet.lie_ortho_decorrelate_renorm="${RENORM}" \
-        experiment.name="${NAME}"
-      echo "<<< ${NAME} done (status $?)"
+        experiment.name="${NAME}" \
+        2>&1 | tee "${CODEX_LOG_DIR}/${NAME}.log"
+      echo "<<< ${NAME} done (status ${PIPESTATUS[0]}) — log: ${CODEX_LOG_DIR}/${NAME}.log"
     done
   done
 done
