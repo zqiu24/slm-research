@@ -946,3 +946,43 @@ it per-arm, but any manual run must pass it explicitly). One script per init, 3 
 | none | 0.25 | ▶ | | |
 | none | 0.50 | ▶ | | |
 | none | 0.75 | ▶ | | |
+
+## 2.15 update-RMS off-axis ablations (live, filling)
+
+Three sweeps on the update-RMS champion beyond the §2.11 ρ-axis, all `lie_alternating` +
+Nesterov-b1.95 + head-off + distributed, lr5 unless swept, seed 42, 60m/40tpp, 8-GPU.
+
+#### (a) `max_angle` ceiling — §2.11 "Next" lever (`scripts/sweep_update_rms_maxangle.sh`)
+Lower the clamp so it shapes the early peak-LR rotation for the *optimum* configs (ρ0.30,
+side_γ=0). `0.024` = anchor (should reproduce §2.11). Watch `poet_update_rms/clamp_fraction`.
+
+| init | max∠ 0.012 | 0.016 | 0.024 (anchor) | 0.032 |
+|---|---|---|---|---|
+| mup α4 | ▶ | ▶ | 3.4758 | ▶ |
+| normalized s2 | ▶ | ▶ | 3.4765 | ▶ |
+
+#### (b) dense `lr` under the adaptive angle (`scripts/sweep_update_rms_lr.sh`)
+The §2.10 lr lever, re-mapped under the self-scaling angle (ρ0.30, max∠0.024, side_γ=0).
+`5e-3` = anchor.
+
+| init | lr 4e-3 | 5e-3 (anchor) | 6e-3 |
+|---|---|---|---|
+| mup α4 | ▶ | 3.4758 | ▶ |
+| normalized s2 | ▶ | 3.4765 | ▶ |
+
+#### (c) decorrelation × side_γ=+0.25 — record attempt (`scripts/sweep_update_rms_decorrelate_gp25.sh`)
+§J.3 partial-λ decorrelation stacked on the **asymmetric** champion (side_γ=+0.25),
+`mode=symmetric`, `cos_threshold=0`, ρ0.30/lr5. Baselines (no decorr, §2.12): mup **3.4745**
+(champion — record target), normalized **3.4780** (NB normalized's own optimum is side_γ=0
+= 3.4765; its +0.25 arm is an asymmetry×decorrelation interaction probe). λ=1.0 excluded.
+
+| init | λ | renorm=true | renorm=false |
+|---|---|---|---|
+| mup α4 | 0 (baseline) | 3.4745 | 3.4745 |
+| mup α4 | 0.25 | ▶ | ▶ |
+| mup α4 | 0.50 | ▶ | ▶ |
+| mup α4 | 0.75 | ▶ | ▶ |
+| normalized s2 | 0 (baseline) | 3.4780 | 3.4780 |
+| normalized s2 | 0.25 | ▶ | ▶ |
+| normalized s2 | 0.50 | ▶ | ▶ |
+| normalized s2 | 0.75 | ▶ | ▶ |
