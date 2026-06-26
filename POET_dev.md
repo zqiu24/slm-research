@@ -860,7 +860,7 @@ Two single-variable A/Bs on the three §2.10 best configs (none s4/lr4, normaliz
 
 **Takeaways:** (1) keep `nonpoet_init_scale=1.0` — only the frozen POET weights want the up-scaled init; (2) keep `min_lr_ratio=0.01`. The §2.3/§2.6 champions stand.
 
-## 2.12 update-RMS in/out side-asymmetry — `side_gamma` sweep (live, filling)
+## 2.12 update-RMS in/out side-asymmetry — `side_gamma` sweep (complete; 1 cell crash-pending)
 
 > §2.11 holds `R_out` and `R_in` to the **same** per-element update strength (`theta` derived from the shared owner-weight RMS, applied to both sides). But the two rotations act on very different-dimensional spaces (e.g. fc1 `d_out = 4·d_in`), so for equal `theta` the wider side is a "bigger" rotation (`‖R−I‖ ∝ √d_side`, more DOF exercised) — a real asymmetry the orthogonalization papers over. This sweep asks whether **deliberately breaking the symmetry helps**, via the new knob `optim.poet.lie_ortho_update_rms_side_gamma` (`γ`, default 0; landed [cb3bb2b](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth_update_rms.py#L222)):
 >
@@ -874,15 +874,22 @@ Two single-variable A/Bs on the three §2.10 best configs (none s4/lr4, normaliz
 >
 > **Hypothesis under test:** does any `γ ≠ 0` beat the symmetric baselines (`normalized` 3.4765, `mup` 3.4758)? If yes → in/out symmetry is suboptimal and we learn the sign (`+` favors the wider MLP side, `−` the narrower). If `γ=0` stays best → the symmetric default is empirically justified. ⚠️ single-seed; the margins at stake are ~0.001 (the §2.11 optimum is flat), so read deltas against the ±0.0015 seed/parity noise. **To refresh:** scan `runs/urms_g*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000`); the `poet_update_rms/implied_rho_mean` sparkline now shows the per-side split.
 
-#### `side_gamma` × init  (rho 0.30, lr 5e-3, max_angle 0.024) — `▶` running, blank = not yet run
+#### `side_gamma` × init  (rho 0.30, lr 5e-3, max_angle 0.024) — bold = column best
 
 | γ | `normalized` (s2) | `mup` (α4) |
 |---|---|---|
-| −0.50 |  |  |
-| −0.25 |  |  |
-| **0 (§2.11 champion)** | **3.4765** | **3.4758** |
-| +0.25 |  |  |
-| +0.50 |  |  |
+| −0.50 | 3.4885 | ✗ crash† |
+| −0.25 | 3.4798 | 3.4842 |
+| 0 (§2.11) | **3.4765** | 3.4758 |
+| +0.25 | 3.4780 | **3.4745** |
+| +0.50 | 3.4809 | 3.4757 |
+
+`†` `mup` γ=−0.5 crashed at the final checkpoint save (CUDA OOM — same transient as the first `gM50_norm` attempt; trained clean to iter 9150, last periodic eval @9000 = 3.4969). It's the negative extreme (≥ γ−0.25's 3.4842), so it can't be the column best; a rerun (`training.save_enabled=false`) would only complete the tail.
+
+**Result — the two inits split, exactly the predicted divergence; `mup` γ=+0.25 is the new POET best.**
+- **`normalized` → strict symmetry (`γ=0`).** A clean valley with the minimum at the symmetric point (3.4885 / 3.4798 / **3.4765** / 3.4780 / 3.4809), worsening monotonically in *both* directions. Breaking the in/out symmetry only hurts this init.
+- **`mup` → `γ=+0.25`.** The valley shifts positive (3.4842 / 3.4758 / **3.4745** / 3.4757): rotating the wider fc-out side ~1.41× more wins. `mup` `γ=+0.25 = 3.4745` **beats the symmetric §2.11 mup champion (3.4758) by −0.0013 and the fixed-angle champion (3.4766) by −0.0021 → new best POET / best PEFT (§2.6).**
+- **Takeaway:** the Kimi-style sign (larger-dim side rotates more) is the helpful direction, but the *optimal* `γ` is init-dependent — it tracks the init's base-norm profile (`mup` sets shape-dependent spectral norms, so a `+γ` angle bias compounds constructively; `normalized`'s uniform unit-row-norm wants no imbalance). ⚠️ all single-seed; the −0.0013 win is just under the ±0.0015 seed/parity noise → **a 2–3-seed confirm at `mup` `γ=+0.25` is needed to lock it** (and the §2.6 medal) as the POET record.
 
 ## 2.13 Pion `pion_rms` × `pion_update_side` sweep (2026-06-26, complete)
 
