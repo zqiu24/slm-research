@@ -561,7 +561,7 @@ codexlog poet_nest_b195_lr4 bash scripts/train_poet_lie_orth.sh llama3 \
 | poet0 | [poet0-…20260603T165332Z](/lustre/fast/fast/zqiu/slm-research/runs/poet0-llama3-60m-s42-20260603T165332Z) | 3.6518 | 38.55 | lr 1e-3 |
 | head-aligned | [poet_h_noperm_rms_c8-…20260605T112512Z](/lustre/fast/fast/zqiu/slm-research/runs/poet_h_noperm_rms_c8-llama3-60m-s42-20260605T112512Z) | 3.6536 | 38.61 | lr 1e-3, c=8, noperm |
 | poet (vanilla) | `runs/poet-llama3-60m-s42-*` | ≈3.70 | ≈40.6 | lr 1e-3, merge_period 400 |
-| **pion (matrix optimizer, untuned)** | [pion-…20260625T152410Z](/lustre/fast/fast/zqiu/slm-research/runs/pion-llama3-60m-s42-20260625T152410Z) (`gkh8zu5k`) | **3.7688** | 43.33 | **lr 1e-3**, wd 0.1; reference defaults (`pion_momentum=transported_ambient_ambient`, `update_side=alternate`, `scaling=rms`, `rms=0.2`, `degree=2`, betas 0.9/0.95, cosine min_lr 0.1) — **last overall**. Only LR was swept (1e-3 best, 2e-3 = 3.7742, divergence ≥8e-3); everything else at the vendored Pion defaults. **+0.069 behind vanilla POET, +0.275 behind adam, +0.292 behind best POET, +0.318 behind muon_kimi.** Captured only after the checkpoint-save fix (commit 3abe19d) let the iter-9155 eval log; the earlier LR-sweep dirs stop at iter 9000. Command: `codexlog pion_lr0.001_full scripts/train_pion_dev.sh optim.lr=0.001 experiment.name=pion` |
+| **pion (matrix optimizer, lr+rms+side tuned)** | [pion-…20260626T062055Z](/lustre/fast/fast/zqiu/slm-research/runs/pion-llama3-60m-s42-20260626T062055Z) (`vjxf1hbx`) | **3.7540** | 42.69 | **lr 1e-3, `pion_rms=0.1`, `pion_update_side=both`**, wd 0.1; else reference defaults (`pion_momentum=transported_ambient_ambient`, `scaling=rms`, `degree=2`, betas 0.9/0.95, cosine min_lr 0.1) — **still last overall, but tuned**. The §2.13 rms×side 3×4 sweep lowered it **−0.0148** from the LR-sweep baseline (3.7688 @ rms0.2/alternate, `gkh8zu5k`, which the grid's self-anchor cell `bd2zlvvc` reproduced to 3.7688 exactly). Best cell `rms0.1/both`; rms **0.1≈0.2 ≫ 0.4** (0.4 over-rotates everywhere), **two-sided (both/alternate) ≫ single-sided**, and among single-sided **in > out**. **+0.054 behind vanilla POET, +0.260 behind adam, +0.277 behind best POET, +0.303 behind muon_kimi.** Command: `codexlog pion_rms0.1_sideboth scripts/train_pion_dev.sh optim.lr=0.001 optim.pion_rms=0.1 optim.pion_update_side=both experiment.name=pion` |
 
 ## 2.7 Weight-norm monitoring — POET vs Adam vs Muon (no weight decay)
 
@@ -880,3 +880,31 @@ Two single-variable A/Bs on the three §2.10 best configs (none s4/lr4, normaliz
 | **0 (§2.11 champion)** | **3.4765** | **3.4758** |
 | +0.25 |  |  |
 | +0.50 |  |  |
+
+## 2.13 Pion `pion_rms` × `pion_update_side` sweep (2026-06-26, complete)
+
+> The **standalone Pion optimizer** (`optim.type=pion`, vendored [third_party/pion](/lustre/fast/fast/zqiu/slm-research/third_party/pion) → [src/optim/_pion.py](/lustre/fast/fast/zqiu/slm-research/src/optim/_pion.py); Pion on the 2-D attn/MLP weights, chained AdamW on embeddings/norms/biases/head) was previously **LR-swept only** (1e-3 best → 3.7688, §2.6). This is the follow-up **3×4 = 12-run factorial** over the two highest-leverage untuned knobs at the LR optimum (`optim.lr=1e-3`): the update-magnitude scale **`pion_rms` {0.1, 0.2, 0.4}** × the Lie-generator side **`pion_update_side` {alternate, both, in, out}** ([sweep_pion_rms_side.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_pion_rms_side.sh)). Everything else at the vendored Pion defaults (`pion_momentum=transported_ambient_ambient`, `scaling=rms`, `degree=2`, betas 0.9/0.95, wd 0.1, cosine min_lr 0.1). 60m/40tpp, seed 42, 8-GPU. All 12 runs finished clean (status 0, 2026-06-26 19:20).
+>
+> **Self-anchor confirms the grid is on-cohort:** the `(rms=0.2, side=alternate)` cell (`bd2zlvvc`) = **3.7688**, reproducing the §2.6 LR-sweep baseline (`gkh8zu5k`, 3.7688) exactly.
+>
+> **Result — a small but clean tuning win: `rms=0.1` / `side=both` = 3.7540, −0.0148 over the baseline.** Three readings:
+>
+> **(1) `pion_rms` (update magnitude): 0.1 ≈ 0.2 ≫ 0.4 — 0.4 over-rotates everywhere.** `rms=0.4` is the worst value at *every* side (by +0.08 to +0.16 vs its 0.1/0.2 siblings). Between 0.1 and 0.2 the winner depends on the side: `both` and `out` prefer 0.1, `alternate` prefers 0.2 (3.7688 vs 3.7959), `in` is a tie. So the magnitude optimum is in the **0.1–0.2 band**, and halving the default (0.2→0.1) is what unlocks the `both`-side win.
+>
+> **(2) `pion_update_side`: two-sided (both/alternate) ≫ single-sided (in/out), and in > out.** At the best magnitude the order is `both` (3.7540) < `alternate` (3.7959 @ rms0.1, but 3.7688 @ rms0.2) < `in` (3.8645) < `out` (3.9488) — freezing to one rotation side costs **+0.10 to +0.20**. Among the single-sided runs **`in` beats `out` at every rms** (−0.06 to −0.15) — the *opposite* of the POET `lie_ortho` family, where out_only beat in_only (§2.5-I); this is a different optimizer (Pion's transported-ambient momentum), so the side asymmetry need not match.
+>
+> **(3) `both` vs `alternate` is magnitude-dependent.** Writing both sides every step (`both`) wins at the cooler rms=0.1 (3.7540 vs alternate 3.7959, −0.042), but `alternate` wins at rms=0.2 (3.7688 vs both 3.7784) and rms=0.4 — i.e. when each step's rotation is larger, spreading the two sides across alternating steps avoids over-spend; when it is small, applying both every step is fine and better.
+>
+> **Pion is still last overall** (best 3.7540 vs vanilla POET ≈3.70, best POET 3.4766, muon_kimi 3.4514) — tuning rms+side narrowed the gap to vanilla POET from +0.069 to **+0.054** but did not change its standing. ⚠️ single seed per cell.
+
+#### `pion_rms` × `pion_update_side`  (lr 1e-3, all else = Pion defaults) — `‡` = self-anchor (reproduces §2.6 baseline 3.7688)
+
+| `pion_rms` \ side | `alternate` | `both` | `in` | `out` |
+|---|---|---|---|---|
+| 0.1 | 3.7959 | **3.7540** | 3.8659 | 3.9488 |
+| 0.2 | 3.7688 ‡ | 3.7784 | 3.8645 | 3.9638 |
+| 0.4 | 3.8848 | 3.9386 | 3.9184 | 4.0940 |
+
+W&B ids (8-GPU, seed 42): r0.1 — alt `359jhtfo`, both `vjxf1hbx`, in `uq6omaf0`, out `xawn9x2t`; r0.2 — alt `bd2zlvvc`, both `ul1t28cw`, in `6egdb1ua`, out `5a8z409s`; r0.4 — alt `sia07mi8`, both `90odmj6k`, in `rkprnvi6`, out `4dirkeav`.
+
+**Next (Pion):** the magnitude optimum sits at the cooler grid edge for the `both` side → a finer `pion_rms` {0.05, 0.075, 0.1, 0.15} scan at `side=both` would pin it; `pion_momentum`/`pion_degree` remain untouched. But Pion is firmly last on this cohort, so further tuning is low-priority.
