@@ -583,6 +583,25 @@ def get_megatron_poet_muon_optimizer(
     return FP32Optimizer(optimizer, config, init_state_fn)
 
 
+def _log_decorrelate_banner(config, logger) -> None:
+    """One-line CROSS-SIDE DECORRELATION banner — the sweep scripts grep this at startup
+    to confirm the override was not silently dropped. Shared by the lie_ortho and
+    lie_ortho_update_rms branches."""
+    _alt_on = bool(getattr(config, "poet_lie_alternating", False))
+    logger.warning(
+        "[POET] Lie-orth CROSS-SIDE DECORRELATION ON (mode=%s, lambda=%s, renorm=%s, "
+        "cos_threshold=%s, alternating=%s) — projects the active generator off the "
+        "other side's direction so cos(D_out,D_in)->0. Alternating: the inactive "
+        "direction is sourced from its maintained momentum (cross-step over-spend "
+        "control); simultaneous: both sides every step (ANALYSIS §17.6).",
+        getattr(config, "poet_lie_ortho_decorrelate_mode", "in_off_out"),
+        getattr(config, "poet_lie_ortho_decorrelate_lambda", 1.0),
+        getattr(config, "poet_lie_ortho_decorrelate_renorm", False),
+        getattr(config, "poet_lie_ortho_decorrelate_cos_threshold", 0.0),
+        _alt_on,
+    )
+
+
 def get_megatron_poet_lie_momentum_optimizer(
     config,
     model_chunks,
@@ -718,19 +737,7 @@ def get_megatron_poet_lie_momentum_optimizer(
                 _dp_world,
             )
         if _lie_ortho_decorrelate:
-            _alt_on = bool(getattr(config, "poet_lie_alternating", False))
-            logger.warning(
-                "[POET] Lie-orth CROSS-SIDE DECORRELATION ON (mode=%s, lambda=%s, renorm=%s, "
-                "cos_threshold=%s, alternating=%s) — projects the active generator off the "
-                "other side's direction so cos(D_out,D_in)->0. Alternating: the inactive "
-                "direction is sourced from its maintained momentum (cross-step over-spend "
-                "control); simultaneous: both sides every step (ANALYSIS §17.6).",
-                getattr(config, "poet_lie_ortho_decorrelate_mode", "in_off_out"),
-                getattr(config, "poet_lie_ortho_decorrelate_lambda", 1.0),
-                getattr(config, "poet_lie_ortho_decorrelate_renorm", False),
-                getattr(config, "poet_lie_ortho_decorrelate_cos_threshold", 0.0),
-                _alt_on,
-            )
+            _log_decorrelate_banner(config, logger)
         optimizer = LieOrthMomentum(
             param_groups,
             ortho_c=getattr(config, "poet_lie_ortho_c", 0.01),
@@ -774,6 +781,9 @@ def get_megatron_poet_lie_momentum_optimizer(
             getattr(config, "poet_lie_ortho_nesterov", False),
             _lie_ortho_distributed,
         )
+        _lie_ortho_decorrelate = bool(getattr(config, "poet_lie_ortho_decorrelate", False))
+        if _lie_ortho_decorrelate:
+            _log_decorrelate_banner(config, logger)
         optimizer = LieOrthUpdateRMSMomentum(
             param_groups,
             update_rms=getattr(config, "poet_lie_ortho_update_rms", 0.2),
@@ -788,6 +798,14 @@ def get_megatron_poet_lie_momentum_optimizer(
             dp_world_size=_dp_world,
             dp_rank=_dp_rank,
             dp_group=_dp_group,
+            decorrelate_sides=_lie_ortho_decorrelate,
+            decorrelate_mode=getattr(config, "poet_lie_ortho_decorrelate_mode", "in_off_out"),
+            decorrelate_lambda=getattr(config, "poet_lie_ortho_decorrelate_lambda", 1.0),
+            decorrelate_renorm=getattr(config, "poet_lie_ortho_decorrelate_renorm", False),
+            decorrelate_cos_threshold=getattr(
+                config, "poet_lie_ortho_decorrelate_cos_threshold", 0.0
+            ),
+            layer_pairs=_build_decorrelate_pairs(model_chunks) if _lie_ortho_decorrelate else None,
             **shared_kwargs,
         )
     else:
