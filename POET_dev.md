@@ -853,6 +853,30 @@ Two single-variable A/Bs on the three §2.10 best configs (none s4/lr4, normaliz
 | 0.35 | 3.5017 † | 3.4796 † | 3.4801 † |
 | 0.40 | 3.5065 † | 3.4864 † | 3.4810 † |
 
-**Next:** the rho optimum is flat, so the remaining levers are off-axis — **lower `max_angle`** so the ceiling actually shapes the early schedule (right now it only bites the configs we don't want), or revisit dense **`lr`** (the §2.10 lever) under the adaptive angle. A 2–3-seed confirm at `mup`/`normalized` rho0.30 would settle whether it truly edges the fixed-angle champion or just ties it.
+**Next:** the rho optimum is flat, so the remaining levers are off-axis — **lower `max_angle`** so the ceiling actually shapes the early schedule (right now it only bites the configs we don't want), or revisit dense **`lr`** (the §2.10 lever) under the adaptive angle. A 2–3-seed confirm at `mup`/`normalized` rho0.30 would settle whether it truly edges the fixed-angle champion or just ties it. **The in/out side-asymmetry axis is §2.12.**
 
 **Takeaways:** (1) keep `nonpoet_init_scale=1.0` — only the frozen POET weights want the up-scaled init; (2) keep `min_lr_ratio=0.01`. The §2.3/§2.6 champions stand.
+
+## 2.12 update-RMS in/out side-asymmetry — `side_gamma` sweep (live, filling)
+
+> §2.11 holds `R_out` and `R_in` to the **same** per-element update strength (`theta` derived from the shared owner-weight RMS, applied to both sides). But the two rotations act on very different-dimensional spaces (e.g. fc1 `d_out = 4·d_in`), so for equal `theta` the wider side is a "bigger" rotation (`‖R−I‖ ∝ √d_side`, more DOF exercised) — a real asymmetry the orthogonalization papers over. This sweep asks whether **deliberately breaking the symmetry helps**, via the new knob `optim.poet.lie_ortho_update_rms_side_gamma` (`γ`, default 0; landed [cb3bb2b](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth_update_rms.py#L222)):
+>
+> ```text
+> theta_side = clamp( lr · rho / RMS(W) · (d_side / √(d_out·d_in))^γ ,  max_angle )
+> ```
+>
+> The **geometric-mean reference makes it a pure redistribution** — `factor_out · factor_in = 1`, so each layer's *average* angle (and the §2.11-tuned overall strength `rho`) is unchanged; only the `R_out` vs `R_in` split moves. The out/in angle **ratio** on a layer is `(d_out/d_in)^γ`: for MLP fc1/fc2 (`d_out/d_in = 4` or `¼`) that is `4^γ` (γ=±0.25 → 1.41×, γ=±0.5 → 2×); **attention q/k/v/proj are square → factor 1 at any γ** (the knob only bites the MLP). `γ=0` is bit-for-bit the §2.11 champion; **γ>0 rotates the larger-dim side more, γ<0 less.**
+>
+> On top of the §2.11 champions (the two best inits at `rho=0.30`, `lr=5e-3`, `max_angle=0.024`). Grid: **`γ` {−0.5, −0.25, 0, +0.25, +0.5}** × {`normalized` s2, `mup` α4} = 8 new runs (γ=0 already in hand). 8-GPU, 60m/40tpp, seed 42. Scripts: [gM50](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_urms_side_gamma_gm50.sh) · [gM25](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_urms_side_gamma_gm25.sh) · [gP25](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_urms_side_gamma_gp25.sh) · [gP50](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_urms_side_gamma_gp50.sh). Run names `urms_g{M,P}{25,50}_{norm,mup}_r030_lr5`.
+>
+> **Hypothesis under test:** does any `γ ≠ 0` beat the symmetric baselines (`normalized` 3.4765, `mup` 3.4758)? If yes → in/out symmetry is suboptimal and we learn the sign (`+` favors the wider MLP side, `−` the narrower). If `γ=0` stays best → the symmetric default is empirically justified. ⚠️ single-seed; the margins at stake are ~0.001 (the §2.11 optimum is flat), so read deltas against the ±0.0015 seed/parity noise. **To refresh:** scan `runs/urms_g*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000`); the `poet_update_rms/implied_rho_mean` sparkline now shows the per-side split.
+
+#### `side_gamma` × init  (rho 0.30, lr 5e-3, max_angle 0.024) — `▶` running, blank = not yet run
+
+| γ | `normalized` (s2) | `mup` (α4) |
+|---|---|---|
+| −0.50 |  |  |
+| −0.25 |  |  |
+| **0 (§2.11 champion)** | **3.4765** | **3.4758** |
+| +0.25 |  |  |
+| +0.50 |  |  |
