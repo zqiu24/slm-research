@@ -579,6 +579,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.mup_alpha,
             "--poet-init-scale",
             poet.get("init_scale", 1.0),
+            "--poet-nonpoet-init-scale",
+            poet.get("nonpoet_init_scale", 1.0),
             "--poet-merge-period",
             poet.merge_period,
             "--poet-reinit-period",

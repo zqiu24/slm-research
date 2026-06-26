@@ -54,6 +54,46 @@ _DUMP_POET_PARAMS = True
 # Megatron, and so tests can monkeypatch the walk via ap.replace_linears_with_poet.
 # replace_linears_with_poet is src.optim (CPU-safe, no Megatron at import); the walk
 # itself imports Megatron lazily. _apply_poet_to_chunk uses no apply() closure state.
+def _scale_nonpoet_init(m, factor: float) -> list[str]:
+    """Multiply the init of the AdamW-trained NON-POET layers by ``factor`` in place.
+
+    Scaled: token/position embeddings + the untied ``output_layer`` (LM head).
+    Left alone: POET-wrapped linears (frozen base set by ``--poet-init-scale``),
+    LayerNorm gains (init 1.0), and a tied head (same tensor as an embedding —
+    scaling it once via the embedding is enough). Returns the names scaled, so the
+    one-line run log records exactly what moved. Pure torch (no Megatron) → CPU
+    unit-testable. Backs the ``optim.poet.nonpoet_init_scale`` control: §2.9/§2.10
+    scale POET's FROZEN weights up because POET can't grow them; this asks whether
+    the trainable embedding/head want the same init bump (expected ~no-op).
+    """
+    import torch
+
+    scaled: list[str] = []
+    emb_weights = []
+    emb = getattr(m, "embedding", None)
+    if emb is not None:
+        for attr in ("word_embeddings", "position_embeddings"):
+            sub = getattr(emb, attr, None)
+            w = getattr(sub, "weight", None) if sub is not None else None
+            if w is not None:
+                with torch.no_grad():
+                    w.mul_(factor)
+                emb_weights.append(w)
+                scaled.append(f"embedding.{attr}")
+    out = getattr(m, "output_layer", None)
+    w = getattr(out, "weight", None) if out is not None else None
+    emb_ptrs = {ew.data_ptr() for ew in emb_weights}
+    if (
+        w is not None
+        and type(out).__name__ != "POETMegatronLinear"  # not POET-wrapped
+        and w.data_ptr() not in emb_ptrs  # not tied (shares storage with an embedding)
+    ):
+        with torch.no_grad():
+            w.mul_(factor)
+        scaled.append("output_layer")
+    return scaled
+
+
 def _apply_poet_to_chunk(m, args) -> int:
     block = getattr(args, "poet_block_size", 256)
     block_count = getattr(args, "poet_block_count", None)
@@ -82,7 +122,7 @@ def _apply_poet_to_chunk(m, args) -> int:
     head_dim = getattr(args, "kv_channels", None)
     if head_dim is None:
         head_dim = args.hidden_size // args.num_attention_heads
-    return replace_linears_with_poet(
+    n = replace_linears_with_poet(
         m,
         block_size=block,
         block_count=block_count,
@@ -105,6 +145,15 @@ def _apply_poet_to_chunk(m, args) -> int:
         alternate_every=alternate_every,
         group_experts=group_experts,
     )
+    nonpoet_init_scale = float(getattr(args, "poet_nonpoet_init_scale", 1.0))
+    if nonpoet_init_scale != 1.0:
+        scaled = _scale_nonpoet_init(m, nonpoet_init_scale)
+        logger.info(
+            "[POET] nonpoet_init_scale=%s -> scaled non-POET inits: %s",
+            nonpoet_init_scale,
+            scaled,
+        )
+    return n
 
 
 @register_patch(name="poet_apply_to_model", targets=_TARGET)

@@ -47,6 +47,12 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # touching the spectrum shape (condition number) — the scale axis of the
     # init_type x init_scale study.
     group.add_argument("--poet-init-scale", type=float, default=1.0)
+    # Control: scale the init of the AdamW-trained NON-POET layers (token/position
+    # embeddings + the untied output_layer/LM head) by this factor. 1.0 = current
+    # behavior (only POET frozen weights are scaled via --poet-init-scale). Tests
+    # whether matching the embedding/head init to the POET scale helps — expected
+    # ~no-op since those layers are trainable and grow to their own equilibrium.
+    group.add_argument("--poet-nonpoet-init-scale", type=float, default=1.0)
     group.add_argument("--poet-merge-period", type=int, default=0)
     # Cadence (optimizer steps) at which the block permutation is resampled AND
     # Adam momentum is reset. 0 = fall back to --poet-merge-period (legacy: fold,
