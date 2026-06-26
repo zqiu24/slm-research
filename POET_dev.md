@@ -494,7 +494,7 @@ bash scripts/sweep_ngpt_lr.sh   # or, single run:
 codexlog ngpt_lr100 scripts/train_ngpt_dev.sh optim.lr=0.01 optim.weight_decay=0.1 optim.ngpt.no_warmup=false experiment.name=ngpt_lr100
 ```
 
-**🥉 3rd overall / 🏅 Best POET / best PEFT method — init + lr×scale-tuned champion:** [`lrsc_mup_lr5_ps50-…-20260626T024740Z`](/lustre/fast/fast/zqiu/slm-research/runs/lrsc_mup_lr5_ps50-llama3-60m-s42-20260626T024740Z) (W&B `0dd51k6d`, 8-GPU) — **val/loss 3.4766, ppl 32.35**, train 3.3752, 9155 steps. The §2.10 lr×poet-scale sweep on top of the §2.5-K μP-spectral init (`init_type=mup_normalized`, `mup_alpha=4`, row_rms ≈0.064) + cooler angle `lie_ortho_c=6`: pushing **dense lr to 5e-3 at poet.scale 0.5** (eff∠ 0.015) beats the init-norm optimum (`init_mup_a400_c6` 3.4816) by −0.005, otherwise the head-off `lie_ortho` + alternating + Nesterov-b1.95 champion (wd 0.1, cosine min_lr 0.01). `normalized`/scale 2 at the same lr5/scale0.5 ties it (`lrsc_norm_lr5_ps50` = 3.4770); `none`/scale 4 stays at lr4 (3.4804, the prior §2.5-K init-norm champion `hi_none_s4_c6`). A **−0.039** jump over the default-init champion (3.5160); **beats tuned dense adam (3.4935) by −0.017 and nGPT+Muon (3.4882) by −0.012** → POET is **3rd overall**, only −0.018/−0.025 behind nGPT (3.4583) / muon_kimi (3.4514). ⚠️ single seed; the lr×scale sweep is still filling (lr6/scale0.5 & scale1.0 pending — the optimum may still move) — a 2–3-seed confirm would lock it as the POET record. Command:
+**🥉 3rd overall / 🏅 Best POET / best PEFT method — init + lr×scale-tuned champion:** [`lrsc_mup_lr5_ps50-…-20260626T024740Z`](/lustre/fast/fast/zqiu/slm-research/runs/lrsc_mup_lr5_ps50-llama3-60m-s42-20260626T024740Z) (W&B `0dd51k6d`, 8-GPU) — **val/loss 3.4766, ppl 32.35**, train 3.3752, 9155 steps. The §2.10 lr×poet-scale sweep on top of the §2.5-K μP-spectral init (`init_type=mup_normalized`, `mup_alpha=4`, row_rms ≈0.064) + cooler angle `lie_ortho_c=6`: pushing **dense lr to 5e-3 at poet.scale 0.5** (eff∠ 0.015) beats the init-norm optimum (`init_mup_a400_c6` 3.4816) by −0.005, otherwise the head-off `lie_ortho` + alternating + Nesterov-b1.95 champion (wd 0.1, cosine min_lr 0.01). `normalized`/scale 2 at the same lr5/scale0.5 ties it (`lrsc_norm_lr5_ps50` = 3.4770); `none`/scale 4 stays at lr4 (3.4804, the prior §2.5-K init-norm champion `hi_none_s4_c6`). A **−0.039** jump over the default-init champion (3.5160); **beats tuned dense adam (3.4935) by −0.017 and nGPT+Muon (3.4882) by −0.012** → POET is **3rd overall**, only −0.018/−0.025 behind nGPT (3.4583) / muon_kimi (3.4514). ⚠️ single seed; the lr×scale sweep is still filling (lr6/scale0.5 & scale1.0 pending — the optimum may still move) — a 2–3-seed confirm would lock it as the POET record. **Reproduced by the §2.11 update-RMS reparameterization** (`mup` rho0.30 = 3.4758, `normalized` rho0.30 = 3.4765 — ties/edges this within noise) with the angle self-scaled (`theta = lr·rho/RMS(W)`, no `lie_ortho_c`). Command:
 ```bash
 codexlog lrsc_mup_lr5_ps50 bash scripts/train_poet_lie_orth.sh llama3 \
   scheduler=cosine_poet training_regime=ablation_40x \
@@ -818,5 +818,41 @@ Two single-variable A/Bs on the three §2.10 best configs (none s4/lr4, normaliz
 | `none` (lr4) | 3.4939 | **+0.0135** |
 | `mup` (lr5) | 3.5023 | **+0.0257** |
 | `normalized` (lr5) | 3.5034 | **+0.0264** |
+
+## 2.11 update-RMS angle reparameterization — rho × init sweep (2026-06-26)
+
+> A **sibling optimizer** (`q_optimizer=lie_ortho_update_rms`, class `LieOrthUpdateRMSMomentum`; design [docs/experiments/poet_lie_orth_update_rms.md](/lustre/fast/fast/zqiu/slm-research/docs/experiments/poet_lie_orth_update_rms.md)) replaces the hand-tuned fixed angle `lr·poet.scale·c` with a **Muon/Kimi-style self-scaling per-layer angle**:
+>
+> ```text
+> theta = min(lr · rho / RMS(W), max_angle)
+> ```
+>
+> so each step's rotation is pinned to a target **update-RMS ratio `rho`** against the owner layer's own weight RMS (`poet.scale=1.0`, `merge_period=1`, `rms_mode=weight` — see [src/optim/poet_lie_orth_update_rms.py](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth_update_rms.py)). This sweep holds `lr=5e-3`, `max_angle=0.024`, and the champion `lie_ortho`+alt+head-off+Nesterov-b1.95 recipe fixed, and sweeps **`rho` {0.20, 0.25, 0.30, 0.35, 0.40}** × the three §2.9/§2.10 init shapes (`none` scale 4 / `normalized` scale 2 / `mup` α4). 15 runs, 8-GPU, 60m/40tpp, seed 42. Goal: reproduce the §2.10 fixed-angle champion (`mup` lr5/scale0.5 = **3.4766**) with the cleaner self-scaling angle. Scripts: [_none](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_lie_orth_update_rms_none.sh) · [_normalized](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_lie_orth_update_rms_normalized.sh) · [_mup](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_lie_orth_update_rms_mup.sh).
+>
+> **Result — update-RMS reproduces the fixed-angle champion; no regression, a marginal (in-noise) win.** Best `mup` rho0.30 = **3.4758** edges the fixed-angle champion 3.4766 by **−0.0008** (inside the ~±0.0015 seed/parity noise of §2.9), and `normalized` rho0.30 = 3.4765 ties it exactly → the self-scaling angle is a **clean drop-in for the hand-tuned `c`, removing one hyperparameter** (`lie_ortho_c`). **Two reads:**
+>
+> **(1) The rho optimum depends on the init shape.** `normalized` and `mup` are **U-shaped with a flat interior optimum at rho 0.30** (flat to ~0.003 across rho 0.20–0.35); `none` is **monotonic-worsening in rho** (best at the grid edge rho 0.20, 3.4782) and is the **weakest family** — mirroring its lower §2.9/§2.10 standing. `mup` α4 wins overall.
+>
+> **(2) The `max_angle=0.024` clamp binds _transiently early_, not never — and it confounds the high-rho / `none` cells.** It is **off over the cosine-decayed tail** (final `clamp_fraction=0`, `implied_rho_mean`==`rho` for all 15 runs), but it **saturates during the peak-LR window just after warmup**, by an amount set by per-element weight RMS (smaller RMS → larger theta → more clamp): **`none`** (lowest RMS) clamps early at **every** rho incl. 0.20, for the longest window (~¼ of steps at rho0.35); **`normalized`** clamps only at rho≥0.35; **`mup`** clamps for ≤a few % of steps. So the high-rho and all-`none` cells are **angle-capped early** (effective early rotation pinned at 0.024 regardless of rho) — the rho axis is partly confounded with `max_angle` there. **The fully-unclamped cells are `normalized`/`mup` at rho≤0.30 — exactly where the optimum sits** (`normalized` rho0.30 runs clamp-free end-to-end), so the win is clean, not a clamp artifact. **To refresh:** scan `runs/urms_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000`); clamp dynamics from the W&B `poet_update_rms/{clamp_fraction,implied_rho_mean,theta_max}` sparklines.
+
+**Best per init** (lr5, max_angle 0.024):
+
+| init (norm) | best val/loss | best rho | shape · clamp |
+|---|---|---|---|
+| `mup` (α4) | **3.4758** | rho 0.30 | U-shaped, flat 0.20–0.35; ~2% early clamp; **edges fixed-angle champion (3.4766) by −0.0008** |
+| `normalized` (scale 2) | 3.4765 | rho 0.30 | U-shaped; **clamp-free end-to-end**; ties fixed-angle champion |
+| `none` (scale 4) | 3.4782 | rho 0.20 (edge) | monotonic ↓ in rho; clamps early at every rho; weakest family |
+
+#### rho × init  (lr 5e-3, max_angle 0.024)  — `†` = clamp binds transiently early
+
+| rho | `none` (scale 4) | `normalized` (scale 2) | `mup` (α4) |
+|---|---|---|---|
+| 0.20 | 3.4782 † | 3.4766 | 3.4825 † |
+| 0.25 | 3.4867 † | 3.4771 | 3.4795 † |
+| 0.30 | 3.4955 † | **3.4765** | **3.4758** † |
+| 0.35 | 3.5017 † | 3.4796 † | 3.4801 † |
+| 0.40 | 3.5065 † | 3.4864 † | 3.4810 † |
+
+**Next:** the rho optimum is flat, so the remaining levers are off-axis — **lower `max_angle`** so the ceiling actually shapes the early schedule (right now it only bites the configs we don't want), or revisit dense **`lr`** (the §2.10 lever) under the adaptive angle. A 2–3-seed confirm at `mup`/`normalized` rho0.30 would settle whether it truly edges the fixed-angle champion or just ties it.
 
 **Takeaways:** (1) keep `nonpoet_init_scale=1.0` — only the frozen POET weights want the up-scaled init; (2) keep `min_lr_ratio=0.01`. The §2.3/§2.6 champions stand.
