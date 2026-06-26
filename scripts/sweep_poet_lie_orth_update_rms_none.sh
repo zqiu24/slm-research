@@ -7,9 +7,9 @@
 # through poet_update_rms/clamp_fraction.
 #
 # Grid:
-#   lr  = {4,5,6}e-3
+#   lr  = 5e-3
 #   rho = {0.20,0.25,0.30,0.35,0.40}
-# = 15 sequential 8-GPU runs.
+# = 5 sequential 8-GPU runs.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
@@ -35,20 +35,17 @@ optim.poet.lie_ortho_nesterov=true optim.poet.lie_b1=0.95 \
 optim.poet.lie_ortho_distributed=true optim.poet.init_type=none \
 optim.poet.init_scale=4.0 optim.poet.lie_ortho_max_angle=0.024 \
 optim.poet.lie_ortho_rms_mode=weight optim.poet.scale=1.0 \
-cluster.gpus_per_node=8"
+optim.lr=0.005 cluster.gpus_per_node=8"
 
 run () {
   codexlog "$1" scripts/train_poet_lie_orth_update_rms.sh llama3 $HELD \
-    optim.lr="$2" optim.poet.lie_ortho_update_rms="$3" experiment.name="$1" \
+    optim.poet.lie_ortho_update_rms="$2" experiment.name="$1" \
     "${EXTRA_ARGS[@]}"
 }
 
-LRS=("lr4:0.004" "lr5:0.005" "lr6:0.006")
 RHOS=("r020:0.20" "r025:0.25" "r030:0.30" "r035:0.35" "r040:0.40")
 for rho in "${RHOS[@]}"; do
-  for lr in "${LRS[@]}"; do
-    run "urms_none_${rho%%:*}_${lr%%:*}" "${lr##*:}" "${rho##*:}"
-  done
+  run "urms_none_${rho%%:*}_lr5" "${rho##*:}"
 done
 
-echo "=== POET update-RMS sweep complete: init none, init_scale 4.0, 15 runs ==="
+echo "=== POET update-RMS sweep complete: init none, init_scale 4.0, lr5, 5 runs ==="
