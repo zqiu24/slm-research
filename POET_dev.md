@@ -918,3 +918,19 @@ Two single-variable A/Bs on the three §2.10 best configs (none s4/lr4, normaliz
 W&B ids (8-GPU, seed 42): r0.1 — alt `359jhtfo`, both `vjxf1hbx`, in `uq6omaf0`, out `xawn9x2t`; r0.2 — alt `bd2zlvvc`, both `ul1t28cw`, in `6egdb1ua`, out `5a8z409s`; r0.4 — alt `sia07mi8`, both `90odmj6k`, in `rkprnvi6`, out `4dirkeav`.
 
 **Next (Pion):** the magnitude optimum sits at the cooler grid edge for the `both` side → a finer `pion_rms` {0.05, 0.075, 0.1, 0.15} scan at `side=both` would pin it; `pion_momentum`/`pion_degree` remain untouched. But Pion is firmly last on this cohort, so further tuning is low-priority.
+
+## 2.14 update-RMS × cross-side decorrelation — `lambda` sweep (live, filling)
+
+The "split, with a scale": the §J.3 partial-λ cross-side decorrelation, ported into the
+update-RMS champion (`q_optimizer=lie_ortho_update_rms`, alternating path). Stacked on the
+**symmetric** baseline (`mup_normalized` α4 / ρ0.30 / **side_γ=0** / lr5 / max∠0.024) so the
+measured delta is decorrelation alone. `mode=symmetric`, `renorm=true`, all layers
+(`cos_threshold=0`); λ=1.0 excluded (catastrophic in §J.3). **Baseline = 3.4758** (§2.11).
+Run: `bash scripts/sweep_update_rms_decorrelate.sh`.
+
+| `decorrelate_lambda` | run dir / W&B | val/loss | Δ vs 3.4758 |
+|---|---|---|---|
+| 0 (baseline) | §2.11 `mup` ρ0.30 | 3.4758 | — |
+| 0.25 | ▶ | | |
+| 0.50 | ▶ | | |
+| 0.75 | ▶ | | |
