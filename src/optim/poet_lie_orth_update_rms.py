@@ -63,6 +63,12 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         dp_world_size: int = 1,
         dp_rank: int = 0,
         dp_group=None,
+        decorrelate_sides: bool = False,
+        decorrelate_mode: str = "in_off_out",
+        decorrelate_lambda: float = 1.0,
+        decorrelate_renorm: bool = False,
+        decorrelate_cos_threshold: float = 0.0,
+        layer_pairs=None,
         adamw_betas=(0.9, 0.95),
         adamw_eps: float = 1e-8,
         adamw_wd: float = 0.0,
@@ -77,6 +83,11 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
             raise ValueError(
                 "lie_ortho_update_rms currently supports rms_mode='weight' only; "
                 "rms_mode='direction' is reserved for an exact diagnostic implementation."
+            )
+        if decorrelate_mode not in ("in_off_out", "out_off_in", "symmetric"):
+            raise ValueError(
+                "decorrelate_mode must be 'in_off_out' | 'out_off_in' | 'symmetric', "
+                f"got {decorrelate_mode!r}"
             )
         if not alternating:
             raise ValueError("LieOrthUpdateRMSMomentum requires alternating=True")
@@ -108,6 +119,19 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         self._dp_world_size = int(dp_world_size)
         self._dp_rank = int(dp_rank)
         self.dp_group = dp_group
+        # Cross-side decorrelation ("the split, with a scale"): project the active
+        # written generator off the inactive side's maintained-momentum direction so
+        # cos(D_out, D_in) -> 0. lambda = partial-projection fraction (0=off, 1=full);
+        # renorm = restore the active side's realized ||D|| (direction-only change);
+        # cos_threshold = module-selective gate. Ported from LieOrthMomentum; alternating
+        # path only (this optimizer is always alternating). layer_pairs entries are
+        # (out_param, in_param, weight, bsz_out, bsz_in).
+        self.decorrelate_sides = bool(decorrelate_sides)
+        self.decorrelate_mode = decorrelate_mode
+        self.decorrelate_lambda = float(decorrelate_lambda)
+        self.decorrelate_renorm = bool(decorrelate_renorm)
+        self.decorrelate_cos_threshold = float(decorrelate_cos_threshold)
+        self._decorr_pairs = list(layer_pairs) if layer_pairs else []
         self.last_update_rms_angles: dict[int, torch.Tensor] = {}
         self.last_update_rms_stats: dict[str, torch.Tensor] = {}
         defaults = dict(
@@ -298,6 +322,83 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         for off, n, p in slices:
             p.add_(buf[off : off + n].view_as(p).to(p.dtype), alpha=1.0)
 
+    def _decorrelate_buf_alternating(self, buf, slices, active):
+        """Alternating-mode cross-side decorrelation. Only the ACTIVE side is written this
+        step (the inactive side's buf slice is zero), so source the inactive side's
+        weight-space direction from its MAINTAINED momentum (lie_m) and project the active
+        written generator off it: "don't keep pushing along the direction the other side
+        just moved." Modifies only the active side. `decorrelate_mode` selects WHICH
+        active-side steps are treated: in_off_out -> in-write steps; out_off_in -> out-write
+        steps; symmetric -> every step. Mutates buf in place. (Ported from
+        LieOrthMomentum; slices here are 3-tuples (off, n, p).)"""
+        if not self._decorr_pairs or active is None:
+            return
+        from src.diag.poet_coordination_diag import block_diag_skew, side_directions
+
+        off_by_id = {id(p): (off, n) for off, n, p in slices}
+        eps = 1e-12
+        mode = self.decorrelate_mode
+        matched = 0
+        for out_p, in_p, w, bsz_out, bsz_in in self._decorr_pairs:
+            so, si = off_by_id.get(id(out_p)), off_by_id.get(id(in_p))
+            if so is None or si is None:
+                continue
+            matched += 1
+            (oo, no), (oi, ni) = so, si
+            W = w.detach().to(torch.float32)
+            if active == "in":
+                if mode == "out_off_in":
+                    continue  # would modify the inactive (unwritten) out side -> no-op
+                act_off, act_n, act_bsz, act_p = oi, ni, bsz_in, in_p
+                inact_p, inact_bsz = out_p, bsz_out
+            else:  # active == "out"
+                if mode == "in_off_out":
+                    continue
+                act_off, act_n, act_bsz, act_p = oo, no, bsz_out, out_p
+                inact_p, inact_bsz = in_p, bsz_in
+            m_inact = self.state[inact_p].get("lie_m")
+            if m_inact is None:
+                continue
+            A_act = vec_to_skew(buf[act_off : act_off + act_n].view(act_p.shape[0], -1), act_bsz)
+            A_inact = orthogonalize_skew_direction(
+                vec_to_skew(-m_inact.float(), inact_bsz),
+                method=self.ortho_method,
+                ns_steps=self.ortho_ns_steps,
+            )
+            if active == "in":
+                d_out, d_in = side_directions(A_inact, A_act, W)
+                d_act = d_in  # the active (in) side's weight-space direction
+                g = block_diag_skew(W.transpose(-2, -1) @ d_out, act_bsz)
+            else:
+                d_out, d_in = side_directions(A_act, A_inact, W)
+                d_act = d_out  # the active (out) side's weight-space direction
+                g = block_diag_skew(d_in @ W.transpose(-2, -1), act_bsz)
+            if self.decorrelate_cos_threshold > 0.0:
+                denom = (d_out.norm() * d_in.norm()).clamp_min(eps)
+                if (
+                    abs(float((d_out.flatten() @ d_in.flatten()) / denom))
+                    < self.decorrelate_cos_threshold
+                ):
+                    continue
+            c = (A_act.flatten() @ g.flatten()) / (g.flatten() @ g.flatten()).clamp_min(eps)
+            A_act = A_act - self.decorrelate_lambda * c * g
+            if self.decorrelate_renorm:
+                if active == "in":
+                    _, d_act_new = side_directions(A_inact, A_act, W)
+                else:
+                    d_act_new, _ = side_directions(A_act, A_inact, W)
+                A_act = A_act * (d_act.norm() / d_act_new.norm().clamp_min(eps))
+            buf[act_off : act_off + act_n] = skew_to_vec(A_act, act_bsz).reshape(-1)
+        if matched == 0 and not getattr(self, "_decorr_warned", False):
+            self._decorr_warned = True
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "[decorrelate/alt] decorrelate_sides=True but 0/%d pairs matched the "
+                "optimizer's slices — decorrelation is a NO-OP (param identity mismatch).",
+                len(self._decorr_pairs),
+            )
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
@@ -312,6 +413,8 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
             import torch.distributed as dist
 
             dist.all_reduce(buf, group=self.dp_group)
+        if self.decorrelate_sides:
+            self._decorrelate_buf_alternating(buf, slices, active)
         self._apply_skew_update_buffer(buf, slices)
 
         for group in self.param_groups:

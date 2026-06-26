@@ -81,6 +81,9 @@ ignore = ["E501"]
 # LieOrthMomentum (skew-direction orthogonalization): A_dir/X are the standard matrix names.
 "src/optim/poet_lie_orth.py" = ["N803", "N806"]
 "tests/unit/test_poet_lie_orth.py" = ["N806"]
+# LieOrthUpdateRMSMomentum: same matrix naming conventions as LieOrthMomentum.
+"src/optim/poet_lie_orth_update_rms.py" = ["N803", "N806"]
+"tests/unit/test_poet_lie_orth_update_rms_decorrelate.py" = ["N806"]
 # Rotation diagnostics: R/Q are the standard rotation/skew matrix names.
 "src/diag/rotation_diag.py" = ["N803", "N806"]
 "tests/unit/test_diag_rotation.py" = ["N806"]
