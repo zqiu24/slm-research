@@ -109,6 +109,9 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-lie-ortho-c", type=float, default=0.01)
     group.add_argument("--poet-lie-ortho-update-rms", type=float, default=0.2)
     group.add_argument("--poet-lie-ortho-max-angle", type=float, default=0.024)
+    # Update-RMS in/out asymmetry: scale active side's target rho by
+    # (d_side / sqrt(d_out*d_in)) ** gamma (geometric-mean ref => pure redistribution).
+    group.add_argument("--poet-lie-ortho-update-rms-side-gamma", type=float, default=0.0)
     group.add_argument(
         "--poet-lie-ortho-rms-mode",
         choices=["weight", "direction"],

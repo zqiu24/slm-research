@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 import torch
 import torch.nn as nn
@@ -174,6 +176,61 @@ def test_clamp_path_records_max_angle_and_applies_it():
     assert opt.last_update_rms_angles[id(p)] == pytest.approx(0.024)
     assert p.data.abs().item() == pytest.approx(0.024, rel=0.05)
     assert opt.last_update_rms_stats["poet_update_rms/clamp_fraction"] == pytest.approx(1.0)
+
+
+def test_side_gamma_default_is_symmetric_noop():
+    """gamma=0 must leave the angle bit-for-bit at lr*rho/RMS (champion path)."""
+    from poet_torch import alt_state
+
+    # Rectangular weight (fan_out=8 > fan_in=2) so a nonzero gamma WOULD bite.
+    weight = nn.Parameter(torch.full((8, 2), 0.064), requires_grad=False)
+    p = nn.Parameter(torch.zeros(1, 1))
+    p.grad = torch.tensor([[1.0]])
+    opt = LieOrthUpdateRMSMomentum(
+        [dict(params=[p], use_skew=True, side="out", weight=weight, block_size=2, lr=0.005)],
+        b1=0.0,
+        update_rms=0.2,
+        max_angle=0.5,
+        ortho_method="spectral",
+        ortho_ns_steps=20,
+    )
+    alt_state.set_iteration(0)
+    opt.step()
+    assert opt.last_update_rms_angles[id(p)] == pytest.approx(0.015625)
+
+
+def test_side_gamma_redistributes_out_vs_in_and_preserves_geomean():
+    """gamma>0: out side (fan_out>fan_in) rotates more, in side less, product==symmetric^2."""
+    from poet_torch import alt_state
+
+    # fc1-like: fan_out=8, fan_in=2 -> sqrt(d_out*d_in)=4. gamma=0.5:
+    #   out factor = (8/4)^0.5 = sqrt(2); in factor = (2/4)^0.5 = 1/sqrt(2); product == 1.
+    weight = nn.Parameter(torch.full((8, 2), 0.064), requires_grad=False)
+    base = 0.005 * 0.2 / 0.064  # symmetric angle = 0.015625
+
+    def angle_for(side, gamma):
+        p = nn.Parameter(torch.zeros(1, 1))
+        p.grad = torch.tensor([[1.0]])
+        opt = LieOrthUpdateRMSMomentum(
+            [dict(params=[p], use_skew=True, side=side, weight=weight, block_size=2, lr=0.005)],
+            b1=0.0,
+            update_rms=0.2,
+            max_angle=0.5,
+            side_gamma=gamma,
+            ortho_method="spectral",
+            ortho_ns_steps=20,
+        )
+        alt_state.set_iteration(0 if side == "out" else 1)
+        opt.step()
+        return float(opt.last_update_rms_angles[id(p)])
+
+    a_out = angle_for("out", 0.5)
+    a_in = angle_for("in", 0.5)
+    assert a_out == pytest.approx(base * math.sqrt(2.0))
+    assert a_in == pytest.approx(base / math.sqrt(2.0))
+    # geometric mean of the two side angles equals the symmetric angle (pure redistribution).
+    assert math.sqrt(a_out * a_in) == pytest.approx(base)
+    assert a_out > base > a_in
 
 
 def test_direction_rms_mode_rejected_before_training():

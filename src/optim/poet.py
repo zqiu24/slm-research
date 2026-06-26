@@ -778,6 +778,7 @@ def get_megatron_poet_lie_momentum_optimizer(
             param_groups,
             update_rms=getattr(config, "poet_lie_ortho_update_rms", 0.2),
             max_angle=getattr(config, "poet_lie_ortho_max_angle", 0.024),
+            side_gamma=getattr(config, "poet_lie_ortho_update_rms_side_gamma", 0.0),
             rms_mode=getattr(config, "poet_lie_ortho_rms_mode", "weight"),
             ortho_method=getattr(config, "poet_lie_ortho_method", "muon"),
             ortho_ns_steps=getattr(config, "poet_lie_ortho_ns_steps", 5),

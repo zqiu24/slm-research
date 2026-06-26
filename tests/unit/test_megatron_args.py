@@ -445,6 +445,7 @@ def test_poet_argv_emits_lie_ortho_update_rms_knobs():
                 "q_optimizer": "lie_ortho_update_rms",
                 "lie_alternating": True,
                 "lie_ortho_update_rms": 0.25,
+                "lie_ortho_update_rms_side_gamma": 0.5,
                 "lie_ortho_max_angle": 0.02,
                 "lie_ortho_rms_mode": "weight",
             }
@@ -452,6 +453,7 @@ def test_poet_argv_emits_lie_ortho_update_rms_knobs():
     )
     assert args[args.index("--poet-q-optimizer") + 1] == "lie_ortho_update_rms"
     assert args[args.index("--poet-lie-ortho-update-rms") + 1] == "0.25"
+    assert args[args.index("--poet-lie-ortho-update-rms-side-gamma") + 1] == "0.5"
     assert args[args.index("--poet-lie-ortho-max-angle") + 1] == "0.02"
     assert args[args.index("--poet-lie-ortho-rms-mode") + 1] == "weight"
     assert "--poet-lie-alternating" in args
@@ -464,6 +466,7 @@ def test_poet_lie_orth_update_rms_yaml_emits_expected_knobs():
     assert args["--poet-q-optimizer"] == "lie_ortho_update_rms"
     assert args["--poet-scale"] == "1.0"
     assert args["--poet-lie-ortho-update-rms"] == "0.2"
+    assert args["--poet-lie-ortho-update-rms-side-gamma"] == "0.0"
     assert args["--poet-lie-ortho-max-angle"] == "0.024"
     assert args["--poet-lie-ortho-rms-mode"] == "weight"
     assert args["--poet-lie-alternating"] is True

@@ -51,6 +51,7 @@ optim:
     lie_alternating: true
     lie_alternate_every: 1
     lie_ortho_update_rms: 0.2
+    lie_ortho_update_rms_side_gamma: 0.0  # in/out angle asymmetry; 0 = symmetric champion
     lie_ortho_max_angle: 0.024
     lie_ortho_rms_mode: weight
     lie_ortho_method: muon

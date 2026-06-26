@@ -615,6 +615,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet.get("lie_ortho_c", 0.01),
             "--poet-lie-ortho-update-rms",
             poet.get("lie_ortho_update_rms", 0.2),
+            "--poet-lie-ortho-update-rms-side-gamma",
+            poet.get("lie_ortho_update_rms_side_gamma", 0.0),
             "--poet-lie-ortho-max-angle",
             poet.get("lie_ortho_max_angle", 0.024),
             "--poet-lie-ortho-rms-mode",

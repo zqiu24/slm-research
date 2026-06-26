@@ -13,6 +13,8 @@ learning rate, so skew updates are scattered with alpha=1.0.
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 from src.diag.skew_conditioning import block_size_from_nelems, skew_to_vec, vec_to_skew
@@ -51,6 +53,7 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         alternate_every: int = 1,
         update_rms: float = 0.2,
         max_angle: float = 0.024,
+        side_gamma: float = 0.0,
         rms_mode: str = "weight",
         ortho_method: str = "muon",
         ortho_ns_steps: int = 5,
@@ -87,6 +90,15 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         self._alt_step = 0
         self.update_rms = float(update_rms)
         self.max_angle = float(max_angle)
+        # Per-side angle redistribution exponent (in/out asymmetry). The active
+        # side's target rho is scaled by (d_side / sqrt(d_out * d_in)) ** side_gamma,
+        # where d_out/d_in are the owner weight's fan-out/fan-in. The geometric-mean
+        # reference makes this a PURE redistribution between R_out and R_in
+        # (factor_out * factor_in == 1), so the per-layer average angle — and hence
+        # the overall update strength set by ``update_rms`` — is unchanged. gamma=0
+        # (default) => factor 1 on every side => the symmetric champion. gamma>0
+        # rotates the larger-dim side more (e.g. fc1's d_out=4*d_in), gamma<0 less.
+        self.side_gamma = float(side_gamma)
         self.rms_mode = rms_mode
         self.ortho_method = ortho_method
         self.ortho_ns_steps = int(ortho_ns_steps)
@@ -161,6 +173,20 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
                     else:
                         v.mul_(b2).add_(g * g, alpha=1 - b2)
 
+    def _side_factor(self, group) -> float:
+        """Per-side angle multiplier (d_side / sqrt(d_out*d_in)) ** side_gamma.
+
+        Returns 1.0 when side_gamma == 0 or the owner weight is square, so the
+        symmetric (champion) path is bit-for-bit unchanged.
+        """
+        if self.side_gamma == 0.0:
+            return 1.0
+        w = group["weight"]
+        d_out, d_in = int(w.shape[0]), int(w.shape[1])
+        d_side = d_out if group["side"] == "out" else d_in
+        d_ref = math.sqrt(max(d_out * d_in, 1))
+        return (d_side / d_ref) ** self.side_gamma
+
     def _iter_skew_params(self):
         for group in self.param_groups:
             if not group["use_skew"]:
@@ -218,14 +244,15 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
                 nb = a_dir.shape[0]
                 p = items[i][0]
                 denom = rms(group["weight"].detach())
+                eff_update_rms = self.update_rms * self._side_factor(group)
                 raw_theta = (
                     torch.as_tensor(group["lr"], dtype=torch.float32, device=denom.device)
-                    * self.update_rms
+                    * eff_update_rms
                     / denom.clamp_min(1e-12)
                 )
                 theta = compute_update_rms_angle(
                     lr=group["lr"],
-                    update_rms=self.update_rms,
+                    update_rms=eff_update_rms,
                     denom=denom,
                     max_angle=self.max_angle,
                 )
