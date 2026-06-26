@@ -763,7 +763,7 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 
 > On top of §2.9 (which fixed each shape's frozen-base **NORM** optimum), this sweep **pins the best init + angle** (`none` init_scale 4 / `normalized` init_scale 2 / `mup` mup_alpha 4, all at `c6`) and sweeps the two **optimizer** levers: dense **`optim.lr` {2,3,4,5,6}e-3** × **`optim.poet.scale` {0.2, 0.5, 1.0}** (8-GPU dp=8, 60m/40tpp, seed 42, champion `lie_ortho`+alt+head-off+Nesterov-b1.95 recipe). 15 cells/shape; **`—`/blank = still running/queued** (the `lr6` row is in flight). **eff∠ = lr·poet_scale·c6 varies per cell** (scale-0.2 col = 1.2·lr → 0.0024–0.0072; scale-0.5 = 3·lr → 0.006–0.018; scale-1.0 = 6·lr → 0.012–0.036). The center cell (lr 4e-3 / scale 0.5 = eff∠ 0.012) reproduces each §2.9 best. Scripts: [_none](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_lrscale_none.sh) · [_normal](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_lrscale_normal.sh) · [_mup](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_lrscale_mup.sh).
 >
-> **Best so far: `mup` lr5/scale0.5 = 3.4766 and `normalized` lr5/scale0.5 = 3.4770** — both **beat the §2.9 ~3.480 plateau (and the `none` champion 3.4804) by ~0.003–0.004**, by pushing **dense lr up to 5e-3 at scale 0.5** (eff∠ 0.015 > the 0.012 default cell). ⚠️ single-seed; sweep incomplete (lr6/scale0.5 & scale1.0 pending — the optimum may still move). Two more reads: **(1) scale 1.0 diverges at high lr** (eff∠ ≥ 0.024: lr4/s1.0 ≈ 5.03, lr5/s1.0 ≈ 6.9 across all shapes) — confirms the ~0.024 angle ceiling. **(2) Iso-angle disentangling at eff∠ 0.012:** lr4/scale0.5 (3.4804) beats lr2/scale1.0 (3.5142) by **−0.034 at the SAME rotation angle** → the **dense lr is a real lever independent of the rotation magnitude** (higher dense-lr + lower poet-scale wins). **To refresh:** scan `runs/lrsc_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000`).
+> **Best so far: `mup` lr5/scale0.5 = 3.4766 and `normalized` lr5/scale0.5 = 3.4770** — both **beat the §2.9 ~3.480 plateau (and the `none` champion 3.4804) by ~0.003–0.004**, by pushing **dense lr up to 5e-3 at scale 0.5** (eff∠ 0.015 > the 0.012 default cell). ⚠️ single-seed; only the lr6/scale1.0 cells now pending. **The scale-0.5 lr-optimum is bracketed (interior, not grid-edge):** `none` peaks at lr4 (3.4804) and `normalized`/`mup` at lr5 (3.4770/3.4766), each turning back up by lr6 (3.4930 / 3.4816 / 3.4813). Two more reads: **(1) scale 1.0 diverges at high lr** (eff∠ ≥ 0.024: lr4/s1.0 ≈ 5.03, lr5/s1.0 ≈ 6.9 across all shapes) — confirms the ~0.024 angle ceiling. **(2) Iso-angle disentangling at eff∠ 0.012:** lr4/scale0.5 (3.4804) beats lr2/scale1.0 (3.5142) by **−0.034 at the SAME rotation angle** → the **dense lr is a real lever independent of the rotation magnitude** (higher dense-lr + lower poet-scale wins). **To refresh:** scan `runs/lrsc_*/**/wandb-summary.json` for `val/loss` (`_step ≥ 9000`).
 
 #### `init = none`  (init_scale 4, c6) — lr × poet.scale
 
@@ -773,7 +773,7 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | 3e-3 | 3.5727 | 3.4943 | 3.5292 |
 | 4e-3 | 3.5297 | **3.4804** | 5.0334 |
 | 5e-3 | 3.5023 | 3.4809 | 6.8212 |
-| 6e-3 |  |  |  |
+| 6e-3 | 3.4823 | 3.4930 |  |
 
 #### `init = normalized`  (init_scale 2, c6) — lr × poet.scale
 
@@ -783,7 +783,7 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | 3e-3 | 3.5764 | 3.4938 | 3.5212 |
 | 4e-3 | 3.5324 | 3.4809 | 5.1995 |
 | 5e-3 | 3.5056 | **3.4770** | 6.9444 |
-| 6e-3 | 3.4884 |  |  |
+| 6e-3 | 3.4884 | 3.4816 |  |
 
 #### `init = mup`  (mup_alpha 4, c6) — lr × poet.scale
 
@@ -793,4 +793,4 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | 3e-3 | 3.5799 | 3.4962 | 3.5342 |
 | 4e-3 | 3.5349 | 3.4811 | 4.9388 |
 | 5e-3 | 3.5083 | **3.4766** | 6.9055 |
-| 6e-3 | 3.4905 |  |  |
+| 6e-3 | 3.4905 | 3.4813 |  |
