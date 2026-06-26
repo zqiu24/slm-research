@@ -798,3 +798,25 @@ W&B keys: `weightnorm/L{i}/{type}/{row,col,row_rms,col_rms}/mean` + per-layer
 | 4e-3 | 3.5349 | 3.4811 | 4.9388 |
 | 5e-3 | 3.5083 | **3.4766** | 6.9055 |
 | 6e-3 | 3.4905 | 3.4813 |  |
+
+### Controls (2026-06-26) — both NEGATIVE; champions unchanged
+
+Two single-variable A/Bs on the three §2.10 best configs (none s4/lr4, normalized s2/lr5, mup α4/lr5; baselines **3.4804 / 3.4770 / 3.4766**). Both confirm the current recipe.
+
+**(a) Scale the NON-POET layers' init too** ([sweep_poet_nonpoet_init.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_nonpoet_init.sh), `optim.poet.nonpoet_init_scale` = the POET factor). §2.9 scales POET's FROZEN weights up because POET can't grow them; this asks whether the AdamW-trained embedding + (untied) LM head want the same init bump. **They do NOT — it *hurts*, and the harm scales with the factor** → the init lever is **specifically about the frozen weights**, not a global activation-scale effect. A clean mechanism-confirming control (stronger than the predicted null: the trainable layers have their own default-init optimum, and AdamW does *not* fully wash out a 2–4× init bump):
+
+| init (nonpoet factor) | val/loss | Δ vs baseline |
+|---|---|---|
+| `none` (×4) | 3.5249 | **+0.0445** (gives back almost all the init-scale gain → ~default-init 3.5160 level) |
+| `mup` (×4) | 3.4957 | **+0.0191** |
+| `normalized` (×2) | 3.4873 | **+0.0103** (smallest factor, smallest harm) |
+
+**(b) `min_lr_ratio = 0.1` vs the champion 0.01** ([sweep_poet_minlr0p1_best.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_minlr0p1_best.sh), only the cosine_poet floor changes). **The 1% floor (0.01) wins at every shape** — confirms the §2.5 floor finding holds at the init-scaled optima, and the cost is larger at the higher dense-lr (5e-3) configs:
+
+| init | val/loss @0.1 | Δ vs baseline (@0.01) |
+|---|---|---|
+| `none` (lr4) | 3.4939 | **+0.0135** |
+| `mup` (lr5) | 3.5023 | **+0.0257** |
+| `normalized` (lr5) | 3.5034 | **+0.0264** |
+
+**Takeaways:** (1) keep `nonpoet_init_scale=1.0` — only the frozen POET weights want the up-scaled init; (2) keep `min_lr_ratio=0.01`. The §2.3/§2.6 champions stand.
