@@ -61,6 +61,7 @@ optim:
     lie_ortho_distributed: true
     head_aligned_attn: false
     learnable_scale: false  # trainable per-layer scalar gain g (W_eff = g·R_out·W₀·R_in)
+    gain_lr_mult: 1.0  # AdamW LR multiplier for the gain g (gain LR = optim.lr × this)
     single_step_fast: true
     single_step_native: true
     train_output_rotation: true

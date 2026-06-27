@@ -287,3 +287,71 @@ def test_gain_round_trips_through_state_dict():
     fresh = ScaledPOETLinear(8, 16, block_count=1, bias=False, dtype=torch.float32)
     fresh.load_state_dict(sd)
     assert float(fresh.gain) == pytest.approx(1.37)
+
+
+def test_gain_group_lr_scaled_by_gain_lr_mult():
+    model = _TinyScaledPoet()
+    groups = _build_lie_update_rms_param_groups([model], lr=0.005, min_lr=1e-5, gain_lr_mult=2.0)
+    gain_groups = [
+        g for g in groups if not g["use_skew"] and any(p is model.gain for p in g["params"])
+    ]
+    assert len(gain_groups) == 1
+    g = gain_groups[0]
+    assert g["lr"] == pytest.approx(0.005 * 2.0)
+    assert g["max_lr"] == pytest.approx(0.005 * 2.0)
+    assert g["min_lr"] == pytest.approx(1e-5 * 2.0)
+
+
+def test_gain_lr_mult_default_is_unscaled():
+    model = _TinyScaledPoet()
+    groups = _build_lie_update_rms_param_groups([model], lr=0.005, min_lr=1e-5)
+    gain_groups = [
+        g for g in groups if not g["use_skew"] and any(p is model.gain for p in g["params"])
+    ]
+    assert gain_groups[0]["max_lr"] == pytest.approx(0.005)
+    assert gain_groups[0]["min_lr"] == pytest.approx(1e-5)
+
+
+def test_cli_gain_lr_mult_parsed_as_float():
+    parser = add_slm_args(argparse.ArgumentParser())
+    ns = parser.parse_args(["--slm-config-path", "x", "--poet-gain-lr-mult", "2.5"])
+    assert ns.poet_gain_lr_mult == pytest.approx(2.5)
+    ns2 = parser.parse_args(["--slm-config-path", "x"])
+    assert ns2.poet_gain_lr_mult == pytest.approx(1.0)
+
+
+def test_gain_lr_mult_emitted_only_when_set():
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    def _poet_cfg(mult):
+        return OmegaConf.create(
+            {
+                "optim": {
+                    "type": "poet",
+                    "lr": 5e-3,
+                    "weight_decay": 0.1,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8,
+                    "poet": {
+                        "block_count": 1,
+                        "cache_mode": "none",
+                        "init_type": "mup_normalized",
+                        "mup_alpha": 4.0,
+                        "merge_period": 1,
+                        "scale": 1.0,
+                        "single_step_fast": True,
+                        "single_step_native": True,
+                        "lie_alternating": True,
+                        "learnable_scale": True,
+                        "gain_lr_mult": mult,
+                    },
+                }
+            }
+        )
+
+    args2 = _optimizer_args(_poet_cfg(2.0))
+    assert "--poet-gain-lr-mult" in args2
+    assert "2.0" in args2
+    assert "--poet-gain-lr-mult" not in _optimizer_args(_poet_cfg(1.0))

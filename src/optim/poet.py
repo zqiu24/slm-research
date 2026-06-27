@@ -296,7 +296,7 @@ def _sync_oft_R_grads_across_dp(layers) -> None:  # noqa: N802
         g.copy_(synced)
 
 
-def _build_lie_update_rms_param_groups(model_chunks, lr, min_lr):
+def _build_lie_update_rms_param_groups(model_chunks, lr, min_lr, gain_lr_mult=1.0):
     """Per-layer skew groups for q_optimizer=lie_ortho_update_rms.
 
     Each trainable ``oft_R_in`` / ``oft_R_out`` gets its own group carrying the
@@ -366,9 +366,9 @@ def _build_lie_update_rms_param_groups(model_chunks, lr, min_lr):
                 params=gain_params,
                 use_skew=False,
                 side=None,
-                lr=lr,
-                max_lr=lr,
-                min_lr=min_lr,
+                lr=lr * gain_lr_mult,
+                max_lr=lr * gain_lr_mult,
+                min_lr=min_lr * gain_lr_mult,
                 weight_decay=0.0,
             )
         )
@@ -668,7 +668,12 @@ def get_megatron_poet_lie_momentum_optimizer(
             raise ValueError("lie_ortho_update_rms requires lie_alternating=true")
         if getattr(config, "poet_merge_period", None) != 1:
             raise ValueError("lie_ortho_update_rms requires merge_period=1")
-        param_groups = _build_lie_update_rms_param_groups(model_chunks, config.lr, min_lr)
+        param_groups = _build_lie_update_rms_param_groups(
+            model_chunks,
+            config.lr,
+            min_lr,
+            gain_lr_mult=getattr(config, "poet_gain_lr_mult", 1.0),
+        )
         skew_count = sum(1 for group in param_groups if group.get("use_skew"))
         adamw_count = sum(
             len(group["params"]) for group in param_groups if not group.get("use_skew")

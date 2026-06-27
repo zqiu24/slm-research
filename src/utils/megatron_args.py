@@ -657,6 +657,8 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             poet_args.append("--poet-lie-ortho-distributed")
         if poet.get("learnable_scale", False):
             poet_args.append("--poet-learnable-scale")
+        if float(poet.get("gain_lr_mult", 1.0)) != 1.0:
+            poet_args += ["--poet-gain-lr-mult", str(poet.get("gain_lr_mult"))]
         # store_true: cross-side decorrelation probe (ANALYSIS §17.6) — projects the two
         # sides' generators apart so cos(D_out,D_in)->0; for the simultaneous config.
         if poet.get("lie_ortho_decorrelate", False):
