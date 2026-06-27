@@ -276,3 +276,14 @@ def test_learnable_scale_flag_emitted_only_when_set():
 
     assert "--poet-learnable-scale" in _optimizer_args(_poet_cfg(True))
     assert "--poet-learnable-scale" not in _optimizer_args(_poet_cfg(False))
+
+
+def test_gain_round_trips_through_state_dict():
+    layer = ScaledPOETLinear(8, 16, block_count=1, bias=False, dtype=torch.float32)
+    with torch.no_grad():
+        layer.gain.fill_(1.37)
+    sd = layer.state_dict()
+    assert "gain" in sd
+    fresh = ScaledPOETLinear(8, 16, block_count=1, bias=False, dtype=torch.float32)
+    fresh.load_state_dict(sd)
+    assert float(fresh.gain) == pytest.approx(1.37)
