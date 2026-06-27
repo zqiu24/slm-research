@@ -43,10 +43,12 @@ DECORR_ON="optim.poet.lie_ortho_decorrelate=true \
   optim.poet.lie_ortho_decorrelate_renorm=false"
 DECORR_OFF="optim.poet.lie_ortho_decorrelate=false"
 
-# rho_move grid RA/RB — SET THESE from Phase 0 (the `measure` arm's wandb
-# poet_move/ratio_p50 and ratio_p90) BEFORE running any clip arm.
-RA="__SET_FROM_PHASE0_P50__"
-RB="__SET_FROM_PHASE0_P90__"
+# rho_move grid RA/RB — calibrated from Phase 0 (measure run xq7bitqj, post-warmup
+# plateau ~step 256): RA = p50 (tighter, ~upper-half of layers clipped at peak),
+# RB = p90 (gentler, ~top decile). The realized move auto-shrinks with the cosine LR,
+# so a fixed budget anchored at the high-LR regime caps early over-spend and tapers later.
+RA="0.013"
+RB="0.019"
 
 case "$ARM" in
   measure)        MOVE="optim.poet.lie_move_control_mode=measure" ;             DECORR="$DECORR_ON"  ;;
