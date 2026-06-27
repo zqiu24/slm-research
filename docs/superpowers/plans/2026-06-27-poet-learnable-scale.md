@@ -71,15 +71,19 @@ from src.optim.poet_scaled_layer import (
 
 def _make_pair(scaled_cls, base_cls):
     """A scaled layer and a base twin sharing the same frozen weight + perms."""
-    torch.manual_seed(0)
     scaled = scaled_cls(8, 16, block_count=1, bias=False,
                         parameterization="cayley", dtype=torch.float32)
     base = base_cls(8, 16, block_count=1, bias=False,
                     parameterization="cayley", dtype=torch.float32)
-    # Copy frozen base weight + permutation buffers so the two compute identically.
-    base.weight.data.copy_(scaled.weight.data)
-    for buf in ("perm_in", "perm_in_inv", "perm_out", "perm_out_inv"):
-        getattr(base, buf).copy_(getattr(scaled, buf))
+    # POETLinear leaves the frozen weight as torch.empty (possibly NaN); give it a
+    # finite value so torch.equal is meaningful (NaN != NaN would fail spuriously),
+    # then mirror it + the permutation buffers into the base twin so the two compute
+    # identically. oft_R_{in,out} init to zeros (R=I) in both, so g=1 ⇒ equal output.
+    with torch.no_grad():
+        scaled.weight.normal_(std=0.02)
+        base.weight.copy_(scaled.weight)
+        for buf in ("perm_in", "perm_in_inv", "perm_out", "perm_out_inv"):
+            getattr(base, buf).copy_(getattr(scaled, buf))
     return scaled, base
 
 
@@ -121,6 +125,8 @@ def test_gain_scales_output(scaled_cls, base_cls):
 
 def test_grad_flows_to_gain():
     layer = ScaledPOETLinear(8, 16, block_count=1, bias=False, dtype=torch.float32)
+    with torch.no_grad():
+        layer.weight.normal_(std=0.02)  # finite frozen base (torch.empty may be NaN)
     x = torch.randn(4, 8)
     layer(x).sum().backward()
     assert layer.gain.grad is not None
@@ -580,39 +586,42 @@ from launchers.pretrain_gpt_slm import add_slm_args
 
 
 def test_cli_arg_registered_store_true():
+    # add_slm_args registers --slm-config-path as required=True, so it must be passed.
     parser = add_slm_args(argparse.ArgumentParser())
-    ns = parser.parse_args(["--poet-learnable-scale"])
+    ns = parser.parse_args(["--slm-config-path", "x", "--poet-learnable-scale"])
     assert ns.poet_learnable_scale is True
-    ns2 = parser.parse_args([])
+    ns2 = parser.parse_args(["--slm-config-path", "x"])
     assert ns2.poet_learnable_scale is False
 
 
-def test_megatron_args_emits_flag_when_set():
+def test_learnable_scale_flag_emitted_only_when_set():
+    # Real injection path via _optimizer_args, mirroring test_megatron_args_grouped_poetx.
     from omegaconf import OmegaConf
-    from src.utils.megatron_args import build_megatron_args
 
-    cfg = OmegaConf.load("configs/experiments/optim/poet_lie_orth_update_rms.yaml")
-    # build_megatron_args needs a full resolved cfg; this asserts the injection rule
-    # directly instead, mirroring how the other poet bools are emitted.
-    poet = cfg.optim.poet
-    poet.learnable_scale = True
-    emitted = []
-    if poet.get("learnable_scale", False):
-        emitted.append("--poet-learnable-scale")
-    assert emitted == ["--poet-learnable-scale"]
+    from src.utils.megatron_args import _optimizer_args
+
+    def _poet_cfg(learnable_scale):
+        return OmegaConf.create({"optim": {
+            "type": "poet", "lr": 5e-3, "weight_decay": 0.1,
+            "betas": [0.9, 0.95], "eps": 1e-8,
+            "poet": {
+                "block_count": 1, "cache_mode": "none",
+                "init_type": "mup_normalized", "mup_alpha": 4.0,
+                "merge_period": 1, "scale": 1.0,
+                "single_step_fast": True, "single_step_native": True,
+                "lie_alternating": True,
+                "learnable_scale": learnable_scale,
+            }}})
+
+    assert "--poet-learnable-scale" in _optimizer_args(_poet_cfg(True))
+    assert "--poet-learnable-scale" not in _optimizer_args(_poet_cfg(False))
 ```
-
-Note: `build_megatron_args` requires a fully-resolved training cfg (scale, data,
-scheduler), which is heavyweight to construct in a unit test. The test above pins the
-**injection rule** (the one-liner you add in Step 4) and the CLI registration (the
-real end-to-end path is exercised by the GPU smoke in Task 6). If a fully-resolved
-fixture cfg is already available in the test suite, prefer asserting
-`"--poet-learnable-scale" in build_megatron_args(fixture_cfg_with_flag_true)`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `python -m pytest tests/unit/test_poet_learnable_scale.py -q -k "cli_arg or emits_flag"`
-Expected: FAIL — `AttributeError: 'Namespace' object has no attribute 'poet_learnable_scale'`.
+Run: `python -m pytest tests/unit/test_poet_learnable_scale.py -q -k "cli_arg or emitted"`
+Expected: FAIL — `AttributeError: 'Namespace' object has no attribute 'poet_learnable_scale'`
+(CLI test) and `--poet-learnable-scale` not emitted (the injection line doesn't exist yet).
 
 - [ ] **Step 3: Declare the key in the base YAML**
 
@@ -670,7 +679,7 @@ and pass it into the `replace_linears_with_poet(...)` call (next to `group_exper
 
 - [ ] **Step 8: Run tests to verify they pass**
 
-Run: `python -m pytest tests/unit/test_poet_learnable_scale.py -q -k "cli_arg or emits_flag"`
+Run: `python -m pytest tests/unit/test_poet_learnable_scale.py -q -k "cli_arg or emitted"`
 Expected: PASS.
 
 - [ ] **Step 9: Static check — the args→config copy is the silent-no-op trap; confirm wiring compiles**
@@ -813,6 +822,12 @@ Expected wins to look for: `lscale_mup` < the no-gain side_γ+0.25 base (3.4745)
 ideally < the §2.15c record (3.4686). Watch the W&B `gain`/param histograms to confirm
 `g` actually departs 1.0 (if it stays pinned at 1.0, the norm DOF wasn't the lever).
 
+**Watch-item (smoke):** `gain` is a 0-dim param. Megatron's grad-buffer bucketing
+handles `numel==1` params (`buffer[s:s+1].view(())` is valid), but if the smoke trips
+a shape/bucket assertion on it, the fix is to make `gain` shape `(1,)` (and index
+`* self.gain[0]` in the mixin forward + assert `shape == (1,)` in the tests). Confirm
+in the smoke log that `gain` appears in an optimizer param group and gets a grad.
+
 ---
 
 ## Self-Review
@@ -828,9 +843,17 @@ ideally < the §2.15c record (3.4686). Watch the W&B `gain`/param histograms to 
 - `g=1` bit-exact invariant → Task 1 `test_gain_one_is_bit_exact_base`. ✅
 - Default-off no-regression → Task 2 `test_replace_without_flag_has_no_gain` + Task 3 existing-suite gate + Task 5 full suite. ✅
 
-**Placeholder scan:** no TBD/TODO; every code step shows complete code. The
-`build_megatron_args` test is explicitly scoped to the injection rule with the reason
-stated (heavyweight fixture), not a vague placeholder.
+**Placeholder scan:** no TBD/TODO; every code step shows complete code. The argv
+injection is tested through the real `_optimizer_args` entry point (mirroring
+`test_megatron_args_grouped_poetx.py`), not a re-implemented inline rule.
+
+**Review fixes applied (verified against code):** `SingleStepPOETLinear` is a
+`POETLinear` subclass (so the mixin MRO + perm-buffer copy in `_make_pair` are valid)
+and requires `parameterization='cayley'` (the tests use it); the denom edit at the
+single `denom = rms(...)` line propagates to both `raw_theta` and the actual `theta`
+and preserves the `implied_rho` readback; `add_slm_args` registers `--slm-config-path`
+as `required=True` (CLI test passes it); `POETLinear` weight is `torch.empty`
+(tests finite-init before `torch.equal`).
 
 **Type consistency:** `learnable_scale: bool` kwarg name identical across
 `replace_linears_with_poet` (Task 2) and `_apply_poet_to_chunk` thread-through
