@@ -1021,3 +1021,29 @@ default was suboptimal. **(ii) λ0.25 optimum, λ0.75 cliff** (same shape as §2
 λ0.25/rnf (3.4706, −0.0074) but stays above `mup`. ⚠️ **single seed; the −0.0059 record is
 below the ~0.01–0.02 noise floor → a 2–3-seed confirm of `gp25_mup_l0p25_rnf` is the bar to
 lock it.** Pending: norm λ0.5-rnf (running), norm λ0.75 (×2).
+
+## 2.16 record refinement — finer λ + seed-confirm (queued)
+
+Two follow-ups to the §2.15(c) record (3.4686). Both `renorm=false`, mode=symmetric,
+ρ0.30/lr5/max∠0.024.
+
+#### (a) finer λ below 0.25 (`scripts/sweep_decorrelate_fine_lambda.sh`)
+λ0.25 was the smallest non-trivial value tested and beat both λ0 and λ0.5 → the optimum may
+sit lower. Each init at its **own** best side_γ (mup→+0.25 record holder; normalized→0, the
+strongest symmetric decorr responder, whose renorm=off path is untested). 10 runs; mup λ0.25
+anchors to **3.4686**.
+
+| init (side_γ) | λ 0.10 | 0.15 | 0.20 | 0.25 | 0.30 |
+|---|---|---|---|---|---|
+| mup (+0.25) | ▶ | ▶ | ▶ | 3.4686 (anchor) | ▶ |
+| normalized (0) | ▶ | ▶ | ▶ | ▶ | ▶ |
+
+#### (b) seed-confirm the record (`scripts/sweep_seedconfirm_record.sh`)
+The −0.0059 record margin is below the seed-noise floor. Re-run the record and its
+no-decorrelation base at seeds 43 & 44 (seed 42 in hand); the gain is real iff the record
+cloud sits below the base cloud. 4 runs.
+
+| config | seed 42 | seed 43 | seed 44 |
+|---|---|---|---|
+| base (side_γ+0.25, no decorr) | 3.4745 | ▶ | ▶ |
+| record (+ decorr λ0.25, renorm=off) | **3.4686** | ▶ | ▶ |
