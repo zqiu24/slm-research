@@ -68,6 +68,12 @@ def _model_args(cfg: DictConfig) -> list[str]:
             # cudaErrorUnsupportedPtxVersion at the first forward step). Fall
             # back to the plain torch softmax path.
             _add(args, "--no-masked-softmax-fusion")
+    # Optional CUDA graphs (only meaningful with transformer_engine impl): set
+    # base.model.cuda_graph_impl=transformer_engine to capture transformer
+    # layers and cut per-iteration kernel-launch overhead. Default: off.
+    cuda_graph_impl = model.get("cuda_graph_impl", None)
+    if cuda_graph_impl is not None and str(cuda_graph_impl) != "none":
+        _add(args, "--cuda-graph-impl", cuda_graph_impl)
     _add(args, "--num-layers", model.num_layers)
     _add(args, "--hidden-size", model.hidden_size)
     _add(args, "--ffn-hidden-size", model.ffn_hidden_size)
@@ -834,16 +840,20 @@ def _parallel_args(cfg: DictConfig) -> list[str]:
 def _data_args(cfg: DictConfig) -> list[str]:
     data = cfg.data
     args: list[str] = []
-    _add(args, "--data-path", data.path)
+    mock = bool(data.get("mock", False))
+    if mock:
+        _add(args, "--mock-data")
     _add(args, "--tokenizer-type", data.tokenizer_type)
     _add(args, "--tokenizer-model", data.tokenizer_model)
     _add(args, "--vocab-size", data.vocab_size)
-    _add(args, "--data-cache-path", f"runs/_data_cache/{data.name}")
-    _add(args, "--split", data.split)
-    if bool(data.no_mmap_bin_files):
-        _add(args, "--no-mmap-bin-files")
-    if bool(data.no_create_attention_mask_in_dataloader):
-        _add(args, "--no-create-attention-mask-in-dataloader")
+    if not mock:
+        _add(args, "--data-path", data.path)
+        _add(args, "--data-cache-path", f"runs/_data_cache/{data.name}")
+        _add(args, "--split", data.split)
+        if bool(data.no_mmap_bin_files):
+            _add(args, "--no-mmap-bin-files")
+        if bool(data.no_create_attention_mask_in_dataloader):
+            _add(args, "--no-create-attention-mask-in-dataloader")
     _add(args, "--num-workers", data.num_workers)
     return args
 

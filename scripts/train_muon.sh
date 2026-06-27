@@ -62,6 +62,5 @@ python -m launchers.train_megatron \
   "cluster=h100_de" \
   "experiment=optim/muon_hybrid" \
   "training.global_batch_size=512" \
-  "base.model.transformer_impl=local" \
   "training.save_enabled=true" \
   "$@"

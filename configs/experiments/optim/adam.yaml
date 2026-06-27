@@ -41,3 +41,5 @@ base:
   model:
     unfuse_qkv: true
     unfuse_fc1: true
+    transformer_impl: transformer_engine
+    cuda_graph_impl: transformer_engine
