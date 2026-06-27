@@ -1111,6 +1111,17 @@ cloud sits below the base cloud. 4 runs.
 - **§2.17's +0.09 blow-up was purely too-hot gain LR**, not a broken mechanism. At gain LR ≤ 5e-4 the gain is no longer harmful; the useful band is ~5e-5–1.5e-4 (`gain LR / dense LR` ≈ 0.01–0.03).
 - **The 1.5e-4 dip is consistent across both inits (same LR, same sign)** — more coherent than pure noise would give — but its magnitude (−0.0014 to −0.0020) is at/under the ±0.0015 single-seed floor, and run-to-run variance is itself ~0.006 (the `mup 5e-4` arm read 3.4859 on an earlier finish vs 3.4799 here). So **call it neutral, not a win.** Best mup 3.4725 still does not reach the §2.15c record 3.4686 (which carries decorrelation; these probes do not).
 
+#### Side-finding — `g` does NOT replace init-scale tuning (normalized `s1` vs `s2`)
+
+The first-pass norm arms were accidentally run at `init_scale=1.0` (s1) — the *wrong* operating norm for `normalized` (its tuned optimum is `s2`=2; §2.12/§2.10). That accident is itself the cleanest test of "can a learnable `g` recover the operating norm from a neutral start?" — and the answer is **no**:
+
+| normalized, side_γ0 | no-gain (ctrl) | + gain 5e-5 | + gain 1.5e-4 | + gain 5e-4 |
+|---|---|---|---|---|
+| **s1** (init_scale 1, wrong norm) | 3.5228 | 3.5244 | 3.5263 | 3.5391 |
+| **s2** (init_scale 2, tuned norm) | **3.4765** | 3.4761 | **3.4751** | 3.4803 |
+
+Starting at `s1`, the gain never claws back toward the `s2` optimum — best `s1`+gain (3.5244) is **+0.048 above** the hand-set `s2` (3.4765), and the gain is in fact mildly *worse* than the `s1` no-gain control. So a learnable per-layer scale **cannot substitute for hand-picking `init_scale`**: you must put the frozen base at the right operating norm first; `g` only fine-tunes ±noise around wherever you start. (Consistent with §2.17's `s4` norm-recovery arms, which also failed to recover from a 4× start.) Corollary: the §2.18 "neutral" verdict holds *only because* mup's tuned norm already is `s1`=1.0 — the gain rides an already-correct norm, it does not find one.
+
 **Next (if pursued):** seed-confirm `mup 1.5e-4` (seeds 43/44) against its control + a finer LR scan {1e-4, 2e-4}; and test whether the gentle gain *stacks* on the decorrelation record (3.4686) rather than the bare side_γ champion. Absent a seed-confirmed dip, the **per-layer learnable scale is settled as neutral on this cohort — neither the muon-gap lever hoped for (§2.17 goal) nor a regression when gently tuned.** Refresh: `/lustre/home/zqiu/log/lss_*.log` (`validation loss at iteration 9155`).
 
 ## 2.19 learnable per-layer scale — verdict (consolidated 2.17 + 2.18)
