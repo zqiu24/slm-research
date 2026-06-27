@@ -1098,15 +1098,17 @@ cloud sits below the base cloud. 4 runs.
 
 ## 2.18 learnable scale — small-LR probe + no-gain control (live, filling)
 
-§2.17 is (near-)monotone toward the LR→0 (no-gain) limit and adds a ~0.1 penalty by `gain LR 2.5e-3`. This probe drops a decade below the §2.17 floor and adds the missing same-code anchor. Each init at its **own champion operating point** — mup→init_scale=1 / side_γ+0.25 (anchor 3.4745); normalized→**init_scale=2** / side_γ0 (anchor 3.4765; normalized's best norm is s2, not s1 — §2.12/§2.10). `learnable_scale=false` control + `gain_lr_mult` {0.1, 0.03, 0.01} (gain LR 5e-4 / 1.5e-4 / 5e-5). 8 runs; the controls pin the §2.12 champions exactly (resolving the §2.17 "no in-grid control" caveat). Scripts [sweep_lscale_smalllr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr.sh) + [sweep_lscale_smalllr_node{1..4}.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr_node1.sh) (2 arms/node). 60m/40tpp, seed 42, 8-GPU. Run names `lss_mup_s1_*` / `lss_norm_s2_*`.
+§2.17 is (near-)monotone toward the LR→0 (no-gain) limit and adds a ~0.1 penalty by `gain LR 2.5e-3`. This probe drops a decade below the §2.17 floor and adds the missing same-code anchor. Each init at its **own champion operating point** — mup→init_scale=1 / side_γ+0.25 (anchor 3.4745); normalized→**init_scale=2** / side_γ0 (anchor 3.4765; normalized's best norm is s2, not s1 — §2.12/§2.10). `learnable_scale=false` control + `gain_lr_mult` {0.1, 0.03, 0.01} (gain LR 5e-4 / 1.5e-4 / 5e-5). 8 runs; the controls pin the §2.12 champions exactly (resolving the §2.17 "no in-grid control" caveat). Scripts [sweep_lscale_smalllr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr.sh) (dispatcher) — mup side via `sweep_lscale_smalllr_node{1,2}.sh` (2 arms each, done); norm-s2 side via [sweep_lscale_smalllr_norm{1..4}.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr_norm1.sh) (1 arm each, for 4 parallel nodes). 60m/40tpp, seed 42, 8-GPU. Run names `lss_mup_s1_*` / `lss_norm_s2_*`.
 
-| gain LR | mup s1 (γ0.25) | norm s2 (γ0) |
-|---|---|---|
-| 0 (control) | 3.4745 (= §2.12 anchor ✓) | ▶ (anchor 3.4765) |
-| 5e-5  | 3.4836 ‡ | ▶ |
-| 1.5e-4 | **3.4725** | ▶ |
-| 5e-4  | 3.4859 | ▶ |
+| gain LR | mup s1 (γ0.25) | Δ vs ctrl | norm s2 (γ0) | Δ vs ctrl |
+|---|---|---|---|---|
+| 0 (control) | 3.4745 (= §2.12 ✓) | — | 3.4765 (= §2.12 ✓) | — |
+| 5e-5  | 3.4741 | −0.0004 | 3.4761 | −0.0004 |
+| 1.5e-4 | **3.4725** | −0.0020 | **3.4751** | −0.0014 |
+| 5e-4  | 3.4799 | +0.0054 | 3.4803 | +0.0038 |
 
-`‡` `mup` 5e-5 still running at writing (≈iter 8000). **First-pass norm arms were mistakenly run at s1** (off-anchor: ctrl 3.5228 ≠ 3.4765) and are being **re-run at s2** (`lss_norm_s2_*`) — table above shows the corrected grid.
+**Result — gentle gain is NEUTRAL, ~confirming §2.17's verdict but rehabilitating the mechanism.** Both controls reproduce their §2.12 champions **exactly** (mup 3.4745, norm-s2 3.4765 — same-code anchor solid, and the s2 fix landed: first-pass norm@s1 was off-anchor at 3.5228). Both inits then show the **same shape**: ≈baseline at 5e-5, a shallow dip at **1.5e-4** (−0.0020 mup / −0.0014 norm), back above baseline at 5e-4 (+0.004–0.005). Two readings:
+- **§2.17's +0.09 blow-up was purely too-hot gain LR**, not a broken mechanism. At gain LR ≤ 5e-4 the gain is no longer harmful; the useful band is ~5e-5–1.5e-4 (`gain LR / dense LR` ≈ 0.01–0.03).
+- **The 1.5e-4 dip is consistent across both inits (same LR, same sign)** — more coherent than pure noise would give — but its magnitude (−0.0014 to −0.0020) is at/under the ±0.0015 single-seed floor, and run-to-run variance is itself ~0.006 (the `mup 5e-4` arm read 3.4859 on an earlier finish vs 3.4799 here). So **call it neutral, not a win.** Best mup 3.4725 still does not reach the §2.15c record 3.4686 (which carries decorrelation; these probes do not).
 
-**Reading so far (mup s1 = champion init):** the same-code control reproduces 3.4745 **exactly** ✓, and the gentle gain is **no longer harmful** — `gain LR 1.5e-4` = 3.4725, −0.0020 *below* control (within ±0.0015 seed noise → effectively neutral), with 5e-4/5e-5 a touch above. So §2.17's +0.09 regression was **purely too-hot gain LR**, not the gain being broken: at the right tiny LR the per-layer scale is neutral, not negative. It does not yet *beat* baseline beyond noise → **the −0.002 dip needs a finer LR scan around 1e-4 + a 2–3-seed confirm** before any claim. Refresh: `/lustre/home/zqiu/log/lss_*.log` (`validation loss at iteration 9155`).
+**Next (if pursued):** seed-confirm `mup 1.5e-4` (seeds 43/44) against its control + a finer LR scan {1e-4, 2e-4}; and test whether the gentle gain *stacks* on the decorrelation record (3.4686) rather than the bare side_γ champion. Absent a seed-confirmed dip, the **per-layer learnable scale is settled as neutral on this cohort — neither the muon-gap lever hoped for (§2.17 goal) nor a regression when gently tuned.** Refresh: `/lustre/home/zqiu/log/lss_*.log` (`validation loss at iteration 9155`).
