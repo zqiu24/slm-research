@@ -49,22 +49,40 @@ reproducing the mechanism behind the `init_scale=4` win — but learnable per la
 
 ## Design
 
-### 1. The layer — `ScaledPOETLinear(POETLinear)`
+### 1. The layer — a scale mixin over the POET base classes
 
-A **subclass** of the vendored
+The champion config sets `single_step_native: true`, so its layer is
+[`SingleStepPOETLinear`](/lustre/fast/fast/zqiu/slm-research/third_party/poet_torch/poet_layer.py),
+**not** the vanilla
 [`POETLinear`](/lustre/fast/fast/zqiu/slm-research/third_party/poet_torch/poet_layer.py#L509)
-(new file `src/optim/poet_scaled_layer.py`, so the vendored code stays untouched).
-Subclassing — not copying — keeps the merge/fold, single-step fast path, exp path,
-and the three forward cores **shared** with `POETLinear`, so the scaled variant can
-never silently drift from POET. Two overrides:
+(the [construction branch](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L543)
+picks `SingleStepPOETLinear` when that flag is on). So the scaled variant must
+cover **both** base classes. Cleanest is a small **mixin** plus two thin concrete
+classes (new file `src/optim/poet_scaled_layer.py`, vendored code untouched):
 
-- `__init__`: `super().__init__(...)`, then register
-  `self.gain = nn.Parameter(torch.ones((), dtype=…, device=…))` — a 0-dim scalar,
-  `requires_grad=True`, **one per module** (q/k/v/proj/fc1_gate/fc1_up/fc2 each get
-  their own).
-- `forward`: `return super().forward(x) * self.gain` — applied **outside** the
-  compiled core, so it is core-agnostic (works on the fast / exp / compiled paths
-  alike) and autograd flows to `g`.
+```python
+class _LearnableScaleMixin:
+    def _init_scale_gain(self):
+        if self.bias is not None:
+            raise ValueError("learnable-scale POET assumes bias=False")
+        self.gain = nn.Parameter(torch.ones((), device=self.weight.device, dtype=self.weight.dtype))
+    def forward(self, x):
+        return super().forward(x) * self.gain
+
+class ScaledPOETLinear(_LearnableScaleMixin, POETLinear): ...
+class ScaledSingleStepPOETLinear(_LearnableScaleMixin, SingleStepPOETLinear): ...
+```
+
+Mixing — not copying — keeps the merge/fold, single-step path, exp path, and the
+forward cores **shared** with the base classes, so the scaled variant can never
+silently drift. The gain is:
+
+- a 0-dim scalar `nn.Parameter` (init 1.0, `requires_grad=True`), **one per module**
+  (q/k/v/proj/fc1_gate/fc1_up/fc2 each get their own), on the **same module** as
+  `oft_R`/`weight` so the optimizer's per-layer coupling (§2) finds both together;
+- applied on the forward **output** (`super().forward(x) * self.gain`), outside the
+  compiled core, so it is core-agnostic and autograd flows to `g`. `g=1.0` ⇒
+  bit-exact the base layer (`out * 1.0` is exact in floating point).
 
 **Bias.** All llama3 POET-wrapped linears are constructed `bias=False` (Megatron
 handles bias separately), so `g · forward(x) = g · W_eff · x` exactly. The layer
@@ -120,22 +138,29 @@ embeddings/norms), not the Lie optimizer. Defaults:
 
 `optim.poet.learnable_scale` (bool, default `false`) gates whether
 [`_apply_poet_to_chunk`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_apply_to_model.py#L97)
-→ `replace_linears_with_poet` instantiates `ScaledPOETLinear` vs `POETLinear`. The
-4-edit plumbing path (the args→config copy is the one that silently no-ops if
-missed):
+→ `replace_linears_with_poet` instantiates the scaled class vs the base class. The
+full plumbing path (the args→config copy is the one that silently no-ops if missed,
+per [[poet-config-flag-plumbing]]):
 
-1. **CLI arg** — `--poet-learnable-scale` (store_true) in
-   [`megatron_args.py`](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L576).
-2. **args→config copy** — `config.poet_learnable_scale = getattr(args,
+1. **declare in base YAML** — `learnable_scale: false` under `optim.poet` in
+   [`poet_lie_orth_update_rms.yaml`](/lustre/fast/fast/zqiu/slm-research/configs/experiments/optim/poet_lie_orth_update_rms.yaml),
+   so a plain `optim.poet.learnable_scale=true` override is accepted (plain `key=val`
+   requires the key to pre-exist; `+key=val` silently keeps the default).
+2. **register CLI arg** — `--poet-learnable-scale` (`action="store_true"`) in
+   [`add_slm_args`](/lustre/fast/fast/zqiu/slm-research/launchers/pretrain_gpt_slm.py#L70).
+3. **inject into argv** — `if poet.get("learnable_scale", False):
+   poet_args.append("--poet-learnable-scale")` in
+   [`megatron_args.py`](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L655).
+4. **args→config copy** — `config.poet_learnable_scale = getattr(args,
    "poet_learnable_scale", False)` in
-   [`poet_optimizer_setup.py`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_optimizer_setup.py#L38).
-3. **layer-swap consumer** — read `getattr(args, "poet_learnable_scale", False)` in
+   [`poet_optimizer_setup.py`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_optimizer_setup.py#L40).
+5. **layer-swap consumer** — read `getattr(args, "poet_learnable_scale", False)` in
    `_apply_poet_to_chunk` and thread `learnable_scale=` through
-   `replace_linears_with_poet`
-   ([poet_layers.py:329](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L329))
-   to pick the class.
-4. **optimizer consumer** — the param-group `gain` attach + wd=0 group (§2/§3).
+   `replace_linears_with_poet` to pick the class.
 
+The optimizer coupling (§2/§3) is **not** flag-gated — the param-group builder
+discovers `gain` by module introspection (`getattr(mod, "gain", None)`), so it
+activates automatically whenever a scaled layer is present and is a no-op otherwise.
 Default-off ⇒ zero change to every existing run.
 
 ### 5. Init of `g`
@@ -154,6 +179,14 @@ init is configured, so the two GPU arms are just config choices:
 
 - **`g=1` ≡ current POET, bit-exact** (the load-bearing no-op-at-init invariant).
 - **Merge unaffected** — `g` never folds into `W₀`.
+- **DDP grad-buffer citizen.** `g` is created in the layer constructor at
+  model-build time, which runs **pre-DDP** (POET is applied by wrapping
+  `model_provider_func`, see the
+  [poet_apply_to_model docstring](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_apply_to_model.py#L1)).
+  So `g` is in DDP's grad buffer at `__init__` like `oft_R` — it gets `.main_grad`,
+  the `1/num_tokens` normalization, the DP all-reduce, and gradient clipping. A param
+  added post-DDP would silently miss all of these; the constructor-time creation is
+  what avoids that trap.
 - **Coupling scoped to update-RMS** — fixed-angle optimizers see `g` as a pure
   output gain.
 - **Checkpoint:** `gain` lives under `poet_linear.*` → serialized by `state_dict`;
@@ -186,13 +219,18 @@ init is configured, so the two GPU arms are just config choices:
 
 | File | Change |
 |---|---|
-| `src/optim/poet_scaled_layer.py` (new) | `ScaledPOETLinear(POETLinear)`: `gain` param + scaled forward + bias assert |
-| [`src/optim/poet_layers.py`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L329) | `replace_linears_with_poet(..., learnable_scale=False)`: instantiate scaled class when set (reuse `_copy_and_init_weight`) |
-| [`src/patches/poet_apply_to_model.py`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_apply_to_model.py#L97) | read `poet_learnable_scale`, thread through |
-| [`src/utils/megatron_args.py`](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L576) | `--poet-learnable-scale` CLI arg |
-| [`src/patches/poet_optimizer_setup.py`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_optimizer_setup.py#L38) | args→config copy |
-| [`src/optim/poet.py`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py#L299) | `_build_lie_update_rms_param_groups`: attach `gain` to skew groups + dedicated wd=0 gain group |
-| [`src/optim/poet_lie_orth_update_rms.py`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth_update_rms.py#L29) | angle denom `×|gain|` when group carries one |
-| `configs/experiments/optim/poet_lie_orth_update_rms_scaled.yaml` (new) | champion recipe + `learnable_scale=true`; leaves the existing champion config untouched |
-| `tests/` | the 7 CPU tests above |
-| `scripts/` | A/B + neutral-init sweep launcher |
+| `src/optim/poet_scaled_layer.py` (new) | `_LearnableScaleMixin` + `ScaledPOETLinear` + `ScaledSingleStepPOETLinear`: `gain` param + scaled forward + bias assert |
+| [`src/optim/poet_layers.py`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_layers.py#L543) | `replace_linears_with_poet(..., learnable_scale=False)`: in the final `else` pick `Scaled{SingleStep,}POETLinear` by `single_step_native`; raise `NotImplementedError` if combined with `head_aligned_attn` / `single_step_x` / `cache_mode!='none'` (out of v1 scope) |
+| [`src/patches/poet_apply_to_model.py`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_apply_to_model.py#L97) | read `args.poet_learnable_scale`, thread `learnable_scale=` through |
+| [`launchers/pretrain_gpt_slm.py`](/lustre/fast/fast/zqiu/slm-research/launchers/pretrain_gpt_slm.py#L70) | register `--poet-learnable-scale` (`action="store_true"`) in `add_slm_args` |
+| [`src/utils/megatron_args.py`](/lustre/fast/fast/zqiu/slm-research/src/utils/megatron_args.py#L655) | inject `--poet-learnable-scale` into argv when `poet.get("learnable_scale")` |
+| [`src/patches/poet_optimizer_setup.py`](/lustre/fast/fast/zqiu/slm-research/src/patches/poet_optimizer_setup.py#L40) | args→config copy `config.poet_learnable_scale = getattr(args, ...)` |
+| [`configs/experiments/optim/poet_lie_orth_update_rms.yaml`](/lustre/fast/fast/zqiu/slm-research/configs/experiments/optim/poet_lie_orth_update_rms.yaml) | declare `learnable_scale: false` under `optim.poet` so a plain `optim.poet.learnable_scale=true` override is accepted |
+| [`src/optim/poet.py`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py#L299) | `_build_lie_update_rms_param_groups`: attach `gain=getattr(mod,"gain",None)` to skew groups + route gain params into a dedicated `weight_decay=0.0` group |
+| [`src/optim/poet_lie_orth_update_rms.py`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth_update_rms.py#L270) | angle denom `×|gain|` when the group carries one |
+| `tests/unit/test_poet_learnable_scale.py` (new) | the CPU tests above |
+| `scripts/sweep_poet_learnable_scale.sh` (new) | A/B (champion-init) + neutral-init arms, driven by `optim.poet.learnable_scale=true` overrides |
+
+Note: the A/B is driven by **CLI overrides** on the existing champion config (no new
+YAML), matching how the §2.11–2.16 sweeps work — which also avoids the pre-commit
+"every experiment YAML needs a matching `docs/experiments/<name>.md`" hook.
