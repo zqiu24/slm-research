@@ -1036,8 +1036,14 @@ inits each); or `bash scripts/sweep_decorrelate_fine_lambda.sh [λ…]` for all 
 
 | init (side_γ) | λ 0.10 | 0.15 | 0.20 | 0.25 | 0.30 |
 |---|---|---|---|---|---|
-| mup (+0.25) | ▶ | ▶ | ▶ | 3.4686 (anchor) | ▶ |
+| mup (+0.25) | 3.4724 | 3.4729 | **3.4682** | 3.4686 (anchor) | 3.4684 |
 | normalized (0) | ▶ | ▶ | ▶ | ▶ | ▶ |
+
+→ **Flat optimum basin λ0.20–0.30 (3.4682–3.4686, spread < seed noise); below 0.20 degrades**
+(λ0.15 3.4729 / λ0.10 3.4724, ~+0.004). λ0.20 is nominally lowest (**3.4682**, −0.0004 vs the
+λ0.25 record) but effectively tied with 0.25/0.30 — **so λ0.25 was already optimal; the record
+is unchanged within noise.** The λ0.25 anchor **reproduces 3.4686 exactly** (same-seed
+reproducibility ✓). `normalized`@side_γ=0 row still running (cells left empty).
 
 #### (b) seed-confirm the record (`scripts/sweep_seedconfirm_record.sh`)
 The −0.0059 record margin is below the seed-noise floor. Re-run the record and its
