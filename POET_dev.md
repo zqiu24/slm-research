@@ -1062,3 +1062,46 @@ cloud sits below the base cloud. 4 runs.
 |---|---|---|---|
 | base (side_γ+0.25, no decorr) | 3.4745 | ▶ | ▶ |
 | record (+ decorr λ0.25, renorm=off) | **3.4686** | ▶ | ▶ |
+
+## 2.17 learnable per-layer scale (g) — init × gain-LR sweep (2026-06-27, NEGATIVE)
+
+> First test of the **learnable per-layer gain** `g` (landed 2026-06-27, [src/optim/poet_scaled_layer.py](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_scaled_layer.py)): `W_eff = g·R_out·W₀·R_in`, one 0-dim trainable scalar per POET weight, init `g=1` (bit-exact the no-gain champion at step 0). Motivation: POET freezes the base spectrum, so each layer's operating *norm* is fixed at init; `g` restores that one DOF, coupled into the update-RMS angle law as `θ = lr·rho/(|g|·RMS(W₀))` (skew-group `gain` in [poet.py](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py#L299), denom `×|g|` in [poet_lie_orth_update_rms.py:270](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth_update_rms.py#L270)). `g` rides a dedicated `weight_decay=0` AdamW group whose LR = `optim.lr × gain_lr_mult` (new knob [`gain_lr_mult`](/lustre/fast/fast/zqiu/slm-research/src/optim/poet.py#L299), default 1.0).
+>
+> 16-arm grid on the champion update-RMS config (ρ0.30 / side_γ0.25 / lr5 / max∠0.024): **{mup_normalized α4, normalized} × {init_scale 1.0, 4.0} × gain_lr_mult**, with the mult range centred on the expected target `g≈1/init_scale` (s1 → {0.5,1,2,4}; s4 → {0.1,0.25,0.5,1}, expecting `g→0.25`). The s4 arms are a **norm-recovery probe** — start 4× over-normed, can `g` learn it back down? One arm per node, 4 nodes: [sweep_poet_learnable_scale.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_poet_learnable_scale.sh) + [sweep_lscale_node{1..4}.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_node1.sh). 60m/40tpp, seed 42, 8-GPU. Logs `/lustre/home/zqiu/log/ls_*.log`. ⚠️ single-seed; **no same-code no-gain control in this grid** — the refs below are the §2.12 champions at matching side_γ0.25.
+>
+> **Result — NEGATIVE and monotone: the learnable gain regresses at every LR tried; the optimum is `g`-frozen (LR→0 → baseline).** `gain LR ≥ 2.5e-3` *diverges* (loss → ~4.0); below that, smaller LR is uniformly better but never reaches baseline. Best arm `ls_norm_s4_m0p1` = 3.5175, still **+0.043** over the champion 3.4745. The s4 (over-normed) arms diverge at a *lower* gain LR than s1 — the gain is more fragile when it has a large norm to undo.
+
+#### gain LR × (init, init_scale) — val/loss (lower=better); `div`=diverged ~4.0 (killed), `✗`=high-LR arm killed unrun
+
+| gain LR | mup s1 | mup s4 | norm s1 | norm s4 |
+|---|---|---|---|---|
+| 0 (no-gain ref, §2.12 @ side_γ0.25) | **3.4745** | n/a | 3.4780 | n/a |
+| 5e-4   | — | 3.6567 | — | **3.5175** |
+| 1.25e-3 | — | 3.6250 | — | 3.5354 |
+| 2.5e-3 | 3.5633 | div | 3.6363 | div |
+| 5e-3   | 3.6126 | ✗ | 3.6416 | ✗ |
+| 1e-2   | div | — | div | — |
+| 2e-2   | ✗ | — | ✗ | — |
+
+(s1 mult {0.5,1,2,4} → gain LR {2.5,5,10,20}e-3; s4 mult {0.1,0.25,0.5,1} → {0.5,1.25,2.5,5}e-3 — hence the staggered rows. Run names `ls_<init>_s<1|4>_m<mult>`.)
+
+**Readings:**
+- **Every gain regresses vs no-gain.** Cleanest A/B is `mup s1` (= the champion init): no-gain 3.4745 → +gain @ 2.5e-3 = 3.5633 (+0.089), @ 5e-3 = 3.6126, @ 1e-2 diverges. Adding the gain to the *optimal* init only hurts.
+- **Monotone in gain LR; optimum at the LR→0 (no-gain) limit.** Smaller gain LR is always closer to baseline; there is no interior minimum below baseline. The per-layer norm DOF, as parameterized, is not a useful lever here.
+- **s4 more fragile than s1.** At gain LR 2.5e-3, `mup s1` trains (3.5633) but `mup s4` diverges — undoing a 4× norm via `g` destabilizes the coupled angle: as `g` shrinks, `θ = lr·rho/(|g|·RMS)` *grows*, positive feedback toward over-rotation. `g` did move (s4 arms drove it down), but not cleanly enough to recover.
+- **Best overall 3.5175** (norm s4, gentlest LR) — still well short of 3.4745 / record 3.4686 / muon_kimi 3.4514. **The learnable per-layer scale does not close the muon gap; it widens it at every setting tested.**
+
+**Next → §2.18:** much smaller gain LRs with a same-code control to confirm whether a *very* gentle gain asymptotes to baseline (gain useless) or can still edge it (gain marginal).
+
+## 2.18 learnable scale — small-LR probe + no-gain control (queued)
+
+§2.17 is monotone toward the LR→0 (no-gain) limit and diverges by `gain LR 2.5e-3`. This probe drops a decade below the §2.17 floor and adds the missing same-code anchor. Each init at its **own** champion side_γ (mup→+0.25=3.4745; normalized→0=3.4765), `learnable_scale=false` control + `gain_lr_mult` {0.1, 0.03, 0.01} (gain LR 5e-4 / 1.5e-4 / 5e-5). 8 runs; the controls pin the §2.12 champions exactly (resolving the §2.17 "no in-grid control" caveat). Scripts [sweep_lscale_smalllr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr.sh) + [sweep_lscale_smalllr_node{1..4}.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr_node1.sh) (2 arms/node). 60m/40tpp, seed 42, 8-GPU.
+
+| gain LR | mup s1 (γ0.25) | norm s1 (γ0) |
+|---|---|---|
+| 0 (control) | ▶ (anchor 3.4745) | ▶ (anchor 3.4765) |
+| 5e-5  | ▶ | ▶ |
+| 1.5e-4 | ▶ | ▶ |
+| 5e-4  | ▶ | ▶ |
+
+**Hypothesis:** if even 5e-5 regresses (rows ≥ control), the per-layer gain is useless on this cohort and §2.17's negative verdict is final; if any cell dips below its control, there is a narrow gentle-gain regime worth a finer scan. Refresh: `/lustre/home/zqiu/log/lss_*.log` (`validation loss at iteration 9155`).
