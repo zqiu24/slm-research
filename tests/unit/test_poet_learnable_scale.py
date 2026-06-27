@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from poet_torch import POETLinear, SingleStepPOETLinear
 
+from src.optim.poet import _build_lie_update_rms_param_groups
 from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
 from src.optim.poet_scaled_layer import (
     ScaledPOETLinear,
@@ -169,3 +170,62 @@ def test_learnable_scale_rejects_head_aligned():
             head_aligned_attn=True,
             head_dim=4,
         )
+
+
+class _TinyScaledPoet(nn.Module):
+    """Toy stand-in: a skew module that owns a frozen weight + a gain scalar."""
+
+    def __init__(self, gain_value=1.0):
+        super().__init__()
+        self.weight = nn.Parameter(torch.full((4, 4), 0.5), requires_grad=False)
+        self.oft_R_in = nn.Parameter(torch.zeros(1, 6))
+        self.oft_R_out = nn.Parameter(torch.zeros(1, 6))
+        self.gain = nn.Parameter(torch.tensor(float(gain_value)))
+        self.block_size_in = 4
+        self.block_size_out = 4
+
+
+def test_skew_groups_carry_gain():
+    model = _TinyScaledPoet()
+    groups = _build_lie_update_rms_param_groups([model], lr=0.005, min_lr=1e-5)
+    skew = [g for g in groups if g["use_skew"]]
+    assert len(skew) == 2
+    for g in skew:
+        assert g["gain"] is model.gain
+
+
+def test_gain_lands_in_wd_zero_group():
+    model = _TinyScaledPoet()
+    groups = _build_lie_update_rms_param_groups([model], lr=0.005, min_lr=1e-5)
+    gain_groups = [
+        g for g in groups if not g["use_skew"] and any(p is model.gain for p in g["params"])
+    ]
+    assert len(gain_groups) == 1
+    assert gain_groups[0]["weight_decay"] == 0.0
+
+
+def test_plain_poet_module_has_gain_none():
+    # A skew module WITHOUT a gain (plain POETLinear analogue) → group gain is None.
+    class _Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(4, 4), requires_grad=False)
+            self.oft_R_in = nn.Parameter(torch.zeros(1, 6))
+            self.oft_R_out = nn.Parameter(torch.zeros(1, 6))
+            self.block_size_in = 4
+            self.block_size_out = 4
+
+    groups = _build_lie_update_rms_param_groups([_Tiny()], lr=0.005, min_lr=1e-5)
+    for g in groups:
+        if g["use_skew"]:
+            assert g["gain"] is None
+
+
+def test_denom_scales_with_gain():
+    # Coupling: with gain=2, the angle denom doubles → theta halves (unclamped).
+    from src.optim.poet_lie_orth_update_rms import compute_update_rms_angle
+
+    w_rms = 0.064
+    theta_g1 = compute_update_rms_angle(lr=0.005, update_rms=0.2, denom=w_rms * 1.0, max_angle=10.0)
+    theta_g2 = compute_update_rms_angle(lr=0.005, update_rms=0.2, denom=w_rms * 2.0, max_angle=10.0)
+    assert float(theta_g2) == pytest.approx(float(theta_g1) / 2.0, rel=1e-6)

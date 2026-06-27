@@ -325,6 +325,7 @@ def _build_lie_update_rms_param_groups(model_chunks, lr, min_lr):
                         side=side,
                         weight=weight,
                         block_size=int(block_size),
+                        gain=getattr(mod, "gain", None),
                         lr=lr,
                         max_lr=lr,
                         min_lr=min_lr,
@@ -332,13 +333,21 @@ def _build_lie_update_rms_param_groups(model_chunks, lr, min_lr):
                 )
                 skew_ids.add(id(p))
 
+    gain_ids: set[int] = set()
+    for mc in model_chunks:
+        for mod in mc.modules():
+            g = getattr(mod, "gain", None)
+            if isinstance(g, torch.nn.Parameter) and g.requires_grad:
+                gain_ids.add(id(g))
+
     adamw_params = []
+    gain_params = []
     seen: set[int] = set()
     for mc in model_chunks:
         for _name, p in mc.named_parameters():
             if not p.requires_grad or id(p) in skew_ids or id(p) in seen:
                 continue
-            adamw_params.append(p)
+            (gain_params if id(p) in gain_ids else adamw_params).append(p)
             seen.add(id(p))
     if adamw_params:
         groups.append(
@@ -349,6 +358,18 @@ def _build_lie_update_rms_param_groups(model_chunks, lr, min_lr):
                 lr=lr,
                 max_lr=lr,
                 min_lr=min_lr,
+            )
+        )
+    if gain_params:
+        groups.append(
+            dict(
+                params=gain_params,
+                use_skew=False,
+                side=None,
+                lr=lr,
+                max_lr=lr,
+                min_lr=min_lr,
+                weight_decay=0.0,
             )
         )
     return groups

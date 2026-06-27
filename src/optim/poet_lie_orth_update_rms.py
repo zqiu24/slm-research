@@ -268,6 +268,11 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
                 nb = a_dir.shape[0]
                 p = items[i][0]
                 denom = rms(group["weight"].detach())
+                gain = group.get("gain")
+                if gain is not None:
+                    denom = denom * gain.detach().abs().to(
+                        device=denom.device, dtype=denom.dtype
+                    ).clamp_min(1e-12)
                 eff_update_rms = self.update_rms * self._side_factor(group)
                 raw_theta = (
                     torch.as_tensor(group["lr"], dtype=torch.float32, device=denom.device)
