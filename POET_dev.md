@@ -1045,13 +1045,15 @@ vs the λ0.25 record) but effectively tied with 0.25/0.30 — **so λ0.25 was al
 record is unchanged within noise.** The λ0.25 anchor **reproduces 3.4686 exactly** (same-seed
 reproducibility ✓).
 
-→ **normalized@side_γ=0 renorm=off:** monotone improvement toward the grid edge —
-λ0.30 = **3.4682**, which **ties the overall basin floor** (mup λ0.20) and beats normalized's
-own no-decorr base (side_γ=0 = 3.4765) by **−0.0083**, a clear gain above seed noise. λ0.25
-renorm=off (3.4703) ≈ its renorm=TRUE baseline (3.4705) — renorm is a wash here. Unlike mup
-(mid-grid peak at λ0.20), normalized's optimum sits **at the λ0.30 edge**, so its true minimum
-may lie above 0.30 (untested). Net: normalized closes the gap to mup but does not pass the
-record; basin floor stays 3.4682 (tie), official record 3.4686.
+→ **normalized@side_γ=0 renorm=off:** improvement toward the grid edge — λ0.30 = **3.4682**,
+which **ties the overall basin floor** (mup λ0.20) and beats normalized's own no-decorr base
+(side_γ=0 = 3.4765) by **−0.0083**, a clear gain above seed noise. λ0.25 renorm=off (3.4703) ≈
+its renorm=TRUE baseline (3.4705) — renorm is a wash here. The λ0.30 edge looked unbounded, so
+the edge-extension scan (`sweep_decorrelate_fine_lambda_norm_ext.sh`, λ{0.35,0.40,0.45,0.50})
+probed past it: **λ0.35 = 3.4703 turns back up** (+0.0021, ≈ its λ0.25 mirror), so the minimum is
+**bracketed at λ0.30** — not an unbounded edge (λ0.40+ killed once the turn-up was confirmed).
+Net: normalized's optimum is λ0.30 = 3.4682, **tying the mup basin floor but not passing the
+record**; basin floor stays 3.4682, official record 3.4686.
 
 #### (b) seed-confirm the record (`scripts/sweep_seedconfirm_record.sh`)
 The −0.0059 record margin is below the seed-noise floor. Re-run the record and its
