@@ -1031,7 +1031,8 @@ Two follow-ups to the §2.15(c) record (3.4686). Both `renorm=false`, mode=symme
 λ0.25 was the smallest non-trivial value tested and beat both λ0 and λ0.5 → the optimum may
 sit lower. Each init at its **own** best side_γ (mup→+0.25 record holder; normalized→0, the
 strongest symmetric decorr responder, whose renorm=off path is untested). 10 runs; mup λ0.25
-anchors to **3.4686**.
+anchors to **3.4686**. Split across 5 nodes via `sweep_finelam_node{1..5}.sh` (one λ × both
+inits each); or `bash scripts/sweep_decorrelate_fine_lambda.sh [λ…]` for all 10 / a subset.
 
 | init (side_γ) | λ 0.10 | 0.15 | 0.20 | 0.25 | 0.30 |
 |---|---|---|---|---|---|

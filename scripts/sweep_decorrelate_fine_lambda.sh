@@ -39,8 +39,11 @@ init_flags() {  # $1 = init key — emits init shape + that init's best side_γ
   esac
 }
 
+# λ values from args (for the per-node split, e.g. `… 0.10`); default = the full 5-point grid.
+LAMS=("$@"); [ "${#LAMS[@]}" -eq 0 ] && LAMS=(0.10 0.15 0.20 0.25 0.30)
+
 for INIT in mup norm; do
-  for LAM in 0.10 0.15 0.20 0.25 0.30; do
+  for LAM in "${LAMS[@]}"; do
     TAG="${LAM/./p}"                     # 0.15 -> 0p15
     NAME="urms_decorrfine_${INIT}_l${TAG}_rnf"
     echo ">>> ${NAME} (${INIT}, $( [ "$INIT" = mup ] && echo 'side_γ+0.25' || echo 'side_γ0' ), λ=${LAM}, renorm=off) starting"
