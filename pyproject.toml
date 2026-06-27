@@ -84,6 +84,8 @@ ignore = ["E501"]
 # LieOrthUpdateRMSMomentum: same matrix naming conventions as LieOrthMomentum.
 "src/optim/poet_lie_orth_update_rms.py" = ["N803", "N806"]
 "tests/unit/test_poet_lie_orth_update_rms_decorrelate.py" = ["N806"]
+# Realized-movement trust-region tests: W/A_in are the standard weight/skew matrix names.
+"tests/unit/test_poet_movement_trust_region.py" = ["N806"]
 # Rotation diagnostics: R/Q are the standard rotation/skew matrix names.
 "src/diag/rotation_diag.py" = ["N803", "N806"]
 "tests/unit/test_diag_rotation.py" = ["N806"]

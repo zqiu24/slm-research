@@ -68,6 +68,9 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         decorrelate_lambda: float = 1.0,
         decorrelate_renorm: bool = False,
         decorrelate_cos_threshold: float = 0.0,
+        move_control_mode: str = "off",
+        move_budget_rho: float = 0.0,
+        move_lambda: float = 1.0,
         layer_pairs=None,
         adamw_betas=(0.9, 0.95),
         adamw_eps: float = 1e-8,
@@ -88,6 +91,16 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
             raise ValueError(
                 "decorrelate_mode must be 'in_off_out' | 'out_off_in' | 'symmetric', "
                 f"got {decorrelate_mode!r}"
+            )
+        if move_control_mode not in ("off", "measure", "clip", "normalize"):
+            raise ValueError(
+                "move_control_mode must be 'off' | 'measure' | 'clip' | 'normalize', "
+                f"got {move_control_mode!r}"
+            )
+        if move_control_mode in ("clip", "normalize") and not (move_budget_rho > 0):
+            raise ValueError(
+                "move_budget_rho must be positive when move_control_mode is "
+                f"'clip'/'normalize', got {move_budget_rho!r}"
             )
         if not alternating:
             raise ValueError("LieOrthUpdateRMSMomentum requires alternating=True")
@@ -132,6 +145,14 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
         self.decorrelate_renorm = bool(decorrelate_renorm)
         self.decorrelate_cos_threshold = float(decorrelate_cos_threshold)
         self._decorr_pairs = list(layer_pairs) if layer_pairs else []
+        # Realized-movement trust region (M1): scale the active written generator so its
+        # realized first-order move ||D_act||_F / ||W||_F stays within move_budget_rho.
+        # 'clip' shrinks only the over-budget tail (move_lambda = partial fraction);
+        # 'normalize' rescales every step to the budget; 'measure' logs r without changing
+        # the write; 'off' is a no-op. Independent of decorrelation (runs after it).
+        self.move_control_mode = move_control_mode
+        self.move_budget_rho = float(move_budget_rho)
+        self.move_lambda = float(move_lambda)
         self.last_update_rms_angles: dict[int, torch.Tensor] = {}
         self.last_update_rms_stats: dict[str, torch.Tensor] = {}
         defaults = dict(
@@ -414,6 +435,71 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
                 len(self._decorr_pairs),
             )
 
+    def _movement_trust_region(self, buf, slices, active):
+        """Realized-movement trust region (M1). For each active skew param, form the
+        realized first-order move D_act = blockdiag(A)·W (out) / W·blockdiag(A) (in) in the
+        block-contiguous frame, compute r = ||D_act||_F / ||W||_F, and rescale the written
+        generator: 'clip' shrinks only when r > rho (move_lambda partial), 'normalize'
+        rescales to r == rho, 'measure' only logs. Runs AFTER decorrelation on the
+        already-all_reduced buf (D_act is the FINAL write; W replicated => f identical on
+        every rank). Mutates buf in place."""
+        if self.move_control_mode == "off" or active is None:
+            return
+        off_by_id = {id(p): (off, n) for off, n, p in slices}
+        eps = 1e-12
+        rho = self.move_budget_rho
+        ratios = []
+        for p, group in self._iter_skew_params():
+            if group["side"] != active:
+                continue
+            slot = off_by_id.get(id(p))
+            if slot is None:
+                continue
+            off, n = slot
+            bsz = int(group.get("block_size") or block_size_from_nelems(p.shape[1]))
+            W = group["weight"].detach().to(torch.float32)
+            out_features, in_features = W.shape
+            A = vec_to_skew(buf[off : off + n].view(p.shape[0], -1), bsz)
+            nb = A.shape[0]
+            if active == "out":
+                D = torch.bmm(A, W.reshape(nb, bsz, in_features)).reshape(out_features, in_features)
+            else:  # active == "in"
+                D = torch.einsum("orb,rbc->orc", W.reshape(out_features, nb, bsz), A).reshape(
+                    out_features, in_features
+                )
+            w_norm = W.norm()
+            gain = group.get("gain")
+            if gain is not None:
+                w_norm = w_norm * gain.detach().abs().to(
+                    device=w_norm.device, dtype=w_norm.dtype
+                ).clamp_min(eps)
+            ratio = float(D.norm() / w_norm.clamp_min(eps))
+            ratios.append(ratio)
+            if self.move_control_mode == "measure" or ratio <= eps:
+                continue
+            if self.move_control_mode == "normalize":
+                f = rho / ratio
+            else:  # clip
+                if ratio <= rho:
+                    continue
+                f = 1.0 - self.move_lambda * (1.0 - rho / ratio)
+            buf[off : off + n] *= f
+        self._set_move_stats(ratios)
+
+    def _set_move_stats(self, ratios):
+        if not ratios:
+            return
+        t = torch.tensor(ratios, dtype=torch.float32)
+        self.last_update_rms_stats.update(
+            {
+                "poet_move/ratio_mean": t.mean().detach(),
+                "poet_move/ratio_p50": torch.quantile(t, 0.5).detach(),
+                "poet_move/ratio_p90": torch.quantile(t, 0.9).detach(),
+                "poet_move/ratio_p95": torch.quantile(t, 0.95).detach(),
+                "poet_move/ratio_max": t.max().detach(),
+            }
+        )
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
@@ -430,6 +516,8 @@ class LieOrthUpdateRMSMomentum(torch.optim.Optimizer):
             dist.all_reduce(buf, group=self.dp_group)
         if self.decorrelate_sides:
             self._decorrelate_buf_alternating(buf, slices, active)
+        if self.move_control_mode != "off":
+            self._movement_trust_region(buf, slices, active)
         self._apply_skew_update_buffer(buf, slices)
 
         for group in self.param_groups:
