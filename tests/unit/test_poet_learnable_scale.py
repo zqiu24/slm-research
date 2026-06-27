@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from poet_torch import POETLinear, SingleStepPOETLinear
 
+from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
 from src.optim.poet_scaled_layer import (
     ScaledPOETLinear,
     ScaledSingleStepPOETLinear,
@@ -122,3 +123,49 @@ def test_grad_flows_to_gain(scaled_cls):
 def test_bias_is_rejected():
     with pytest.raises(ValueError, match="bias=False"):
         ScaledPOETLinear(8, 16, block_count=1, bias=True, dtype=torch.float32)
+
+
+class _ToyModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(8, 16, bias=False)
+
+
+def test_replace_with_learnable_scale_swaps_scaled_class():
+    m = _ToyModel()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+        learnable_scale=True,
+    )
+    assert isinstance(m.fc1, POETMegatronLinear)
+    pl = m.fc1.poet_linear
+    assert isinstance(pl, ScaledPOETLinear)
+    assert hasattr(pl, "gain") and float(pl.gain) == 1.0
+
+
+def test_replace_without_flag_has_no_gain():
+    m = _ToyModel()
+    replace_linears_with_poet(
+        m,
+        block_count=1,
+        init_type="none",
+        extra_linear_types=(nn.Linear,),
+    )
+    assert not hasattr(m.fc1.poet_linear, "gain")
+
+
+def test_learnable_scale_rejects_head_aligned():
+    m = _ToyModel()
+    with pytest.raises(NotImplementedError, match="learnable_scale"):
+        replace_linears_with_poet(
+            m,
+            block_count=1,
+            init_type="none",
+            extra_linear_types=(nn.Linear,),
+            learnable_scale=True,
+            head_aligned_attn=True,
+            head_dim=4,
+        )

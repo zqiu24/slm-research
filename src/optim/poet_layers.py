@@ -351,6 +351,7 @@ def replace_linears_with_poet(
     lie_alternating: bool = False,
     alternate_every: int = 1,
     group_experts: bool = False,
+    learnable_scale: bool = False,
     extra_grouped_types: Iterable[type] = (),
 ) -> int:
     """Walk ``model`` and replace each parallel-linear with a
@@ -378,6 +379,12 @@ def replace_linears_with_poet(
         raise ValueError(
             "parameterization='exp' is not supported with cache_mode != 'none' "
             "(the cached Cayley path is a documented dead-end; use cache_mode='none')."
+        )
+
+    if learnable_scale and (head_aligned_attn or single_step_x or cache_mode != "none"):
+        raise NotImplementedError(
+            "learnable_scale (per-layer trainable gain) is v1 scalar-only: it does "
+            "not yet compose with head_aligned_attn / single_step_x / cache_mode!='none'."
         )
 
     replaced = 0
@@ -541,7 +548,18 @@ def replace_linears_with_poet(
                             **block_kwargs,
                         )
                     else:
-                        if single_step_native:
+                        if learnable_scale:
+                            from src.optim.poet_scaled_layer import (
+                                ScaledPOETLinear,
+                                ScaledSingleStepPOETLinear,
+                            )
+
+                            _PoetCls = (  # noqa: N806
+                                ScaledSingleStepPOETLinear
+                                if single_step_native
+                                else ScaledPOETLinear
+                            )
+                        elif single_step_native:
                             from poet_torch import SingleStepPOETLinear as _PoetCls
                         else:
                             _PoetCls = POETLinear  # noqa: N806
