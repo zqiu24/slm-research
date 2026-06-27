@@ -1074,7 +1074,7 @@ cloud sits below the base cloud. 4 runs.
 >
 > **Result — NEGATIVE and monotone: the learnable gain regresses at every LR tried; the optimum is `g`-frozen (LR→0 → baseline).** Worse with larger gain LR, but it **saturates ~3.6 — it does NOT diverge** (transient mid-training val spikes to ~4.0 at the higher LRs recover by the cosine tail). Best arm `ls_norm_s4_m0p1` = 3.5175, still **+0.043** over the champion 3.4745.
 
-#### gain LR × (init, init_scale) — val/loss (lower=better); `▶`=running, `✗`=not run (killed)
+#### gain LR × (init, init_scale) — val/loss (lower=better); `✗`=killed (trend already clear)
 
 | gain LR | mup s1 | mup s4 | norm s1 | norm s4 |
 |---|---|---|---|---|
@@ -1082,15 +1082,15 @@ cloud sits below the base cloud. 4 runs.
 | 5e-4   | — | 3.6567 | — | **3.5175** |
 | 1.25e-3 | — | 3.6250 | — | 3.5354 |
 | 2.5e-3 | 3.5633 | 3.6304 | 3.6363 | 3.5804 |
-| 5e-3   | 3.6126 | ▶ | 3.6416 | ▶ |
+| 5e-3   | 3.6126 | ✗ | 3.6416 | ✗ |
 | 1e-2   | 3.6178 | — | 3.6496 | — |
-| 2e-2   | ▶ | — | ▶ | — |
+| 2e-2   | ✗ | — | ✗ | — |
 
-(s1 mult {0.5,1,2,4} → gain LR {2.5,5,10,20}e-3; s4 mult {0.1,0.25,0.5,1} → {0.5,1.25,2.5,5}e-3 — hence the staggered rows. Run names `ls_<init>_s<1|4>_m<mult>`. `▶` = the two largest-LR arms per cell, still running at writing.)
+(12/16 arms completed; the 4 largest-gain-LR arms per cell — `mup/norm s1 @ 2e-2`, `mup/norm s4 @ 5e-3` — were **killed** once the saturating-regression trend was clear. s1 mult {0.5,1,2,4} → gain LR {2.5,5,10,20}e-3; s4 mult {0.1,0.25,0.5,1} → {0.5,1.25,2.5,5}e-3 — hence the staggered rows. Run names `ls_<init>_s<1|4>_m<mult>`.)
 
 **Readings:**
 - **Every gain regresses vs no-gain.** Cleanest A/B is `mup s1` (= the champion init): no-gain 3.4745 → +gain @ 2.5e-3 = 3.5633 (+0.089), @ 5e-3 = 3.6126, @ 1e-2 = 3.6178. Adding the gain to the *optimal* init only hurts.
-- **Monotone in gain LR but saturating, not diverging.** Larger gain LR is uniformly worse yet flattens (`mup s1`: 3.5633 → 3.6126 → 3.6178 — a ~0.05 spread over a 4× LR range); the gain adds a roughly fixed ~0.1–0.18 penalty above some threshold. Smaller gain LR is always closer to baseline with no interior minimum below it → the optimum is the LR→0 (no-gain) limit. The per-layer norm DOF, as parameterized, is not a useful lever here.
+- **(Near-)monotone in gain LR, saturating not diverging.** Larger gain LR is worse in 3 of 4 cells and flattens (`mup s1`: 3.5633 → 3.6126 → 3.6178 — ~0.05 over a 4× LR range); the gain adds a roughly fixed ~0.1–0.18 penalty above some threshold. The lone exception is a shallow `mup s4` dip (1.25e-3 = 3.6250 < 5e-4 = 3.6567), still far above baseline. No cell shows an interior minimum below baseline → the optimum is the LR→0 (no-gain) limit; the per-layer norm DOF, as parameterized, is not a useful lever.
 - **s4 (over-normed) is the least-bad init.** `norm s4` at the gentlest LR (5e-4) is the best arm (3.5175) — when `g` has a clear job (shrink the 4× norm toward ~0.25) a tiny LR lets it help *some*; but it still never reaches baseline, and it too worsens monotonically with LR (3.5175 → 3.5354 → 3.5804).
 - **Best overall 3.5175** (norm s4, gentlest LR) — still well short of 3.4745 / record 3.4686 / muon_kimi 3.4514. **The learnable per-layer scale does not close the muon gap; it widens it at every setting tested.**
 
