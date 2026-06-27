@@ -60,6 +60,7 @@ optim:
     lie_ortho_nesterov: true
     lie_ortho_distributed: true
     head_aligned_attn: false
+    learnable_scale: false  # trainable per-layer scalar gain g (W_eff = g·R_out·W₀·R_in)
     single_step_fast: true
     single_step_native: true
     train_output_rotation: true

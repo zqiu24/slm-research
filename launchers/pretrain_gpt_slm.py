@@ -68,6 +68,7 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     # Freeze the output-side rotation (oft_R_out stays at its zero init = identity);
     # only the input-side rotation oft_R_in is trained. Single-sided POET ablation.
     group.add_argument("--poet-freeze-output-rotation", action="store_true")
+    group.add_argument("--poet-learnable-scale", action="store_true")
     group.add_argument(
         "--poet-cache-mode",
         choices=["none", "cached_fwd", "cached_fwd_bwd"],

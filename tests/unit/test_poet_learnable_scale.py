@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
 import torch
 import torch.nn as nn
 from poet_torch import POETLinear, SingleStepPOETLinear
 
+from launchers.pretrain_gpt_slm import add_slm_args
 from src.optim.poet import _build_lie_update_rms_param_groups
 from src.optim.poet_layers import POETMegatronLinear, replace_linears_with_poet
 from src.optim.poet_scaled_layer import (
@@ -229,3 +232,47 @@ def test_denom_scales_with_gain():
     theta_g1 = compute_update_rms_angle(lr=0.005, update_rms=0.2, denom=w_rms * 1.0, max_angle=10.0)
     theta_g2 = compute_update_rms_angle(lr=0.005, update_rms=0.2, denom=w_rms * 2.0, max_angle=10.0)
     assert float(theta_g2) == pytest.approx(float(theta_g1) / 2.0, rel=1e-6)
+
+
+def test_cli_arg_registered_store_true():
+    # add_slm_args registers --slm-config-path as required=True, so it must be passed.
+    parser = add_slm_args(argparse.ArgumentParser())
+    ns = parser.parse_args(["--slm-config-path", "x", "--poet-learnable-scale"])
+    assert ns.poet_learnable_scale is True
+    ns2 = parser.parse_args(["--slm-config-path", "x"])
+    assert ns2.poet_learnable_scale is False
+
+
+def test_learnable_scale_flag_emitted_only_when_set():
+    # Real injection path via _optimizer_args, mirroring test_megatron_args_grouped_poetx.
+    from omegaconf import OmegaConf
+
+    from src.utils.megatron_args import _optimizer_args
+
+    def _poet_cfg(learnable_scale):
+        return OmegaConf.create(
+            {
+                "optim": {
+                    "type": "poet",
+                    "lr": 5e-3,
+                    "weight_decay": 0.1,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8,
+                    "poet": {
+                        "block_count": 1,
+                        "cache_mode": "none",
+                        "init_type": "mup_normalized",
+                        "mup_alpha": 4.0,
+                        "merge_period": 1,
+                        "scale": 1.0,
+                        "single_step_fast": True,
+                        "single_step_native": True,
+                        "lie_alternating": True,
+                        "learnable_scale": learnable_scale,
+                    },
+                }
+            }
+        )
+
+    assert "--poet-learnable-scale" in _optimizer_args(_poet_cfg(True))
+    assert "--poet-learnable-scale" not in _optimizer_args(_poet_cfg(False))

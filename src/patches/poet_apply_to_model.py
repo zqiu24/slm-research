@@ -119,6 +119,7 @@ def _apply_poet_to_chunk(m, args) -> int:
     alt_state.set_fixed_side(single_step_x_one_sided)
     head_resid_block_count = getattr(args, "poet_head_resid_block_count", 1)
     group_experts = getattr(args, "poet_group_experts", False)
+    learnable_scale = getattr(args, "poet_learnable_scale", False)
     head_dim = getattr(args, "kv_channels", None)
     if head_dim is None:
         head_dim = args.hidden_size // args.num_attention_heads
@@ -144,6 +145,7 @@ def _apply_poet_to_chunk(m, args) -> int:
         lie_alternating=lie_alternating,
         alternate_every=alternate_every,
         group_experts=group_experts,
+        learnable_scale=learnable_scale,
     )
     nonpoet_init_scale = float(getattr(args, "poet_nonpoet_init_scale", 1.0))
     if nonpoet_init_scale != 1.0:
