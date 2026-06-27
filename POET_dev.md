@@ -1112,3 +1112,24 @@ cloud sits below the base cloud. 4 runs.
 - **The 1.5e-4 dip is consistent across both inits (same LR, same sign)** — more coherent than pure noise would give — but its magnitude (−0.0014 to −0.0020) is at/under the ±0.0015 single-seed floor, and run-to-run variance is itself ~0.006 (the `mup 5e-4` arm read 3.4859 on an earlier finish vs 3.4799 here). So **call it neutral, not a win.** Best mup 3.4725 still does not reach the §2.15c record 3.4686 (which carries decorrelation; these probes do not).
 
 **Next (if pursued):** seed-confirm `mup 1.5e-4` (seeds 43/44) against its control + a finer LR scan {1e-4, 2e-4}; and test whether the gentle gain *stacks* on the decorrelation record (3.4686) rather than the bare side_γ champion. Absent a seed-confirmed dip, the **per-layer learnable scale is settled as neutral on this cohort — neither the muon-gap lever hoped for (§2.17 goal) nor a regression when gently tuned.** Refresh: `/lustre/home/zqiu/log/lss_*.log` (`validation loss at iteration 9155`).
+
+## 2.19 learnable per-layer scale — verdict (consolidated 2.17 + 2.18)
+
+> **Bottom line: the trainable per-layer gain `g` (`W_eff = g·R_out·W₀·R_in`, init 1.0; landed 2026-06-27) is NEUTRAL on the 60m/40tpp cohort — it does not close the muon gap, and does not regress when its LR is gentle.** The promising part of the hypothesis (POET freezes the operating norm; restoring it should help — §2.17 goal) is *not* borne out: making the norm learnable buys nothing beyond seed noise. The feature is correct and default-off (`learnable_scale=false` ⇒ byte-identical); it stays in the codebase as a characterized dead-end, not a champion ingredient.
+
+#### best learnable-scale result vs the standing board (60m/40tpp, seed 42, val/loss)
+
+| config | val/loss | note |
+|---|---|---|
+| muon_kimi | 3.4514 | non-PEFT target |
+| POET §2.15c record (urms + decorrelate λ0.25, mup γ+0.25) | **3.4686** | best POET |
+| POET §2.12 champion (urms mup γ+0.25, no gain) | 3.4745 | learnable-scale baseline |
+| **+ learnable g @ gain LR 1.5e-4 (best gain arm)** | **3.4725** | −0.0020 vs its control, **within seed noise** → neutral |
+| + learnable g @ gain LR ≥ 2.5e-3 (§2.17) | 3.56–3.66 | too-hot LR; +0.09–0.18, NOT the gain's fault |
+
+**What the two sweeps established:**
+1. **LR is everything; the §2.17 "disaster" was an artifact.** The 16-arm §2.17 grid centred gain LR far too high (mult 0.1–4 → gain LR 5e-4–2e-2) and read a uniform +0.09–0.18 regression (saturating, not diverging). The §2.18 small-LR probe (gain LR 5e-5–5e-4) shows that was **purely over-large LR** — at gain LR ≤ 5e-4 the gain is harmless. Useful band: `gain LR / dense LR` ≈ 0.01–0.03.
+2. **Same-code controls validated.** §2.18 `learnable_scale=false` controls reproduce the §2.12 champions exactly (mup 3.4745, normalized-s2 3.4765), so the deltas are real, not config drift. (Caveat learned: `normalized`'s champion norm is `init_scale=2`, not 1 — §2.12/§2.10.)
+3. **A coherent-but-sub-noise dip at gain LR 1.5e-4.** Both inits dip at the *same* LR with the *same* sign (mup −0.0020, norm −0.0014) — more than pure noise would give — but the magnitude is at/under the ±0.0015 single-seed floor (run-to-run variance ~0.006), so it is **not a win**. Best `g` arm 3.4725 still trails the §2.15c record 3.4686.
+
+**If ever revisited (low priority):** seed-confirm `mup 1.5e-4` (seeds 43/44) vs control, finer LR scan {1e-4, 2e-4}, and test whether the gentle gain *stacks* on the decorrelation record (3.4686) rather than the bare champion — the only path by which `g` could still matter. Absent that, **learnable per-layer scale = neutral, closed.**
