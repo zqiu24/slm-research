@@ -91,6 +91,9 @@ def apply() -> None:
         config.poet_lie_ortho_decorrelate_cos_threshold = getattr(
             args, "poet_lie_ortho_decorrelate_cos_threshold", 0.0
         )
+        config.poet_lie_move_control_mode = getattr(args, "poet_lie_move_control_mode", "off")
+        config.poet_lie_move_budget_rho = getattr(args, "poet_lie_move_budget_rho", 0.0)
+        config.poet_lie_move_lambda = getattr(args, "poet_lie_move_lambda", 1.0)
         return config, overrides
 
     def _wrapped_get_optimizer(config, model, **kwargs):

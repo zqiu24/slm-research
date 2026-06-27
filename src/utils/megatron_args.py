@@ -681,6 +681,19 @@ def _optimizer_args(cfg: DictConfig) -> list[str]:
             )
             if poet.get("lie_ortho_decorrelate_renorm", False):
                 poet_args.append("--poet-lie-ortho-decorrelate-renorm")
+        # Realized-movement trust region (M1): emit only when enabled (default off).
+        move_mode = poet.get("lie_move_control_mode", "off")
+        if move_mode != "off":
+            poet_args.extend(
+                [
+                    "--poet-lie-move-control-mode",
+                    move_mode,
+                    "--poet-lie-move-budget-rho",
+                    str(float(poet.get("lie_move_budget_rho", 0.0))),
+                    "--poet-lie-move-lambda",
+                    str(float(poet.get("lie_move_lambda", 1.0))),
+                ]
+            )
         # store_true: head-aligned attention rotation (requires unfused q/k/v).
         if poet.get("head_aligned_attn", False):
             poet_args.append("--poet-head-aligned-attn")

@@ -832,6 +832,9 @@ def get_megatron_poet_lie_momentum_optimizer(
                 config, "poet_lie_ortho_decorrelate_cos_threshold", 0.0
             ),
             layer_pairs=_build_decorrelate_pairs(model_chunks) if _lie_ortho_decorrelate else None,
+            move_control_mode=getattr(config, "poet_lie_move_control_mode", "off"),
+            move_budget_rho=getattr(config, "poet_lie_move_budget_rho", 0.0),
+            move_lambda=getattr(config, "poet_lie_move_lambda", 1.0),
             **shared_kwargs,
         )
     else:

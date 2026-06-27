@@ -141,6 +141,15 @@ def add_slm_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     group.add_argument("--poet-lie-ortho-decorrelate-lambda", type=float, default=1.0)
     group.add_argument("--poet-lie-ortho-decorrelate-renorm", action="store_true")
     group.add_argument("--poet-lie-ortho-decorrelate-cos-threshold", type=float, default=0.0)
+    # Realized-movement trust region (M1): fix the realized weight move ||D||/||W|| (cap rho)
+    # with an adaptive angle instead of a fixed angle. 'measure' logs r without intervening.
+    group.add_argument(
+        "--poet-lie-move-control-mode",
+        choices=["off", "measure", "clip", "normalize"],
+        default="off",
+    )
+    group.add_argument("--poet-lie-move-budget-rho", type=float, default=0.0)
+    group.add_argument("--poet-lie-move-lambda", type=float, default=1.0)
     # Head-aligned attention rotation (opt-in): q/k/v/o rotate their head-
     # structured side per head (block_size=head_dim, identity Psi, no perm);
     # the residual side stays a normal POET rotation. Requires --unfuse-qkv.

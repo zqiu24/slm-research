@@ -263,6 +263,25 @@ def test_poet_argv_emits_block_count_when_set():
     assert args[args.index("--poet-block-count") + 1] == "8"
 
 
+def test_poet_argv_emits_move_control_when_set():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(
+        _poet_cfg({"block_size": 256, "lie_move_control_mode": "clip", "lie_move_budget_rho": 0.02})
+    )
+    assert "--poet-lie-move-control-mode" in args
+    assert args[args.index("--poet-lie-move-control-mode") + 1] == "clip"
+    assert "--poet-lie-move-budget-rho" in args
+    assert args[args.index("--poet-lie-move-budget-rho") + 1] == "0.02"
+
+
+def test_poet_argv_omits_move_control_by_default():
+    from src.utils.megatron_args import _optimizer_args
+
+    args = _optimizer_args(_poet_cfg({"block_size": 256}))
+    assert "--poet-lie-move-control-mode" not in args
+
+
 def test_wandb_entity_omitted_when_unset():
     # Default entity is null -> do NOT emit --wandb-entity, so wandb falls back
     # to the account's personal namespace (avoids "entity not found").
