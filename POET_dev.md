@@ -545,7 +545,8 @@ codexlog poet_nest_b195_lr4 bash scripts/train_poet_lie_orth.sh llama3 \
 | **poet_lie_orth (+alt, Nesterov b1.95, init_mup α4, c6, lr5/scale0.5)** | [lrsc_mup_lr5_ps50-…20260626T024740Z](/lustre/fast/fast/zqiu/slm-research/runs/lrsc_mup_lr5_ps50-llama3-60m-s42-20260626T024740Z) (`0dd51k6d`, 8-GPU) | **3.4766** | 32.35 | **lr 5e-3, scale 0.5, c=6 (eff∠ 0.015)**, muon, head-off, distributed, alternating, Nesterov b1.95, **`init_type=mup_normalized`, `mup_alpha=4`** (row_rms ≈0.064) — best **fixed-angle** POET (§2.10 lr×scale); **superseded by the update-RMS variant below (§2.12 `mup` 3.4745, −0.0021)** |
 | poet_lie_orth (+alt, Nesterov b1.95, **init_normalized scale 2**, c6, lr5/scale0.5) | [lrsc_norm_lr5_ps50-…20260626T024725Z](/lustre/fast/fast/zqiu/slm-research/runs/lrsc_norm_lr5_ps50-llama3-60m-s42-20260626T024725Z) (`arv9u5u7`, 8-GPU) | 3.4770 | 32.36 | **lr 5e-3, scale 0.5, c=6 (eff∠ 0.015)**, muon, head-off, distributed, alternating, Nesterov b1.95, **`init_type=normalized`, `init_scale=2.0`** (row_rms ≈0.088) — best **`normalized`** init (§2.10 lr×scale); ties `mup` within seed noise, beats its §2.9 norm optimum (3.4787) by −0.002 |
 | poet_lie_orth (+alt, Nesterov b1.95, **init_none scale 4**, c6, lr4/scale0.5) | [lrsc_none_lr4_ps50-…20260626T000344Z](/lustre/fast/fast/zqiu/slm-research/runs/lrsc_none_lr4_ps50-llama3-60m-s42-20260626T000344Z) (`e9jt1sdv`, 8-GPU; reproduces `hi_none_s4_c6` 3.4804) | 3.4804 | 32.47 | **lr 4e-3, scale 0.5, c=6 (eff∠ 0.012)**, muon, head-off, distributed, alternating, Nesterov b1.95, **`init_type=none`, `init_scale=4.0`** (row_rms ≈0.064) — best **`none`** init (§2.5-K); its optimum stays at lr4 (§2.10: lr5/scale0.5 = 3.4809), so `mup`/`normalized` at lr5 edge it by −0.003/−0.004 |
-| **poet_lie_orth_update_rms (mup α4, ρ0.30, side_γ +0.25)** | [urms_gP25_mup_r030_lr5-…20260626T164823Z](/lustre/fast/fast/zqiu/slm-research/runs/urms_gP25_mup_r030_lr5-llama3-60m-s42-20260626T164823Z) (`hg0l12mw`, 8-GPU) | **3.4745** | 32.28 | **update-RMS angle** `θ=min(lr·ρ/RMS(W), max∠)` (`q_optimizer=lie_ortho_update_rms`): lr 5e-3, **ρ=0.30**, max∠ 0.024, **`side_gamma=+0.25`** (out-side rotates ~1.41× more on fc), `init_type=mup_normalized` α4, muon, head-off, distributed, alternating, Nesterov b1.95 — **🏅 best POET / best PEFT, 🥉 3rd overall** (§2.12); beats the fixed-angle `mup` champion (3.4766) by −0.0021, no `lie_ortho_c`. ⚠️ single seed, margin ~noise — seed-confirm pending |
+| **poet_lie_orth_update_rms + decorrelation (mup α4, side_γ+0.25, λ0.25, `renorm=off`)** | `urms_decorr_gp25_mup_l0p25_rnf` (8-GPU, §2.15c) | **3.4686** | 32.09 | **§J.3 cross-side decorrelation** stacked on the side_γ+0.25 update-RMS champion: `lie_ortho_decorrelate=true`, `mode=symmetric`, **`lambda=0.25`**, **`renorm=false`**, `cos_threshold=0`, else as the row below — **🏅 best POET / best PEFT, 🥉 3rd overall**; −0.0059 vs the prior champion (3.4745), now −0.0103 behind nGPT (3.4583) / −0.0172 behind muon_kimi (3.4514). `renorm=false` beats `renorm=true` (3.4699) at every cell; λ0.25 optimum, λ0.75 cliff. ⚠️ single seed, margin < the ~0.01 noise floor — seed-confirm pending |
+| poet_lie_orth_update_rms (mup α4, ρ0.30, side_γ +0.25) | [urms_gP25_mup_r030_lr5-…20260626T164823Z](/lustre/fast/fast/zqiu/slm-research/runs/urms_gP25_mup_r030_lr5-llama3-60m-s42-20260626T164823Z) (`hg0l12mw`, 8-GPU) | 3.4745 | 32.28 | **update-RMS angle** `θ=min(lr·ρ/RMS(W), max∠)` (`q_optimizer=lie_ortho_update_rms`): lr 5e-3, **ρ=0.30**, max∠ 0.024, **`side_gamma=+0.25`** (out-side rotates ~1.41× more on fc), `init_type=mup_normalized` α4, muon, head-off, distributed, alternating, Nesterov b1.95 — the **§2.15(c) decorrelation base**, now superseded by the decorrelation champion above (−0.0059); was best POET pre-decorrelation (§2.12), beats the fixed-angle `mup` champion (3.4766) by −0.0021, no `lie_ortho_c`. ⚠️ single seed |
 | poet_lie_orth_update_rms (**normalized s2**, ρ0.30, side_γ 0) | [urms_norm_r030_lr5-…20260626T114201Z](/lustre/fast/fast/zqiu/slm-research/runs/urms_norm_r030_lr5-llama3-60m-s42-20260626T114201Z) (`ybykexu1`, 8-GPU) | 3.4765 | 32.35 | update-RMS, lr 5e-3, ρ=0.30, max∠ 0.024, **`side_gamma=0`** (symmetric — asymmetry hurts `normalized`, §2.12), `init_type=normalized` scale 2, else as above — best **`normalized`** update-RMS (§2.11); beats fixed-angle `normalized` (3.4770) by −0.0005 |
 | poet_lie_orth_update_rms (**none s4**, ρ0.20, side_γ 0) | [urms_none_r020_lr5-…20260626T102036Z](/lustre/fast/fast/zqiu/slm-research/runs/urms_none_r020_lr5-llama3-60m-s42-20260626T102036Z) (`ufz71nt1`, 8-GPU) | 3.4782 | 32.40 | update-RMS, lr 5e-3, **ρ=0.20** (`none` prefers low ρ; monotonic, §2.11), max∠ 0.024, `init_type=none` scale 4, else as above — best **`none`** update-RMS; beats fixed-angle `none` (3.4804) by −0.0022 |
 | **nGPT + muon_kimi** | [ngpt_muon_lr80-…20260623T230232Z](/lustre/fast/fast/zqiu/slm-research/runs/ngpt_muon_lr80-llama3-60m-s42-20260623T230232Z) | **3.4882** | 32.73 | **lr 8e-3, wd 0.1**, muon_kimi (momentum 0.95, nesterov, ns_steps 5), cosine min_lr 0.1 — **4th overall**; worst of the {dense,nGPT}×{adam,muon} matrix (anti-synergy, §2.3) |
@@ -932,20 +933,28 @@ it per-arm, but any manual run must pass it explicitly). One script per init, 3 
 - **normalized** (`init_scale=2.0`, ρ0.30): `bash scripts/sweep_update_rms_decorrelate_normalized.sh` — baseline **3.4765** (`ybykexu1`)
 - **none** (`init_scale=4.0`, **ρ0.20** — `none` prefers low ρ): `bash scripts/sweep_update_rms_decorrelate_none.sh` — baseline **3.4782** (`ufz71nt1`)
 
-| init | `decorrelate_lambda` | run dir / W&B | val/loss | Δ vs baseline |
+| init | `decorrelate_lambda` | run | val/loss | Δ vs baseline |
 |---|---|---|---|---|
 | mup | 0 (baseline) | §2.11 `mup` ρ0.30 | 3.4758 | — |
-| mup | 0.25 | ▶ | | |
-| mup | 0.50 | ▶ | | |
-| mup | 0.75 | ▶ | | |
+| mup | 0.25 | `urms_decorr_mup_l0p25` | **3.4722** | **−0.0036** |
+| mup | 0.50 | `urms_decorr_mup_l0p50` | 3.4760 | +0.0002 |
+| mup | 0.75 | `urms_decorr_mup_l0p75` | 3.5823 | +0.1065 ✗ |
 | normalized | 0 (baseline) | `ybykexu1` | 3.4765 | — |
-| normalized | 0.25 | ▶ | | |
-| normalized | 0.50 | ▶ | | |
-| normalized | 0.75 | ▶ | | |
-| none | 0 (baseline) | `ufz71nt1` | 3.4782 | — |
-| none | 0.25 | ▶ | | |
-| none | 0.50 | ▶ | | |
-| none | 0.75 | ▶ | | |
+| normalized | 0.25 | `urms_decorr_norm_l0p25` | **3.4705** | **−0.0060** |
+| normalized | 0.50 | `urms_decorr_norm_l0p50` | 3.4778 | +0.0013 |
+| normalized | 0.75 | `urms_decorr_norm_l0p75` | 3.5876 | +0.1111 ✗ |
+| none | 0.25 / 0.50 / 0.75 | ▶ (node-3 queue) | | |
+
+→ **λ0.25 is the optimum — NOT λ0.5 (the §J.3 value) — and the cliff is between 0.5 and 0.75.**
+Partial decorrelation at λ0.25 helps both inits (mup −0.0036, normalized −0.0060); λ0.5 is
+neutral (≈ baseline); λ0.75 is catastrophic (+0.11 — the renorm-preserved over-projection
+blow-up). So the §J.3 simultaneous-path optimum (λ0.5 on the default-init non-Nesterov
+baseline) does **not** transfer to the update-RMS / Nesterov / init-scaled champion — here the
+useful fraction is half that. The `none` arm is still queued on node 3.
+⚠️ single seed; the −0.004/−0.006 wins sit at the ~0.01 noise floor, but the
+λ0.25-helps / λ0.75-cliff *shape* is consistent across both inits. **These used
+`renorm=true`; §2.15(c) finds `renorm=false` is uniformly better, so the symmetric optimum
+very likely improves further with renorm off (not yet run here).**
 
 ## 2.15 update-RMS off-axis ablations (live, filling)
 
@@ -958,8 +967,15 @@ side_γ=0). `0.024` = anchor (should reproduce §2.11). Watch `poet_update_rms/c
 
 | init | max∠ 0.012 | 0.016 | 0.024 (anchor) | 0.032 |
 |---|---|---|---|---|
-| mup α4 | ▶ | ▶ | 3.4758 | ▶ |
-| normalized s2 | ▶ | ▶ | 3.4765 | ▶ |
+| mup α4 | 3.4810 | 3.4790 | **3.4758** | 3.4771 |
+| normalized s2 | **3.4756** | 3.4768 | 3.4765 | 3.4770 |
+
+→ **Anchors reproduce §2.11 exactly (3.4758 / 3.4765) — wiring sound.** The clamp ceiling is
+**not a useful lever for `mup`** (optimum at 0.024; lowering to 0.012 costs +0.0052, raising
+to 0.032 costs +0.0013) — consistent with §2.11(2) (`mup` barely clamps, so reshaping the
+ceiling only distorts). **`normalized`** gains a sliver at 0.012 (3.4756, −0.0009) but it is
+within seed noise and non-monotone (0.016 already back to 3.4768). **Verdict: the §2.11
+default max∠0.024 stands; this axis yields no robust gain.**
 
 #### (b) dense `lr` under the adaptive angle (`scripts/sweep_update_rms_lr.sh`)
 The §2.10 lr lever, re-mapped under the self-scaling angle (ρ0.30, max∠0.024, side_γ=0).
@@ -967,8 +983,12 @@ The §2.10 lr lever, re-mapped under the self-scaling angle (ρ0.30, max∠0.024
 
 | init | lr 4e-3 | 5e-3 (anchor) | 6e-3 |
 |---|---|---|---|
-| mup α4 | ▶ | 3.4758 | ▶ |
-| normalized s2 | ▶ | 3.4765 | ▶ |
+| mup α4 | 3.4835 | **3.4758** | 3.4782 |
+| normalized s2 | 3.4801 | **3.4765** | 3.4770 |
+
+→ **lr5 confirmed optimal for both inits under the adaptive angle** (lr4 costs +0.0077/+0.0036,
+lr6 costs +0.0024/+0.0005) — the §2.10 fixed-angle optimum carries straight over to the
+self-scaling angle. **No gain on the lr axis;** anchors reproduce §2.11.
 
 #### (c) decorrelation × side_γ=+0.25 — record attempt (`scripts/sweep_update_rms_decorrelate_gp25.sh`)
 §J.3 partial-λ decorrelation stacked on the **asymmetric** champion (side_γ=+0.25),
@@ -979,10 +999,24 @@ The §2.10 lr lever, re-mapped under the self-scaling angle (ρ0.30, max∠0.024
 | init | λ | renorm=true | renorm=false |
 |---|---|---|---|
 | mup α4 | 0 (baseline) | 3.4745 | 3.4745 |
-| mup α4 | 0.25 | ▶ | ▶ |
-| mup α4 | 0.50 | ▶ | ▶ |
-| mup α4 | 0.75 | ▶ | ▶ |
+| mup α4 | 0.25 | 3.4699 | **3.4686** 🏅 |
+| mup α4 | 0.50 | 3.4761 | 3.4724 |
+| mup α4 | 0.75 | 3.5725 | 3.5620 |
 | normalized s2 | 0 (baseline) | 3.4780 | 3.4780 |
-| normalized s2 | 0.25 | ▶ | ▶ |
-| normalized s2 | 0.50 | ▶ | ▶ |
+| normalized s2 | 0.25 | 3.4753 | 3.4706 |
+| normalized s2 | 0.50 | 3.4786 | ▶ (running) |
 | normalized s2 | 0.75 | ▶ | ▶ |
+
+→ **🏅 NEW BEST POET: `urms_decorr_gp25_mup_l0p25_rnf` = 3.4686** (mup α4, side_γ+0.25,
+decorrelation **λ0.25, `renorm=false`**, mode=symmetric, ρ0.30, lr5, max∠0.024) — **−0.0059**
+vs the prior champion (3.4745) and −0.0080 vs the fixed-angle best (3.4766). Narrows the gap
+to nGPT (3.4583) to −0.0103 and muon_kimi (3.4514) to −0.0172. **Two robust findings:**
+**(i) `renorm=false` beats `renorm=true` at every cell** (mup λ0.25 3.4686<3.4699; λ0.5
+3.4724<3.4761; even the λ0.75 blow-up 3.5620<3.5725; norm λ0.25 3.4706<3.4753) — letting
+decorrelation *also shrink* the step (not just redirect it) helps, so the §2.14 `renorm=true`
+default was suboptimal. **(ii) λ0.25 optimum, λ0.75 cliff** (same shape as §2.14).
+**side_γ+0.25 and decorrelation stack** — λ0.25/rnf adds −0.0059 on top of the asymmetry's
+−0.0013 (3.4758→3.4745). `normalized`'s off-optimum +0.25 base (3.4780) is rescued hard by
+λ0.25/rnf (3.4706, −0.0074) but stays above `mup`. ⚠️ **single seed; the −0.0059 record is
+below the ~0.01–0.02 noise floor → a 2–3-seed confirm of `gp25_mup_l0p25_rnf` is the bar to
+lock it.** Pending: norm λ0.5-rnf (running), norm λ0.75 (×2).
