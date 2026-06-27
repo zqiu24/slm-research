@@ -2,10 +2,10 @@
 # §2.16(a) FOLLOW-UP — bracket the normalized optimum. In the finer-λ scan, normalized@side_γ=0
 # renorm=off improved MONOTONICALLY to the grid edge (λ0.30 = 3.4682, ties the basin floor and
 # beats its no-decorr base 3.4765 by −0.0083), so its true minimum may sit ABOVE 0.30. Extend the
-# scan to λ {0.35, 0.40} to bracket it. normalized only, side_γ=0, renorm=FALSE, mode=symmetric,
-# cos_threshold=0, ρ0.30/lr5/max∠0.024. 2 runs, sequential.
+# scan to λ {0.35, 0.40, 0.45, 0.50} to bracket it. normalized only, side_γ=0, renorm=FALSE,
+# mode=symmetric, cos_threshold=0, ρ0.30/lr5/max∠0.024. 4 runs, sequential, ascending λ — once the
+# val stops dropping you can kill the remainder (the minimum is bracketed by then).
 #   normalized baselines: λ0.30 = 3.4682 (edge), λ0.25 = 3.4703, base (no decorr) = 3.4765.
-#   Goal: find where the minimum turns up; if 0.35/0.40 keep dropping, push further.
 #
 # TRIPWIRE: each startup must print
 #   [POET] Lie-orth CROSS-SIDE DECORRELATION ON (mode=symmetric, lambda=<L>, renorm=False, ...)
@@ -32,8 +32,8 @@ COMMON="base/scale=60m training_regime=ablation_40x \
   optim.poet.lie_ortho_decorrelate_cos_threshold=0.0 \
   optim.lr=0.005 cluster.gpus_per_node=8"
 
-# λ values from args (default = the 2-point edge extension); allows `… 0.45` etc.
-LAMS=("$@"); [ "${#LAMS[@]}" -eq 0 ] && LAMS=(0.35 0.40)
+# λ values from args (default = the 4-point edge extension, ascending); allows `… 0.55` etc.
+LAMS=("$@"); [ "${#LAMS[@]}" -eq 0 ] && LAMS=(0.35 0.40 0.45 0.50)
 
 for LAM in "${LAMS[@]}"; do
   TAG="${LAM/./p}"                       # 0.35 -> 0p35
