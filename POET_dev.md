@@ -1098,7 +1098,22 @@ cloud sits below the base cloud. 4 runs.
 
 ## 2.18 learnable scale — small-LR probe + no-gain control (live, filling)
 
-§2.17 is (near-)monotone toward the LR→0 (no-gain) limit and adds a ~0.1 penalty by `gain LR 2.5e-3`. This probe drops a decade below the §2.17 floor and adds the missing same-code anchor. Each init at its **own champion operating point** — mup→init_scale=1 / side_γ+0.25 (anchor 3.4745); normalized→**init_scale=2** / side_γ0 (anchor 3.4765; normalized's best norm is s2, not s1 — §2.12/§2.10). `learnable_scale=false` control + `gain_lr_mult` {0.1, 0.03, 0.01} (gain LR 5e-4 / 1.5e-4 / 5e-5). 8 runs; the controls pin the §2.12 champions exactly (resolving the §2.17 "no in-grid control" caveat). Scripts [sweep_lscale_smalllr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr.sh) (dispatcher) — mup side via `sweep_lscale_smalllr_node{1,2}.sh` (2 arms each, done); norm-s2 side via [sweep_lscale_smalllr_norm{1..4}.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr_norm1.sh) (1 arm each, for 4 parallel nodes). 60m/40tpp, seed 42, 8-GPU. Run names `lss_mup_s1_*` / `lss_norm_s2_*`.
+§2.17 is (near-)monotone toward the LR→0 (no-gain) limit and adds a ~0.1 penalty by `gain LR 2.5e-3`. This probe drops a decade below the §2.17 floor and adds the missing same-code anchor (`learnable_scale=false` control), with `gain_lr_mult` {0.1, 0.03, 0.01} (gain LR 5e-4 / 1.5e-4 / 5e-5). 60m/40tpp, seed 42, 8-GPU. Scripts [sweep_lscale_smalllr.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr.sh) (dispatcher) + `sweep_lscale_smalllr_node{1,2}.sh` (mup) + [sweep_lscale_smalllr_norm{1..4}.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_lscale_smalllr_norm1.sh) (normalized). Run names `lss_mup_*` / `lss_norm_*`.
+
+#### The four headline results — {best init, default init} × {no g, +g}
+
+`+g` column = the best gain LR for that init (full LR dependence in the two tables below). "best init" = the tuned champion (`mup α4`); "default init" = the untuned `normalized` at scale 1.
+
+| init (init_scale, side_γ) | without g | with g (best gain LR) | g's effect |
+|---|---|---|---|
+| **best init** — mup α4 (s1, γ+0.25) | 3.4745 | **3.4725** (gain LR 1.5e-4) | −0.0020 (within noise) |
+| **default init** — normalized (s1, γ0) | 3.5228 | 3.5244 (gain LR 5e-5) | +0.0016 (no help) |
+
+**Two facts from these four numbers:**
+1. **`g` is neutral on *both* inits** — it shifts each result by ≤ the noise floor (best init −0.0020, default init +0.0016). Adding a trainable scale neither helps a good init nor rescues a default one.
+2. **The 0.046 gap between the rows is the init choice, and `g` cannot close it.** The fix for the default init is to *tune its operating norm*, not to add `g`: hand-setting `normalized` to its champion scale (s2=2) recovers **3.4765** (≈ the mup champion), whereas leaving it at scale 1 + `g` stays ~3.52. **So tune the init; the gain is a wash either way** (see the s1-vs-s2 side-finding below).
+
+#### Gain-LR dependence — each init at its tuned operating norm (`mup` s1, `normalized` s2)
 
 | gain LR | mup s1 (γ0.25) | Δ vs ctrl | norm s2 (γ0) | Δ vs ctrl |
 |---|---|---|---|---|
