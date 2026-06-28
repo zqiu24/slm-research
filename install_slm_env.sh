@@ -108,6 +108,23 @@ uv pip install ninja packaging psutil pybind11 Cython wheel
 uv pip install "torch==2.11.0"
 uv pip install nvidia-mathdx==25.6.0          # TE build dep
 
+# --- headers for the source builds below ----------------------------------
+# Two gaps in the build include path that bite source builds:
+#  1. cuDNN: load_cuda13_2_nccl_env.sh unloads the system cuDNN module (9.10.2)
+#     so torch's bundled cuDNN wins at RUNTIME — but that strips cuDNN from the
+#     build include path too, so TE fails with "fatal error: cudnn.h". Point the
+#     builds at the venv-bundled nvidia-cudnn-cu13 (9.19.0, torch's version).
+#  2. cuda.h: the loader sets CUDA_HOME/PATH/LD_LIBRARY_PATH but never adds
+#     $CUDA_HOME/include to CPATH. torch's BuildExtension auto-adds it (so TE was
+#     fine), but plain-setuptools / build-isolated packages (nvidia-resiliency-ext
+#     via megatron-core[dev]) don't, and fail on "cupti.h -> cuda.h: No such file".
+# Exported so every later build (flash-attn / DeepEP / apex / Megatron) inherits it.
+CUDNN_DIR="$(ls -d "$VIRTUAL_ENV"/lib/python*/site-packages/nvidia/cudnn)"
+export CPATH="${CUDA_HOME}/include:${CUDNN_DIR}/include${CPATH:+:$CPATH}"
+export LIBRARY_PATH="${CUDNN_DIR}/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+export CUDNN_PATH="${CUDNN_DIR}"
+export CUDNN_HOME="${CUDNN_DIR}"
+
 # --- TransformerEngine at Megatron's pinned SHA ---------------------------
 # Matches third_party/Megatron-LM core_v0.17.0's [tool.uv.sources] entry
 # so what mcore later resolves to is the same artifact that's already
@@ -178,13 +195,36 @@ TORCH_CUDA_ARCH_LIST='9.0;10.0;10.3' MAX_JOBS=8 \
   "git+https://github.com/deepseek-ai/DeepEP.git@567632dd59810d77b3cc05553df953cc0f779799"
 
 # --- Apex (fused norm/optimizer kernels) ----------------------------------
-# cu13 apex tree (built for CUDA 13 / torch 2.11); the older software/apex
-# was compiled for cuda/12.9.
-if [ -d /lustre/fast/fast/zqiu/software/cu13/apex ]; then
+# Prefer the prebuilt cu13 apex tree if it's readable (built for CUDA 13 /
+# torch 2.11; the older software/apex was compiled for cuda/12.9). It lives
+# under ~zqiu, so other users can't read it — fall back to building apex from
+# source. apex is optional (Megatron has non-fused fallbacks), so a failed
+# source build only warns and does NOT abort the install.
+APEX_PREBUILT=/lustre/fast/fast/zqiu/software/cu13/apex
+if [ -d "$APEX_PREBUILT" ]; then
   NVCC_APPEND_FLAGS="--threads 4" APEX_PARALLEL_BUILD=8 APEX_CPP_EXT=1 APEX_CUDA_EXT=1 \
-    uv pip install -v --no-build-isolation /lustre/fast/fast/zqiu/software/cu13/apex
+    uv pip install -v --no-build-isolation "$APEX_PREBUILT"
 else
-  echo "WARN: /lustre/fast/fast/zqiu/software/cu13/apex not found; skipping apex." >&2
+  echo "==> $APEX_PREBUILT not readable; building apex from source (NVIDIA/apex)." >&2
+  # Pinned to a commit verified against torch 2.11 / CUDA 13.x on this cluster.
+  APEX_COMMIT=becbb77cea4cb54f2929f7c938a0a6f7dd1fdc39
+  APEX_SRC="$(mktemp -d "${TMPDIR}/apex-src.XXXXXX")"
+  # apex's setup.py refuses to build when nvcc's CUDA version differs from the
+  # one torch was built with. torch ships cu130 (CUDA 13.0) wheels while the
+  # cluster nvcc is 13.2 — a safe minor mismatch (the rest of the stack builds
+  # cu13.2 against torch cu130 too). Relax the guard to compare major only.
+  if git clone https://github.com/NVIDIA/apex "$APEX_SRC" \
+     && git -C "$APEX_SRC" checkout --quiet "$APEX_COMMIT" \
+     && sed -i \
+          's/if bare_metal_version != torch_binary_version:/if bare_metal_version.major != torch_binary_version.major:/' \
+          "$APEX_SRC/setup.py" \
+     && NVCC_APPEND_FLAGS="--threads 4" APEX_PARALLEL_BUILD=8 APEX_CPP_EXT=1 APEX_CUDA_EXT=1 \
+          uv pip install -v --no-build-isolation "$APEX_SRC"; then
+    echo "==> apex built from source OK." >&2
+  else
+    echo "WARN: apex source build failed; continuing without apex (Megatron has fallbacks)." >&2
+  fi
+  rm -rf "$APEX_SRC"
 fi
 
 # --- torchtitan (vendored under third_party/, editable) -------------------
@@ -235,6 +275,21 @@ fi
 # --- git hooks (installed into the slm-research clone, not the env) -------
 ( cd "$SLM_REPO" && pre-commit install ) || \
   echo "WARN: pre-commit install failed (run later from $SLM_REPO)."
+
+# --- make activation auto-load the CUDA 13.2 runtime env -------------------
+# Append a guarded source of load_cuda13_2_nccl_env.sh to the venv's activate
+# script, so `source .venv/bin/activate` pulls in LD_PRELOAD cuBLASLt /
+# CUDA_HOME / `module load cuda/13.2` automatically — no separate source step
+# before `import torch` / transformer_engine. Guard avoids stacking PATH /
+# LD_PRELOAD on re-activate. (Note: `deactivate` does NOT unload the CUDA env.)
+cat >> "$ENV_DIR/.venv/bin/activate" <<EOF
+
+# --- auto-load CUDA 13.2 / NCCL runtime env (added by install_slm_env.sh) ---
+if [ -z "\${SLM_CUDA_ENV_LOADED:-}" ] && [ -f "$SLM_REPO/load_cuda13_2_nccl_env.sh" ]; then
+    . "$SLM_REPO/load_cuda13_2_nccl_env.sh"
+    export SLM_CUDA_ENV_LOADED=1
+fi
+EOF
 
 cat <<EOF
 
