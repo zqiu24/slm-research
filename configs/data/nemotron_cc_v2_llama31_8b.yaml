@@ -3,7 +3,7 @@ data:
   name: nemotron_cc_v2_llama31_8b
   path: "/lustre/fast/fast/groups/ei-slm/Nemotron-CC-v2/nemotron_cc_v2_high_quality_text_document_llama31_8b"
   tokenizer_type: HuggingFaceTokenizer
-  tokenizer_model: "/lustre/fast/fast/zqiu/hf_models/Llama-3.1-8B"
+  tokenizer_model: "/lustre/fast/fast/groups/ei-slm/hf_models/Llama-3.1-8B"
   vocab_size: 128256
   split: "99,1,0"
   no_mmap_bin_files: true
