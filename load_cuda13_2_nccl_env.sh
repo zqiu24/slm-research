@@ -33,3 +33,18 @@ export NCCL_NVLS_ENABLE=${NCCL_NVLS_ENABLE:-0}
 # only the system lib exports; without this preload the venv lib wins
 # the soname race and TE crashes at first import.
 export LD_PRELOAD=/is/software/nvidia/cuda-13.2/lib64/libcublasLt.so.13${LD_PRELOAD:+:$LD_PRELOAD}
+
+# --- per-user secrets (W&B API key, etc.) ---------------------------------
+# Source a gitignored .env at the repo root if present, so secrets like
+# WANDB_API_KEY reach runs without committing them or relying on ~/.netrc.
+# Each user creates their own .env (see .env.example). `set -a` auto-exports
+# every KEY=VALUE the file defines; existing env vars are overridden by .env,
+# so unset a var first if you want a one-off override to win.
+__slm_env_root="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [ -f "${__slm_env_root}/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "${__slm_env_root}/.env"
+  set +a
+fi
+unset __slm_env_root
