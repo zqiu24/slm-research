@@ -1159,3 +1159,31 @@ Starting at `s1`, the gain never claws back toward the `s2` optimum — best `s1
 3. **A coherent-but-sub-noise dip at gain LR 1.5e-4.** Both inits dip at the *same* LR with the *same* sign (mup −0.0020, norm −0.0014) — more than pure noise would give — but the magnitude is at/under the ±0.0015 single-seed floor (run-to-run variance ~0.006), so it is **not a win**. Best `g` arm 3.4725 still trails the §2.15c record 3.4686.
 
 **If ever revisited (low priority):** seed-confirm `mup 1.5e-4` (seeds 43/44) vs control, finer LR scan {1e-4, 2e-4}, and test whether the gentle gain *stacks* on the decorrelation record (3.4686) rather than the bare champion — the only path by which `g` could still matter. Absent that, **learnable per-layer scale = neutral, closed.**
+
+## 2.20 realized-movement trust region (M1) — calibrated clip sweep (2026-06-27, NEGATIVE)
+
+> First GPU test of the **realized-movement trust region** (M1, landed 2026-06-27, `312b4b3`→`2bb354e`; [poet_lie_orth_update_rms.py](/lustre/fast/fast/zqiu/slm-research/src/optim/poet_lie_orth_update_rms.py)). Instead of the fixed-angle update-RMS law, M1 caps the *realized* per-step weight move `‖D_act‖_F/‖W‖_F ≤ ρ_move` with an **adaptive angle** (mode `off | measure | clip | normalize`; runs after decorrelation on the all-reduced generator). Hypothesis: a fixed move budget anchored at the high-LR regime caps early over-spend, then auto-tapers as the cosine LR decays. Base recipe = the §2.15c decorrelation champion (mup α4, side_γ+0.25, ρ0.30, lr5, max∠0.024, decorrelate λ0.25 renorm=off). Sweep [sweep_move_trust_region.sh](/lustre/fast/fast/zqiu/slm-research/scripts/sweep_move_trust_region.sh), 60m/40tpp, seed 42, 8-GPU. Logs `/lustre/home/zqiu/log/mtr_*.log`.
+>
+> **Phase-0 calibration:** the `measure` arm (decorr ON, observe-only — no clip) recorded `poet_move/ratio_*` at the post-warmup plateau; RA=p50=**0.013** (tighter), RB=p90=**0.019** (gentler) → committed to the script (`2bb354e`). The measure arm doubles as a self-anchor: it reproduces the **record 3.4686 exactly**, confirming `measure` mode is a true train-time no-op and the base recipe is intact.
+>
+> **Result — NEGATIVE: clipping the realized move regresses at every setting tested.** All four ran arms (the `clip_decorr_rB` corner was not run) land *above* their no-clip anchor; gentler ρ hurts less, exactly the "clip less → closer to unclipped" trend. The cosine-LR decay already tapers the move, so a fixed budget only ever *subtracts* useful magnitude.
+
+#### 2×2 (clip ρ × decorrelation) vs no-clip anchors — val/loss @ 9155 (lower=better)
+
+| arm | clip ρ | decorr | val/loss | vs. anchor |
+|---|---|---|---|---|
+| `measure` (observe-only, no clip) | — | ON | **3.4686** | = §2.15c record (self-anchor ✓) |
+| `clip_decorr_rA` | 0.013 | ON | 3.4700 | **+0.0014** vs record 3.4686 |
+| `clip_off_rB` | 0.019 | OFF | 3.4762 | **+0.0017** vs no-decorr 3.4745 |
+| `clip_off_rA` | 0.013 | OFF | 3.4770 | **+0.0025** vs no-decorr 3.4745 |
+| `clip_decorr_rB` | 0.019 | ON | *not run* | (trend → ~3.469x, still < record) |
+
+Anchors: **3.4745** = §2.12 no-decorr champion, **3.4686** = §2.15c decorrelation record. All tripwires fired (move-control banner mode/ρ + decorr line per arm verified in logs).
+
+**Readings:**
+- **Every clip arm is worse than its no-clip anchor**, by +0.0014 to +0.0025. The trust region removes update magnitude the unconstrained law was using productively.
+- **Gentler budget hurts less, monotonically.** Decorr-OFF: rB=0.019 (3.4762) < rA=0.013 (3.4770) — looser clip → nearer the 3.4745 baseline. The missing `clip_decorr_rB` corner will by the same trend land ~3.469x, between `clip_decorr_rA` (3.4700) and the record (3.4686) — still a regression, so it would not change the verdict.
+- **The measure self-anchor is exact (3.4686).** Because `measure` only observes, any clip-arm delta is purely the clipping, not config drift — the negative result is clean.
+- **Decorrelation still helps under clipping** (clip_decorr_rA 3.4700 < clip_off_rA 3.4770), i.e. M1 and decorrelation are orthogonal; but neither the clip alone nor clip+decorr beats the no-clip decorrelation record.
+
+**Verdict — M1 realized-movement trust region is a characterized dead-end on this cohort.** A fixed move budget anchored at the high-LR regime never helps because the cosine LR already shrinks the realized move; the clip only subtracts. The feature is correct and default-off (`move_control_mode=off` ⇒ byte-identical champion path) — it stays in the codebase as a measurement tool (`measure` mode gives the `poet_move/ratio_*` diagnostics) and a characterized negative, not a champion ingredient. The **§2.15c decorrelation record 3.4686 (no clipping) remains the one to beat.** (Optional close-out: run `clip_decorr_rB` only to formally complete the 2×2; not expected to change anything.)
