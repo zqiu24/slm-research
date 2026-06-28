@@ -1,0 +1,12 @@
+# @package _global_
+data:
+  name: nemotron_cc_v2_scratch_qwen35
+  path: "/lustre/scratch/zqiu/Megatron-LM/Nemotron-CC-v2/nemotron_cc_v2_high_quality_qwen35_tokenizer_text_document"
+  tokenizer_type: HuggingFaceTokenizer
+  tokenizer_model: "/lustre/fast/fast/zqiu/hf_models/Qwen3.5-35B-A3B-FP8"
+  vocab_size: 151936
+  split: "99,1,0"
+  no_mmap_bin_files: true
+  no_create_attention_mask_in_dataloader: true
+  num_workers: 6
+  expected_manifest_hash: null

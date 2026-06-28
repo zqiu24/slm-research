@@ -1,0 +1,12 @@
+# @package _global_
+data:
+  name: nemotron_cc_v2_scratch_llama31
+  path: "/lustre/scratch/zqiu/Megatron-LM/Nemotron-CC-v2/nemotron_cc_v2_high_quality_llama31_tokenizer_text_document"
+  tokenizer_type: HuggingFaceTokenizer
+  tokenizer_model: "/lustre/fast/fast/zqiu/hf_models/Llama-3.1-8B"
+  vocab_size: 128256
+  split: "99,1,0"
+  no_mmap_bin_files: true
+  no_create_attention_mask_in_dataloader: true
+  num_workers: 6
+  expected_manifest_hash: null

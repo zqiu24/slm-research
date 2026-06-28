@@ -31,6 +31,7 @@ Thumbs.db
 
 # Data + checkpoints (NEVER commit)
 data/
+!configs/data/
 checkpoints/
 *.bin
 *.idx
