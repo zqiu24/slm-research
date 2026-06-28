@@ -18,7 +18,7 @@ tokenized with the Llama-3.1-8B tokenizer in the upstream fork; the
 Megatron `text_document` prefix lives at
 
 ```
-/lustre/fast/fast/zqiu/Megatron-LM/Nemotron-CC-v2/nemotron_cc_v2_high_quality_text_document_llama31_8b
+/lustre/fast/fast/groups/ei-slm/Nemotron-CC-v2/nemotron_cc_v2_high_quality_text_document_llama31_8b
 ```
 
 (2.4 TB `.bin` + 16 GB `.idx`). The preprocessing pipeline that produced

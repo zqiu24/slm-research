@@ -7,7 +7,7 @@ Nemotron-CC-v2 preprocessing has two stages:
 
 The default data config points at:
 
-`/lustre/fast/fast/zqiu/Megatron-LM/Nemotron-CC-v2/nemotron_cc_v2_high_quality_text_document_llama31_8b`
+`/lustre/fast/fast/groups/ei-slm/Nemotron-CC-v2/nemotron_cc_v2_high_quality_text_document_llama31_8b`
 
 Scratch variants are registered under `configs/data/`:
 

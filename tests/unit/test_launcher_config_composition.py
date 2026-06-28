@@ -18,7 +18,7 @@ def test_parse_overrides_loads_defaults_and_data_axis():
     assert cfg.cluster.name == "h800_cn"
     assert cfg.data.name == "nemotron_cc_v2_llama31_8b"
     assert cfg.data.path == (
-        "/lustre/fast/fast/zqiu/Megatron-LM/Nemotron-CC-v2/"
+        "/lustre/fast/fast/groups/ei-slm/Nemotron-CC-v2/"
         "nemotron_cc_v2_high_quality_text_document_llama31_8b"
     )
 
