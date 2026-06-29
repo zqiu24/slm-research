@@ -77,6 +77,41 @@ except OSError as e:
 PY
 ```
 
+## Reproducing a known-good env from another machine/account
+
+If you have a *working* env somewhere (another account, or a node that hasn't
+been rebooted) and need to rebuild here, reproduce that env's resolved set rather
+than re-resolving against whatever PyPI serves today. The installer pins the
+load-bearing versions (`torch==2.11.0`, the TE/DeepEP/apex commits) but lets
+dozens of transitive deps float, so a fresh build can drift; a `uv pip freeze`
+from the known-good env is the lockfile that pins them back.
+
+From the **working** env (activate it first), capture and report:
+
+1. **How it was built** — `install_slm_env.sh` or hand-rolled? Which slm-research
+   commit (`git rev-parse HEAD`)? Any build-time env overrides (`UV_CACHE_DIR`,
+   `UV_LINK_MODE`, `TMPDIR`, `MAX_JOBS`, `TORCH_CUDA_ARCH_LIST`)? If hand-rolled,
+   the exact command sequence.
+2. **Resolved versions** — `uv pip freeze`. This is the de-facto lockfile; the
+   rebuild pins against it with `--constraint`.
+3. **Submodule commits** — `git submodule status` (Megatron-LM, torchtitan,
+   poet_torch).
+4. **The 4 source-built packages** — installed versions of `transformer_engine`,
+   `flash_attn`, `apex`, `deep_ep`, and that they import cleanly
+   (`python -c "import transformer_engine, flash_attn, apex, deep_ep"`).
+5. **Build toolchain** — CUDA module (`module list`, `nvcc --version`,
+   `$CUDA_HOME`), `gcc --version`, `uv --version`, `python --version`.
+6. **GPU / arch** — `nvidia-smi` and
+   `python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_arch_list())"`.
+   The compiled extensions are arch-bound, so the rebuild target must match
+   (B200 ⇒ the arch list includes `10.0`).
+7. **Manual fixups** — any patches, `sed` edits, or prebuilt trees pointed at
+   (e.g. a prebuilt apex) beyond what the installer does.
+
+Then on the rebuild host: diff the freeze against what `install_slm_env.sh`
+resolves, feed the drift as a `--constraint` file, confirm the toolchain (CUDA
+module, nvcc, uv) matches, and run the installer.
+
 ## After someone bumps the Megatron pin
 
 `git pull` only brings the parent commit, not the new submodule code:
